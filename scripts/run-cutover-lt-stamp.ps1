@@ -23,7 +23,7 @@ if (Test-Path (Join-Path $Jdk "bin\java.exe")) {
 }
 $JavaOpts = "--enable-preview --add-modules=jdk.incubator.vector"
 $CutoverArg = "--grid.replication.swarm.apply-auto-cutover=true"
-$GridUrl = "grid://@127.0.0.1:15432/public"
+$GridUrl = "grid://grid:grid@127.0.0.1:15432/public"
 
 # Living canons (capacity-slo) vs exploratory +60
 if ($WindowMode -eq "living") {

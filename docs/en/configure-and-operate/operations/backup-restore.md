@@ -12,8 +12,31 @@ Per node, on **local** `dataDir` (never a shared NFS/SAN volume for the whole cl
 | Sealed indexes (`.sbpt` / `.sbm`) | Secondary indexes on disk |
 | OpLog (active tail + archived segments) | Ordered mutations; required for fresh commits |
 | Node config | Profiles, peers, ports, `cluster-id` — restore must match topology intent |
+| Auth catalog (`privileges.meta` under catalog root) | Users and grants — include with the same backup policy as `dataDir` |
 
-With durability on, **OpLog + sealed** are the source of truth. The in-memory map is rebuilt on hydrate or working-set miss.
+Typical layout under the node replication / durability root (names from `SealedBaseBackupUtil`):
+
+```text
+<dataDir>/
+  sealed/          # .gmap payloads
+  orchid/          # ORCHID durable state
+  locus/           # homologous locus
+  index-ckpt/      # index checkpoint
+  … OpLog segments + optional oplog-archive (separate dir)
+```
+
+## Base backup API
+
+For a PITR-ready base at watermark `W` (offline / ops JVM, not Netty EL):
+
+```text
+SealedBaseBackupUtil.backupBase(dataDir, backupDir, W)
+# later install into an empty dataDir:
+SealedBaseBackupUtil.clearDataDir(dataDir)
+SealedBaseBackupUtil.installBase(backupDir, dataDir)
+```
+
+Prefer a quiet window or clean stop so sealed + orchid state match. Full restore-to-seq is [PITR](pitr.md) (`PitrRestoreMain`).
 
 ## Seal and why it matters
 
@@ -39,7 +62,18 @@ Sealing moves accumulated journal entries into sealed files and allows a safe Op
 5. Confirm Actuator readiness before traffic ([monitoring](../monitoring.md)).
 6. If this node must become writer, follow [promote](ha-promote.md). Do not invent a second writer.
 
-Smoke check: one application-path write + read. Until readiness is UP and smoke passes, do not call the restore successful.
+## After restore — verification matrix
+
+| Check | Pass criteria |
+|-------|----------------|
+| Process | Node process up; no second process on the same `dataDir` |
+| Readiness | Actuator readiness UP; with replication — `orchidSynced` / `orchid_r` above admission |
+| Writer role | At most one `writerEligible: true` in the write ring; promote only if this node must write ([promote](ha-promote.md)) |
+| Application path | One write + one read through the real client URL (not HTTP `/replication/compare`) |
+| Peers | Replicas catching up; do not force reads while `applyLagStale` |
+| Multi-site | Matching `regionEpoch` / Active fencing if PITR touched Active |
+
+Until every row that applies to your topology passes, do not call the restore successful.
 
 ## Multi-node notes
 

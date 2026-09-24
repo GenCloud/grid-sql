@@ -1090,6 +1090,13 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		return defaultSchema;
 	}
 
+	/**
+	 * AUTH user from URL / connect properties (may be empty when open-auth).
+	 */
+	public String user() {
+		return user;
+	}
+
 	public Duration execTimeout() {
 		return options.execTimeout();
 	}

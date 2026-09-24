@@ -25,14 +25,23 @@ The entry point is `org.genfork.grid.sql.server.GridSqlServerStarter`. If you do
 | Profile | SQL | Replication | HTTP | Purpose |
 |---------|----:|------------:|-----:|---------|
 | `primary` | **15432** | **5615** | 7777 | Writer-eligible node of the demo pair |
-| `replica` | **15433** | **5616** | 7777 | Peer of the same pair |
+| `replica` | **15433** | **5616** | 7778 | Peer of the same pair |
 | `capacity` | **15432** | — | 7778 | Single durable node (`replication.enabled: false`, `fsync: true`) |
 
 `capacity` is the honest single-node ceiling: local disk writes are on, and there is no waiting for peers. It is not a "lab mode with fsync disabled".
 
 ## Node configuration
 
-Below are the keys that auto-configuration actually reads (values from the `primary` profile).
+Auto-configuration reads the `grid.*` keys below. The YAML is a **`primary` starter profile sample**, not the bare library defaults in `GridConfigurationProperties`.
+
+| Setting | Library default (no profile) | Typical `primary` / `capacity` |
+|---------|------------------------------|--------------------------------|
+| `durability.hydrate-mode` | `FULL` | `LAZY` |
+| `durability.working-set-max-entries` | `0` (unbounded) | e.g. `262144` |
+| `replication.op-log.segment-size` | `1024` (MiB) | e.g. `64` |
+| `replication.ha.replica-reads-enabled` | `false` | `true` on demo `primary`/`replica` |
+
+Full default tables: [durability](../configure-and-operate/configuration/durability.md), [replication](../configure-and-operate/configuration/replication.md), [SQL server](../configure-and-operate/configuration/sql-server.md). For PITR archive keys (`oplog-archive.*`) and multi-site `region.*`, see those pages — they are off by default.
 
 ```yaml
 grid:
@@ -52,9 +61,10 @@ grid:
     durable: false
   durability:
     enabled: true
-    hydrate-mode: LAZY            # FULL | LAZY
+    hydrate-mode: LAZY            # profile; library default is FULL
     working-set-max-entries: 262144
     adaptive-disk-first: true
+    # oplog-archive.enabled: false   # enable before load you may need to roll back — see PITR
   replication:
     enabled: true
     node-id: primary-1

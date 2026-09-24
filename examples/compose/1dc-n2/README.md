@@ -11,8 +11,8 @@ cd examples\compose\1dc-n2
 docker compose --env-file env\mid.env up -d
 ```
 
-SQL writer: `grid://@127.0.0.1:15432/public`  
-SQL + readEndpoints: `grid://@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433`  
+SQL writer: `grid://grid:grid@127.0.0.1:15432/public`  
+SQL + readEndpoints: `grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433`  
 Readiness: http://127.0.0.1:7777/actuator/health/readiness
 
 ## Knobs (vs Jepsen N=3)

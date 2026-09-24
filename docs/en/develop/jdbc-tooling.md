@@ -85,7 +85,7 @@ For a Custom Driver, take `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`
 
 1. **Database → Driver Manager → New**, add the jar.
 2. Class name: `org.genfork.grid.jdbc.GridDriver`
-3. URL template / URL: `jdbc:grid://u:p@127.0.0.1:15432/public`
+3. URL template / URL: `jdbc:grid://grid:grid@127.0.0.1:15432/public`
 
 | Field | Value |
 |-------|-------|
@@ -94,7 +94,7 @@ For a Custom Driver, take `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`
 | Database / Schema | `public` |
 | User / Password | Empty catalog — password optional; after the first `CREATE USER` — same credentials as AUTH (see [security](../configure-and-operate/operations/security.md)) |
 
-The URL format is the same as `grid://`, just with a `jdbc:` prefix: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. The `?hosts=` parameter is not supported — multiple hosts go comma-separated in the authority.
+The URL format is the same as `grid://`, just with a `jdbc:` prefix: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. The path after the hosts is the **default schema** (not a separate database catalog). The `?hosts=` parameter is not supported — multiple hosts go comma-separated in the authority.
 
 The driver strips `jdbc:` and parses with the same URL parser as the reactive client. Entry is **`SyncConnectionFactory.fromUrl` / `shared`** (same product URL semantics as `ConnectionFactory.fromUrl`): when `readEndpoints` + `readPreference=REPLICA` are present, autocommit SELECT/EXPLAIN route to the read pool. Inherited `grid://` options: `maxTxContexts`, `readEndpoints`, `readPreference`, `fetchWindow`, HA host ring. URL details: [connect clients](../getting-started/connect-clients.md).
 
@@ -107,6 +107,11 @@ jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.
 ## What works
 
 - Schema tree: catalog, tables, columns, indexes.
+- `Connection.getSchema()` reflects the URL path schema (e.g. `…/my_app` → `my_app`).
+- Create / drop schemas via SQL (`CREATE SCHEMA` / `DROP SCHEMA`; RESTRICT optional). Prefer not enabling “Omit schema(s)” in the DBeaver Driver Manager.
+- Admin via SQL only — Custom Driver has no Administration / Manage Users menu:
+  - `CREATE USER` / `DROP USER` / `GRANT` / `REVOKE`
+  - `SELECT * FROM information_schema.users|roles|role_members|table_privileges`
 - SQL Editor: one-off `SELECT` and DML within the simplified dialect.
 - **Multi-statement scripts** (semicolon-separated): ANTLR `script` split → `BATCH_EXEC` (DBeaver script without Bad SQL).
 - Transactions, including savepoints. Parallel TX = N JDBC `Connection`s from the same factory (multiplex), not one TX per socket.

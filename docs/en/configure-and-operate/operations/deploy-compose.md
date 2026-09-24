@@ -71,13 +71,13 @@ Load tiers `low` / `mid` / `high` only change JVM heap via `env/*.env`.
 ```powershell
 cd examples\compose\1dc-n2
 docker compose --env-file env\mid.env up -d
-# Writer: grid://@127.0.0.1:15432/public
-# Reads:  grid://@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433
+# Writer: grid://grid:grid@127.0.0.1:15432/public
+# Reads:  grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433
 
 cd examples\compose\1dc-n3
 docker compose --env-file env\high.env up -d
-# SQL: grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public
-# Readiness: http://127.0.0.1:7777/actuator/health/readiness
+# SQL: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public
+# Readiness (starter): http://127.0.0.1:7777/health/readiness
 ```
 
 ASYNC and SYNC Multidc share host ports — one stack at a time; do not overlap Jepsen Multidc.

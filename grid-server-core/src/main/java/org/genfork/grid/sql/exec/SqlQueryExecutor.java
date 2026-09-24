@@ -63,6 +63,9 @@ import java.util.function.Function;
  * @since: 1.0
  */
 public final class SqlQueryExecutor {
+	private static final String MSG_INFO_SCHEMA_AGG_UNSUPPORTED =
+			"information_schema supports COUNT(*) without GROUP BY only";
+
 	/**
 	 * Locks released at statement end and keys selected after SKIP LOCKED.
 	 */
@@ -160,6 +163,9 @@ public final class SqlQueryExecutor {
 		if (SqlInformationSchemaExecutor.matches(s.table())) {
 			final SqlResult raw = SqlInformationSchemaExecutor.select(tables.catalog(), s);
 			List<Object[]> rows = applyWhere(s, raw.columns(), new ArrayList<>(raw.rows()));
+			if (s.aggregate()) {
+				return selectInformationSchemaAggregate(s, rows);
+			}
 			final SqlResult projected = SqlInformationSchemaExecutor.project(
 					SqlResult.resultSet(raw.columns(), rows), s);
 			rows = SqlProjectionOps.applyDistinct(s, new ArrayList<>(projected.rows()));
@@ -613,6 +619,20 @@ public final class SqlQueryExecutor {
 
 	public SqlResult explainAnalyze(SqlSession session, SelectSql s) {
 		return explainService.explainAnalyze(session, s);
+	}
+
+	/**
+	 * {@code COUNT(*)} over filtered virtual information_schema rows (no GROUP BY).
+	 */
+	private static SqlResult selectInformationSchemaAggregate(SelectSql s, List<Object[]> filteredRows) {
+		if (!s.countStar() || s.hasGroupBy() || s.havingOrNull() != null) {
+			throw new IllegalArgumentException(MSG_INFO_SCHEMA_AGG_UNSUPPORTED);
+		}
+		final String aggLabel = SqlProjectionOps.firstAggregateLabel(s);
+		final List<SqlResult.ColumnMeta> metas = List.of(SqlResult.ColumnMeta.of(aggLabel, SqlType.DOUBLE));
+		final List<Object[]> single = new ArrayList<>(1);
+		single.add(new Object[]{(double) filteredRows.size()});
+		return SqlResult.resultSet(metas, SqlResultSortOps.applyOrderLimit(s, metas, single));
 	}
 
 	public SqlResult selectAggregate(SqlSession session, SelectSql s) {

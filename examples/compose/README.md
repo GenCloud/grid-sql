@@ -37,7 +37,7 @@ powershell -File .\examples\scripts\build-sql-image.ps1
 ```powershell
 cd examples\compose\1dc-n2
 docker compose --env-file env\mid.env up -d
-# Writer: grid://@127.0.0.1:15432/public
+# Writer: grid://grid:grid@127.0.0.1:15432/public
 # Reads:  ?readEndpoints=127.0.0.1:15433
 ```
 
@@ -48,7 +48,7 @@ LAZY hydrate, swarm + placement-optimizer on — same knobs as host `primary`/`r
 ```powershell
 cd examples\compose\1dc-n3
 docker compose --env-file env\mid.env up -d
-# SQL: grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public
+# SQL: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public
 ```
 
 FULL hydrate; **swarm + placement-optimizer + `apply-auto-cutover: true`** (proven HA Load / soak); `replica-reads-enabled` on.

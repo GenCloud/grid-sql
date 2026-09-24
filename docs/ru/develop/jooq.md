@@ -9,15 +9,15 @@
 |-------|---------------------|
 | Собрать SELECT/INSERT строкой в Java без ручной склейки | Да |
 | Type-safe codegen по живой схеме | Да — **в приложении-потребителе** через `JDBCDatabase` |
-| Multiplex DataSource для Spring/jOOQ `DataSourceConnectionProvider` | Да — `GridDataSource` → `SyncConnectionFactory.shared` |
+| DataSource с мультиплексом для Spring/jOOQ `DataSourceConnectionProvider` | Да — `GridDataSource` → `SyncConnectionFactory.shared` |
 | Hikari как пул соединений приложения | **Нет** — ломает мультиплекс; используйте `GridDataSource` (reject Hikari — в JDBC `GridHikariBridgeGuard`) |
 | Замер ёмкости / p95 | Нет — JMeter на `grid://` |
 | Полный чужой SQL-диалект «как есть» | Нет — только Simplified SQL |
 
-## Multiplex DataSource (канон)
+## DataSource с мультиплексом (канон)
 
 ```text
-Apps / jOOQ / DBeaver
+Приложения / jOOQ / DBeaver
   └─ GridDataSource  ≡  GridDriver   (один Sync* API)
        └─ SyncConnectionFactory.shared (intern на URL target)
             └─ RemoteConnectionFactory TCP floor ≥ MIN_TCP_CHANNELS (10)

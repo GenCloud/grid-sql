@@ -22,12 +22,12 @@ import java.nio.file.Path;
  * <p>
  * Run configuration (IDE): main class {@code org.genfork.grid.sql.SqlServerMain},
  * module {@code grid-server-core}, VM options {@code --enable-preview}.
- * Then connect DBeaver with {@code jdbc:grid://u:p@127.0.0.1:15432/public}.
+ * Then connect DBeaver with {@code jdbc:grid://grid:grid@127.0.0.1:15432/public}.
  *
  * <pre>
  * java --enable-preview -cp ... org.genfork.grid.sql.SqlServerMain
  *   [--host 0.0.0.0] [--port 15432] [--data-dir ./data]
- *   [--shards 4] [--user u] [--password p]
+ *   [--shards 4] [--user grid] [--password grid]
  * </pre>
  *
  * @author: GenCloud
@@ -35,9 +35,6 @@ import java.nio.file.Path;
  * @since: 1.0
  */
 public final class SqlServerMain {
-	private static final String DEFAULT_USER = "u";
-	private static final String DEFAULT_PASSWORD = "p";
-
 	private SqlServerMain() {
 	}
 
@@ -46,8 +43,8 @@ public final class SqlServerMain {
 		int port = SqlServerRuntime.DEFAULT_PORT;
 		Path dataDir = Path.of("./data/sql-server");
 		int shards = SqlServerRuntime.DEFAULT_SHARDS;
-		String user = DEFAULT_USER;
-		String password = DEFAULT_PASSWORD;
+		String user = SqlServerRuntime.DEFAULT_AUTH_USER;
+		String password = SqlServerRuntime.DEFAULT_AUTH_PASSWORD;
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
 				case "--host", "-h" -> host = args[++i];

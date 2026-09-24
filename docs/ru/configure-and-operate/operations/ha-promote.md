@@ -126,46 +126,8 @@ flowchart TB
 
 Инциденты: [отказы](failures.md).
 
-## Чтение с реплики (выкл. по умолчанию)
+## Связанные поверхности
 
-По умолчанию — пишущий узел с закреплением **только PRIMARY** (линейзуемое SELECT). Баланс чтения по кластеру включается явно: [чтение с реплики](replica-reads.md).
+Опциональное чтение с реплики (выкл. по умолчанию): [чтение с реплики](replica-reads.md). Поля readiness Actuator (`writerEligible`, `applyLagStale`, …): [мониторинг](../monitoring.md).
 
-| Часть | Поведение |
-|-------|-----------|
-| Сервер | `grid.replication.ha.replicaReadsEnabled=true` — сессии `READ_REPLICA` могут SELECT/EXPLAIN на синхронных голосующих / Hold; отказ при `applyLagStale` / `maxStaleLag` |
-| Протокол | `SESSION_OPEN` v2 роль `PRIMARY` \| `READ_REPLICA` (`PROMOTE_NOTIFY` роль не меняет) |
-| URL записи | Кольцо кандидатов как сейчас (пишущий узел с закреплением + `rediscoverWriter()`) |
-| URL чтения | `?readEndpoints=h:port,...&readPreference=REPLICA` → `createReadFactory` / `RoutingConnectionFactory` |
-| Явный API | `RoutingConnection.createReadStatement` / `executeRead` |
-| Авто-маршрут v2 | `ConnectionFactory.fromUrl` + ANTLR `SqlRouteClassifier` гонит read-only SELECT/EXPLAIN на N `readEndpoints` |
-| Jepsen / Elle | Только PRIMARY URL — **без** `readEndpoints` |
-
-Узлы без обслуживания клиентов (`learners`) клиентский SQL не принимают. TX / DML / DDL / PREPARE всегда на пуле writer.
-
-## Готовность
-
-При `management.endpoint.health.show-details: always` (YAML starter) `GET /actuator/health/readiness` включает компонент `gridReadiness` с деталями сверх `status: UP`:
-
-```json
-{
-  "status": "UP",
-  "components": {
-    "gridReadiness": {
-      "status": "UP",
-      "details": {
-        "sqlTcp": "listening",
-        "orchidSynced": true,
-        "writerEligible": true,
-        "applyLagStale": false,
-        "lockWaitTimeouts": 0,
-        "lockCancels": 0,
-        "sqlCancelInflight": 0
-      }
-    }
-  }
-}
-```
-
-Проверки Kubernetes по-прежнему смотрят на HTTP status / верхний `status`; детали — для ops. См. [мониторинг](../monitoring.md), [отказы](failures.md).
-
-**Связанное:** [multi-dc](multi-dc.md), [Java-клиент](../../develop/java-client.md).
+**Связанное:** [несколько ЦОД](multi-dc.md), [Java-клиент](../../develop/java-client.md).

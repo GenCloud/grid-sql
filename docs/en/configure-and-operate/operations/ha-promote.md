@@ -126,46 +126,8 @@ On Active loss: claim quorum (`RegionClaimQuorum`) picks a single winner among H
 
 Incidents: [failures](failures.md).
 
-## Replica reads (off by default)
+## Related surfaces
 
-Default remains **PRIMARY-only** pinned writer (linearizable SELECT). Optional cluster read balance (off by default) is documented in [replica reads](replica-reads.md).
-
-| Piece | Behavior |
-|-------|----------|
-| Server | `grid.replication.ha.replicaReadsEnabled=true` — `READ_REPLICA` sessions may SELECT/EXPLAIN on synced voters / Hold; abort on `applyLagStale` / `maxStaleLag` |
-| Protocol | `SESSION_OPEN` v2 role `PRIMARY` \| `READ_REPLICA` (PROMOTE_NOTIFY does not change role) |
-| Write URL | Candidate ring as today (pinned writer + `rediscoverWriter()`) |
-| Read URL | `?readEndpoints=h:port,...&readPreference=REPLICA` → `createReadFactory` / `RoutingConnectionFactory` |
-| Explicit API | `RoutingConnection.createReadStatement` / `executeRead` — still supported |
-| Auto-route v2 | `ConnectionFactory.fromUrl` + ANTLR `SqlRouteClassifier` routes read-only SELECT/EXPLAIN to N `readEndpoints` |
-| Jepsen / Elle | PRIMARY-only URLs — **no** `readEndpoints` |
-
-Catch-up-only nodes never serve client SQL. TX / DML / DDL / PREPARE always stay on the writer pool.
-
-## Health readiness
-
-With `management.endpoint.health.show-details: always` (starter YAML), `GET /actuator/health/readiness` includes component `gridReadiness` details beyond `status: UP`:
-
-```json
-{
-  "status": "UP",
-  "components": {
-    "gridReadiness": {
-      "status": "UP",
-      "details": {
-        "sqlTcp": "listening",
-        "orchidSynced": true,
-        "writerEligible": true,
-        "applyLagStale": false,
-        "lockWaitTimeouts": 0,
-        "lockCancels": 0,
-        "sqlCancelInflight": 0
-      }
-    }
-  }
-}
-```
-
-k8s probes still succeed on HTTP status / top-level `status`; details are for ops. See [monitoring](../monitoring.md), [failures](failures.md).
+Optional replica reads (off by default): [replica reads](replica-reads.md). Actuator readiness fields (`writerEligible`, `applyLagStale`, …): [monitoring](../monitoring.md).
 
 **See also:** [multi-dc](multi-dc.md), [Java client](../../develop/java-client.md).

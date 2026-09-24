@@ -18,6 +18,7 @@ package org.genfork.grid.sql;
 import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.catalog.CatalogMetaCache;
+import org.genfork.grid.catalog.PrivilegeCatalog;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.overlay.OverlayStore;
@@ -45,6 +46,10 @@ public final class SqlServerRuntime implements AutoCloseable {
 	public static final int DEFAULT_PORT = 15432;
 	public static final int DEFAULT_SHARDS = 4;
 	public static final String DEFAULT_BIND_HOST = "0.0.0.0";
+	/** Default SQL AUTH user (master / bootstrap administrator). */
+	public static final String DEFAULT_AUTH_USER = "grid";
+	/** Default SQL AUTH password (change in production). */
+	public static final String DEFAULT_AUTH_PASSWORD = "grid";
 
 	private final TableCatalog catalog;
 	private final SqlEngine engine;
@@ -111,8 +116,8 @@ public final class SqlServerRuntime implements AutoCloseable {
 		private boolean listen;
 		private String host = DEFAULT_BIND_HOST;
 		private int port = DEFAULT_PORT;
-		private String user = "";
-		private String password = "";
+		private String user = DEFAULT_AUTH_USER;
+		private String password = DEFAULT_AUTH_PASSWORD;
 		private boolean durability = true;
 		private String hydrateMode = "FULL";
 		private int workingSetMaxEntries = 0;
@@ -256,8 +261,30 @@ public final class SqlServerRuntime implements AutoCloseable {
 			}
 			engine.setOverlay(overlayStore, autoPinTtlMs);
 			engine.recoverPersistedCatalog();
+			seedBootstrapAdministrator(engine.privileges(), user, password);
 			final SqlServer tcp = listen ? new SqlServer(host, port, engine, user, password, effective) : null;
 			return new SqlServerRuntime(catalog, engine, tcp, owned);
+		}
+
+		/**
+		 * Non-blank credentials → ensure master administrator (full {@code *.*}).
+		 * Both blank → leave catalog as-is (empty catalog stays open-auth).
+		 */
+		private static void seedBootstrapAdministrator(
+				PrivilegeCatalog privileges,
+				String user,
+				String password
+		) {
+			if (privileges == null) {
+				return;
+			}
+			if (user == null || user.isBlank()) {
+				return;
+			}
+			if (password == null) {
+				return;
+			}
+			privileges.ensureMasterAdministrator(user, password);
 		}
 	}
 }

@@ -44,9 +44,10 @@ After each node comes back:
 ## Schema epoch, layout, and clients
 
 - Schema changes (DDL) are recorded in the catalog; clients with stale session metadata reconnect.
-- Duplex / codec `schema-epoch` in YAML is not ORCHID seq — see [Duplex](../../performance/perf-duplex.md).
+- Duplex / codec `schema-epoch` in YAML is not ORCHID seq — see [Duplex](../../performance/perf-duplex.md). Do **not** bump it casually on a live `dataDir` that peers still read with the old epoch.
 - After writer change the client must **not** rotate the next host in the URL by hand.
-- Major `dataDir` layout change (incompatible sealed/OpLog format) — take base + verify archive first, then follow the binary vendor migration notes.
+- Major `dataDir` layout change (incompatible sealed/OpLog format) — take base + verify archive first, then follow the binary migration notes. Keep one layout family per cluster until every node is upgraded.
+- Do not change `cluster-id`, shard count of existing tables, or share one `dataDir` across two binaries during upgrade.
 
 ## Binary rollback
 

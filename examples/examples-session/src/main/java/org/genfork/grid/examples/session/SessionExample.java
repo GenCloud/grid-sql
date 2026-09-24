@@ -30,7 +30,7 @@ import reactor.core.publisher.Mono;
  */
 public final class SessionExample {
 	private static final String URL =
-			"grid://@127.0.0.1:15432/public"
+			"grid://grid:grid@127.0.0.1:15432/public"
 					+ "?warmup=true&maxConnections=1&maxTxContexts=32"
 					+ "&connectTimeoutMs=2000&fetchWindow=32&timezone=UTC";
 

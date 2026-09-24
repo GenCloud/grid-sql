@@ -61,7 +61,12 @@ public final class TableCatalog {
 			"composite FOREIGN KEY parent columns do not match a UNIQUE index on parent";
 	private static final String DDL_FILE = "ddl.sql";
 	private static final String SCHEMAS_FILE = "schemas.list";
-	private static final String META_SUFFIX = ".meta";
+	private static final String META_SUFFIX = CatalogPersistUtil.META_SUFFIX;
+	private static final String SCHEMA_PUBLIC = CatalogPersistUtil.SCHEMA_PUBLIC;
+	private static final String ERR_DROP_PUBLIC = "cannot DROP SCHEMA public";
+	private static final String ERR_SCHEMA_NOT_EMPTY_PREFIX = "schema ";
+	private static final String ERR_SCHEMA_NOT_EMPTY_SUFFIX = " is not empty";
+	private static final String ERR_SCHEMA_NOT_FOUND_PREFIX = "Schema not found: ";
 
 	/**
 	 * Catalog VIEW / MATERIALIZED VIEW definition (select body text).
@@ -265,7 +270,7 @@ public final class TableCatalog {
 			return false;
 		}
 		final String k = key(schemaName);
-		return "public".equals(k) || namedSchemas.contains(k);
+		return SCHEMA_PUBLIC.equals(k) || namedSchemas.contains(k);
 	}
 
 	/**
@@ -274,20 +279,13 @@ public final class TableCatalog {
 	 */
 	public Set<String> schemaNames() {
 		final LinkedHashSet<String> out = new LinkedHashSet<>();
-		out.add("public");
+		out.add(SCHEMA_PUBLIC);
 		out.addAll(namedSchemas);
 		for (TableSchema schema : schemas.values()) {
-			final String name = schema.tableName();
-			final int dot = name.indexOf('.');
-			if (dot > 0) {
-				out.add(key(name.substring(0, dot)));
-			}
+			out.add(CatalogPersistUtil.schemaPartOf(schema.tableName()));
 		}
 		for (String viewName : views.keySet()) {
-			final int dot = viewName.indexOf('.');
-			if (dot > 0) {
-				out.add(key(viewName.substring(0, dot)));
-			}
+			out.add(CatalogPersistUtil.schemaPartOf(viewName));
 		}
 		return Collections.unmodifiableSet(out);
 	}
@@ -299,31 +297,224 @@ public final class TableCatalog {
 
 	/**
 	 * Drop a named schema namespace ({@code DROP SCHEMA … RESTRICT}).
-	 * Fails if any table is keyed under that schema; {@code public} cannot be dropped.
+	 * Fails if any table / view / sequence / function is keyed under that schema;
+	 * {@code public} cannot be dropped.
 	 *
 	 * @return {@code true} if removed, {@code false} if missing and {@code ifExists}
 	 */
 	public boolean dropSchema(String schemaName, boolean ifExists) {
+		return dropSchema(schemaName, ifExists, false);
+	}
+
+	/**
+	 * @param emptyFirstForReplay when {@code true} (DDL journal replay only), drop contained
+	 *                            objects first so append-only {@code DROP SCHEMA} after
+	 *                            {@code CREATE TABLE} remains recoverable
+	 */
+	public boolean dropSchema(String schemaName, boolean ifExists, boolean emptyFirstForReplay) {
 		Objects.requireNonNull(schemaName, "schemaName");
 		final String k = key(schemaName);
-		if ("public".equals(k)) {
-			throw new IllegalArgumentException("cannot DROP SCHEMA public");
+		if (SCHEMA_PUBLIC.equals(k)) {
+			throw new IllegalArgumentException(ERR_DROP_PUBLIC);
 		}
-		for (String tableKey : schemas.keySet()) {
-			final int dot = tableKey.indexOf('.');
-			final String schemaPart = dot < 0 ? "public" : tableKey.substring(0, dot);
-			if (k.equals(schemaPart)) {
-				throw new IllegalStateException("schema " + schemaName + " is not empty");
-			}
+		if (emptyFirstForReplay) {
+			emptySchemaObjects(k);
+		} else {
+			rejectSchemaNotEmpty(schemaName, k);
 		}
 		if (!namedSchemas.remove(k)) {
 			if (ifExists) {
+				deletePersistedMetaForSchema(k);
 				return false;
 			}
-			throw new IllegalStateException("Schema not found: " + schemaName);
+			throw new IllegalStateException(ERR_SCHEMA_NOT_FOUND_PREFIX + schemaName);
 		}
+		deletePersistedMetaForSchema(k);
 		persistNamedSchemas();
 		return true;
+	}
+
+	/**
+	 * Disk hygiene for {@code DROP TABLE IF EXISTS} when the table is already gone in RAM.
+	 */
+	public void deletePersistedTableMeta(String tableName) {
+		deletePersisted(tableName);
+	}
+
+	/**
+	 * Remove orphan {@code *.meta} whose schema is no longer registered (post-replay).
+	 *
+	 * @return number of files deleted
+	 */
+	public int pruneOrphanMetaFiles() {
+		if (catalogDir == null) {
+			return 0;
+		}
+		int removed = 0;
+		try (DirectoryStream<Path> stream = GridFs.newDirectoryStream(catalogDir, "*" + META_SUFFIX)) {
+			for (Path meta : stream) {
+				final Path fileName = meta.getFileName();
+				if (fileName == null) {
+					continue;
+				}
+				final String name = fileName.toString();
+				if (PrivilegeCatalog.META_FILE_NAME.equalsIgnoreCase(name)) {
+					continue;
+				}
+				if (!name.endsWith(META_SUFFIX)) {
+					continue;
+				}
+				final String tableKey = name.substring(0, name.length() - META_SUFFIX.length());
+				final String schemaPart = CatalogPersistUtil.schemaPartOf(tableKey);
+				if (SCHEMA_PUBLIC.equals(schemaPart)) {
+					if (exists(tableKey)) {
+						continue;
+					}
+					GridFs.deleteIfExists(meta);
+					removed++;
+					continue;
+				}
+				if (namedSchemas.contains(schemaPart) && exists(tableKey)) {
+					continue;
+				}
+				if (namedSchemas.contains(schemaPart) && !exists(tableKey)) {
+					/* schema alive but table dropped — orphan meta */
+					GridFs.deleteIfExists(meta);
+					removed++;
+					continue;
+				}
+				if (!namedSchemas.contains(schemaPart)) {
+					GridFs.deleteIfExists(meta);
+					removed++;
+				}
+			}
+		} catch (IOException e) {
+			throw new IllegalStateException("Failed to prune orphan meta under " + catalogDir, e);
+		}
+		return removed;
+	}
+
+	/**
+	 * Whether a persisted meta table should be hydrated after DDL replay.
+	 */
+	public boolean shouldHydrateMeta(TableSchema meta) {
+		if (meta == null) {
+			return false;
+		}
+		final String table = meta.tableName();
+		final String schemaPart = CatalogPersistUtil.schemaPartOf(table);
+		if (!SCHEMA_PUBLIC.equals(schemaPart) && !namedSchemas.contains(schemaPart)) {
+			return false;
+		}
+		return !exists(table);
+	}
+
+	/**
+	 * Rewrite {@code ddl.sql} from the live catalog (bootstrap compaction).
+	 */
+	public synchronized void rewriteCompactedDdl() {
+		if (ddlReplay.get() || catalogDir == null) {
+			return;
+		}
+		final List<String> lines = CatalogDdlCompactor.compactLines(this);
+		try {
+			GridFs.createDirs(catalogDir);
+			final StringBuilder body = new StringBuilder();
+			for (String line : lines) {
+				body.append(line).append(System.lineSeparator());
+			}
+			GridFs.writeAtomic(catalogDir.resolve(DDL_FILE), body.toString(), StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			throw new IllegalStateException("Failed to rewrite compacted DDL", e);
+		}
+	}
+
+	private void rejectSchemaNotEmpty(String schemaName, String schemaKey) {
+		if (hasObjectInSchema(schemas.keySet(), schemaKey)
+				|| hasObjectInSchema(views.keySet(), schemaKey)
+				|| hasObjectInSchema(sequences.keySet(), schemaKey)
+				|| hasObjectInSchema(functions.keySet(), schemaKey)) {
+			throw new IllegalStateException(
+					ERR_SCHEMA_NOT_EMPTY_PREFIX + schemaName + ERR_SCHEMA_NOT_EMPTY_SUFFIX);
+		}
+	}
+
+	private static boolean hasObjectInSchema(Set<String> keys, String schemaKey) {
+		for (String objectKey : keys) {
+			if (CatalogPersistUtil.belongsToSchema(objectKey, schemaKey)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Drop all catalog objects in {@code schemaKey} (replay-only path before DROP SCHEMA).
+	 */
+	private void emptySchemaObjects(String schemaKey) {
+		final ArrayList<String> tableKeys = new ArrayList<>();
+		for (String tableKey : schemas.keySet()) {
+			if (CatalogPersistUtil.belongsToSchema(tableKey, schemaKey)) {
+				tableKeys.add(tableKey);
+			}
+		}
+		for (String tableKey : tableKeys) {
+			dropTable(tableKey);
+		}
+		final ArrayList<String> viewKeys = new ArrayList<>();
+		for (String viewKey : views.keySet()) {
+			if (CatalogPersistUtil.belongsToSchema(viewKey, schemaKey)) {
+				viewKeys.add(viewKey);
+			}
+		}
+		for (String viewKey : viewKeys) {
+			dropView(viewKey, false);
+		}
+		final ArrayList<String> seqKeys = new ArrayList<>();
+		for (String seqKey : sequences.keySet()) {
+			if (CatalogPersistUtil.belongsToSchema(seqKey, schemaKey)) {
+				seqKeys.add(seqKey);
+			}
+		}
+		for (String seqKey : seqKeys) {
+			dropSequence(seqKey, false);
+		}
+		final ArrayList<String> fnKeys = new ArrayList<>();
+		for (String fnKey : functions.keySet()) {
+			if (CatalogPersistUtil.belongsToSchema(fnKey, schemaKey)) {
+				fnKeys.add(fnKey);
+			}
+		}
+		for (String fnKey : fnKeys) {
+			dropFunction(fnKey, false);
+		}
+	}
+
+	private void deletePersistedMetaForSchema(String schemaKey) {
+		if (catalogDir == null) {
+			return;
+		}
+		try (DirectoryStream<Path> stream = GridFs.newDirectoryStream(catalogDir, "*" + META_SUFFIX)) {
+			for (Path meta : stream) {
+				final Path fileName = meta.getFileName();
+				if (fileName == null) {
+					continue;
+				}
+				final String name = fileName.toString();
+				if (PrivilegeCatalog.META_FILE_NAME.equalsIgnoreCase(name)) {
+					continue;
+				}
+				if (!name.endsWith(META_SUFFIX)) {
+					continue;
+				}
+				final String tableKey = name.substring(0, name.length() - META_SUFFIX.length());
+				if (CatalogPersistUtil.belongsToSchema(tableKey, schemaKey)) {
+					GridFs.deleteIfExists(meta);
+				}
+			}
+		} catch (IOException ignored) {
+			/* best-effort */
+		}
 	}
 
 	public TableSchema createTable(TableSchema schema) {
@@ -1086,6 +1277,11 @@ public final class TableCatalog {
 		final List<TableSchema> out = new ArrayList<>();
 		try (DirectoryStream<Path> stream = GridFs.newDirectoryStream(catalogDir, "*" + META_SUFFIX)) {
 			for (Path meta : stream) {
+				final Path fileName = meta.getFileName();
+				if (fileName != null
+						&& PrivilegeCatalog.META_FILE_NAME.equalsIgnoreCase(fileName.toString())) {
+					continue;
+				}
 				out.add(parseMeta(meta));
 			}
 		} catch (IOException e) {

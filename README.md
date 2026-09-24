@@ -18,7 +18,7 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.ja
 Connect (SQL port **15432**):
 
 ```
-grid://@127.0.0.1:15432/public
+grid://grid:grid@127.0.0.1:15432/public
 ```
 
 Step-by-step: [English quick start](docs/en/getting-started/quick-start.md) · [Русский быстрый старт](docs/ru/getting-started/quick-start.md).

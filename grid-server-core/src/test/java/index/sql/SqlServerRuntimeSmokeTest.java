@@ -44,7 +44,7 @@ public class SqlServerRuntimeSmokeTest {
 				.shards(4)
 				.listen(true)
 				.bind("127.0.0.1", PORT)
-				.auth("u", "p")
+				.auth(SqlServerRuntime.DEFAULT_AUTH_USER, SqlServerRuntime.DEFAULT_AUTH_PASSWORD)
 				.build()
 				.start()) {
 			assertNotNull(runtime.tcpServer());
@@ -54,7 +54,11 @@ public class SqlServerRuntimeSmokeTest {
 			runtime.engine().execute("INSERT INTO rt (id, v) VALUES (1, 'tcp')");
 
 			TimeUnit.MILLISECONDS.sleep(150);
-			final RemoteConnectionFactory remote = new RemoteConnectionFactory("127.0.0.1", PORT, "u", "p");
+			final RemoteConnectionFactory remote = new RemoteConnectionFactory(
+					"127.0.0.1",
+					PORT,
+					SqlServerRuntime.DEFAULT_AUTH_USER,
+					SqlServerRuntime.DEFAULT_AUTH_PASSWORD);
 			try {
 				final String v = remote.obtain()
 						.flatMapMany(conn -> conn.createStatement("SELECT v FROM rt WHERE id = 1").execute()

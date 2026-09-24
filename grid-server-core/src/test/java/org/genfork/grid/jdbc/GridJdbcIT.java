@@ -84,6 +84,7 @@ class GridJdbcIT {
 		final String url = "jdbc:grid://u:p@127.0.0.1:" + port + "/public";
 		try (Connection c = DriverManager.getConnection(url)) {
 			assertTrue(c.isValid(5));
+			assertEquals("public", c.getSchema());
 
 			final DatabaseMetaData md = c.getMetaData();
 			boolean foundTable = false;
@@ -167,6 +168,47 @@ class GridJdbcIT {
 			}
 			assertTrue(c1.isValid(5));
 			assertTrue(findAccountsTable(c1.getMetaData()));
+		}
+	}
+
+	@Test
+	void urlPathSchemaExposedViaGetSchema() throws Exception {
+		final String schemaName = "url_path_schema";
+		final String url = "jdbc:grid://u:p@127.0.0.1:" + port + "/" + schemaName;
+		try (Connection c = DriverManager.getConnection(url)) {
+			assertEquals(schemaName, c.getSchema());
+		}
+	}
+
+	@Test
+	void schemaLifecycleCreateDropAndUserName() throws Exception {
+		final String url = "jdbc:grid://u:p@127.0.0.1:" + port + "/public";
+		try (Connection c = DriverManager.getConnection(url)) {
+			assertEquals("u", c.getMetaData().getUserName());
+			try (Statement st = c.createStatement()) {
+				st.execute("CREATE SCHEMA IF NOT EXISTS dbeaver_demo");
+			}
+			boolean found = false;
+			try (ResultSet schemas = c.getMetaData().getSchemas()) {
+				while (schemas.next()) {
+					if ("dbeaver_demo".equalsIgnoreCase(schemas.getString(1))) {
+						found = true;
+					}
+				}
+			}
+			assertTrue(found);
+			try (Statement st = c.createStatement()) {
+				st.execute("DROP SCHEMA dbeaver_demo");
+			}
+			found = false;
+			try (ResultSet schemas = c.getMetaData().getSchemas()) {
+				while (schemas.next()) {
+					if ("dbeaver_demo".equalsIgnoreCase(schemas.getString(1))) {
+						found = true;
+					}
+				}
+			}
+			assertFalse(found);
 		}
 	}
 

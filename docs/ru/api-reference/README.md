@@ -10,6 +10,8 @@
 |--------|----------------|
 | AUTH / отказ connect | Неверный user/pass или узел ещё не готов (`readiness` DOWN) |
 | `bad frameLen` | Клиент попал на порт репликации (**5615**/**5616**), а не SQL |
+| `maxTxContexts=N exhausted` (код кадра 5) | Больше восьми открытых сессий на одном TCP (жёсткий потолок сервера **8**); Boot не поднимает его из YAML — откройте ещё один `Connection` или закройте простаивающие `TxContext` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md)) |
+| Stale / `applyLagStale` на чтении с реплики | Отставание apply; `FAIL_CLOSED` — подождать или читать с writer ([чтение с реплики](../configure-and-operate/operations/replica-reads.md)) |
 | Отказ записи после повышения роли | Клиент не сделал `rediscoverWriter()` — [повышение роли](../configure-and-operate/operations/ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | URL записи указывает на Hold/Witness или клиент перебирает следующий адрес в URL без `rediscoverWriter()` |
 | TX / DML на read URL | `readEndpoints` / `READ_REPLICA` — только SELECT/EXPLAIN; запись всегда на writer |
@@ -64,7 +66,7 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 |-----|------|
 | `SqlEngine` | Parse (ANTLR) + execute; `SqlResult` / число затронутых строк |
 | `TableCatalog` / `TableSchema` | Схема из DDL; domain = имя таблицы |
-| `SqlServer` / `SqlServerRuntime` | TCP SQL listener + runtime |
+| `SqlServer` / `SqlServerRuntime` | Слушатель TCP SQL + runtime |
 | `TableStore` | Шардированный store + индексы |
 
 Приложения **не** встраивают удалённый `SqlEngine` — говорят по `grid://` со starter/node. Boot: [Spring Boot](../develop/spring-boot.md).

@@ -24,18 +24,11 @@ flowchart TB
 | `createStatement` read-only SELECT/EXPLAIN | `readEndpoints` | `READ_REPLICA` | ANTLR-маршрут клиента + допуск сервера |
 | `createReadStatement` / `executeRead` | `readEndpoints` | `READ_REPLICA` | явный API |
 
-### FOR UPDATE
+### FOR UPDATE и блокировки на пирах
 
-`FOR UPDATE` и `SKIP LOCKED` всегда на **пишущем** узле, не на реплике только для чтения. При настроенных агентах `DistForUpdatePeerLockAgent` (из `grid.sql.distributed-peers` / Boot) индексные ключи в сериализованных байтах блокируются локально (`LockAwareKeyCursor`) и на пирах через `DistForUpdateCoordinator` (Netty `FOR_UPDATE_LOCK_*`, отказ при ошибке). Prepare/commit-dec — облегчённый 2PC в кадрах продукта, не полный XA. Multi-table / INNER JOIN блокировки поддерживаются.
+`FOR UPDATE` / `SKIP LOCKED` выполняются только на **пишущем** узле. Ключи блокируются локально; при включённой репликации агенты на пирах берутся из списка **`peers` репликации** (`SqlServerRuntime` → `createNettyDistForUpdatePeerLockAgents()`). Ошибка Netty на пире — отказ при ошибке. В autocommit аренда блокировки на пире снимается после оператора; в открытой TX — на COMMIT/ROLLBACK. Это не XA.
 
-Если `grid.sql.distributed-peers` пуст или не задан — блокировки только локальные на писателе.
-
-```yaml
-grid:
-  sql:
-    distributed-peers:
-      - { host: 127.0.0.1, port: 5616 }   # peer replication/SQL agent endpoint as wired
-```
+Без репликации или при пустом списке peers блокировки только локальные. Отдельного YAML-ключа со списком DistForUpdate endpoints нет.
 
 ### Авто-маршрут (v2)
 
@@ -134,8 +127,13 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 | `staleReadPolicy` | v1 только отказ при stale |
 | N `readEndpoints` + ротация на `applyLagStale` | готово (`ReplicaReadEndpointsRotateIT`) |
 
+## Связанное
+
+- [отказы](failures.md)
+- [повышение роли узла](ha-promote.md)
+- [HA под нагрузкой](cluster-ha-highload.md)
+- [сеть репликации](../../understand/replication-network.md)
+
 ## Jepsen
 
 `JepsenSqlClient` отклоняет URL с `readEndpoints` (контракт Elle — только PRIMARY). Проверки согласованности и нагрузку не гоняйте вместе на одном хосте — см. [методику](../../performance/methodology.md).
-
-**Связанное:** [повышение роли узла](ha-promote.md), [HA под нагрузкой](cluster-ha-highload.md), [Java-клиент](../../develop/java-client.md), [сеть репликации](../../understand/replication-network.md).

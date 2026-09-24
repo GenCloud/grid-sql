@@ -152,11 +152,13 @@ DROP TABLE IF EXISTS orders;
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS analytics;
+CREATE SCHEMA reporting AUTHORIZATION alice;
 SET SCHEMA analytics;
-DROP SCHEMA analytics RESTRICT;
+DROP SCHEMA analytics;
+DROP SCHEMA reporting RESTRICT;
 ```
 
-Имя таблицы можно писать с квалификатором: `analytics.orders`. `DROP SCHEMA` требует `RESTRICT` — каскадного удаления схемы нет.
+Имя таблицы можно писать с квалификатором: `analytics.orders`. `DROP SCHEMA` по умолчанию RESTRICT (ключевое слово можно опустить); `CASCADE` отклоняется. `AUTHORIZATION` в `CREATE SCHEMA` принимается и игнорируется (владельца схемы нет).
 
 ## Последовательности
 
@@ -240,7 +242,7 @@ DROP ROLE readers;
 | `ALTER TABLE ... ALTER COLUMN TYPE`, переименование | Не поддерживается: пересоздайте таблицу |
 | `DEFAULT <выражение>` у колонки | Значения по умолчанию задаёт приложение или `IDENTITY`/`SERIAL` |
 | `CREATE BITMAP INDEX` по нескольким колонкам | Bitmap — только одна колонка |
-| `DROP SCHEMA` без `RESTRICT` | Каскадного удаления схемы нет |
+| `DROP SCHEMA … CASCADE` | Каскадного удаления схемы нет; без CASCADE или с RESTRICT |
 | Частичные индексы, индексы по выражению | Индексируются только колонки |
 | `ALTER TABLE … DROP CONSTRAINT` | Ограничение снимается пересозданием таблицы |
 | Идентификатор в двойных кавычках | Имена — только слова без кавычек |

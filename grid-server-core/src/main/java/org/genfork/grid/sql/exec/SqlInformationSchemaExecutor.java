@@ -18,6 +18,7 @@ package org.genfork.grid.sql.exec;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.FkDef;
 import org.genfork.grid.catalog.IndexDef;
+import org.genfork.grid.catalog.PrivilegeCatalog;
 import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableCatalog.ViewDef;
@@ -48,6 +49,11 @@ public final class SqlInformationSchemaExecutor {
 	public static final String TABLE_STATISTICS = "statistics";
 	public static final String TABLE_KEY_COLUMN_USAGE = "key_column_usage";
 	public static final String TABLE_TABLE_CONSTRAINTS = "table_constraints";
+	public static final String TABLE_REFERENTIAL_CONSTRAINTS = "referential_constraints";
+	public static final String TABLE_USERS = "users";
+	public static final String TABLE_ROLES = "roles";
+	public static final String TABLE_ROLE_MEMBERS = "role_members";
+	public static final String TABLE_TABLE_PRIVILEGES = "table_privileges";
 
 	public static final String COL_CATALOG_NAME = "catalog_name";
 	public static final String COL_SCHEMA_NAME = "schema_name";
@@ -70,6 +76,13 @@ public final class SqlInformationSchemaExecutor {
 	public static final String COL_UNIQUE_CONSTRAINT_NAME = "unique_constraint_name";
 	public static final String COL_DELETE_RULE = "delete_rule";
 	public static final String COL_UPDATE_RULE = "update_rule";
+	public static final String COL_USER_NAME = "user_name";
+	public static final String COL_IS_ADMINISTRATOR = "is_administrator";
+	public static final String COL_ROLE_NAME = "role_name";
+	public static final String COL_GRANTEE = "grantee";
+	public static final String COL_PRIVILEGE_TYPE = "privilege_type";
+	public static final String COL_IS_GRANTABLE = "is_grantable";
+	public static final String COL_GRANTEE_TYPE = "grantee_type";
 
 	public static final String CATALOG_GRID = "grid";
 	public static final String DEFAULT_SCHEMA = "public";
@@ -80,7 +93,8 @@ public final class SqlInformationSchemaExecutor {
 	public static final String CONSTRAINT_PRIMARY = "PRIMARY KEY";
 	public static final String CONSTRAINT_FOREIGN = "FOREIGN KEY";
 	public static final String PK_NAME_PREFIX = "pk_";
-	public static final String TABLE_REFERENTIAL_CONSTRAINTS = "referential_constraints";
+	public static final String GRANTEE_TYPE_USER = "USER";
+	public static final String GRANTEE_TYPE_ROLE = "ROLE";
 
 	private static final String MSG_UNKNOWN_VIEW = "Unknown information_schema view: ";
 
@@ -110,6 +124,10 @@ public final class SqlInformationSchemaExecutor {
 			case TABLE_KEY_COLUMN_USAGE -> keyColumnUsageRows(catalog);
 			case TABLE_TABLE_CONSTRAINTS -> tableConstraintsRows(catalog);
 			case TABLE_REFERENTIAL_CONSTRAINTS -> referentialConstraintsRows(catalog);
+			case TABLE_USERS -> usersRows(catalog.privileges());
+			case TABLE_ROLES -> rolesRows(catalog.privileges());
+			case TABLE_ROLE_MEMBERS -> roleMembersRows(catalog.privileges());
+			case TABLE_TABLE_PRIVILEGES -> tablePrivilegesRows(catalog.privileges());
 			default -> throw new IllegalArgumentException(MSG_UNKNOWN_VIEW + view);
 		};
 		return SqlResult.resultSet(metas, fullRows);
@@ -180,6 +198,25 @@ public final class SqlInformationSchemaExecutor {
 					SqlResult.ColumnMeta.of(COL_UNIQUE_CONSTRAINT_NAME, SqlType.VARCHAR),
 					SqlResult.ColumnMeta.of(COL_DELETE_RULE, SqlType.VARCHAR),
 					SqlResult.ColumnMeta.of(COL_UPDATE_RULE, SqlType.VARCHAR)
+			);
+			case TABLE_USERS -> List.of(
+					SqlResult.ColumnMeta.of(COL_USER_NAME, SqlType.VARCHAR),
+					SqlResult.ColumnMeta.of(COL_IS_ADMINISTRATOR, SqlType.VARCHAR)
+			);
+			case TABLE_ROLES -> List.of(
+					SqlResult.ColumnMeta.of(COL_ROLE_NAME, SqlType.VARCHAR)
+			);
+			case TABLE_ROLE_MEMBERS -> List.of(
+					SqlResult.ColumnMeta.of(COL_USER_NAME, SqlType.VARCHAR),
+					SqlResult.ColumnMeta.of(COL_ROLE_NAME, SqlType.VARCHAR)
+			);
+			case TABLE_TABLE_PRIVILEGES -> List.of(
+					SqlResult.ColumnMeta.of(COL_GRANTEE, SqlType.VARCHAR),
+					SqlResult.ColumnMeta.of(COL_GRANTEE_TYPE, SqlType.VARCHAR),
+					SqlResult.ColumnMeta.of(COL_TABLE_SCHEMA, SqlType.VARCHAR),
+					SqlResult.ColumnMeta.of(COL_TABLE_NAME, SqlType.VARCHAR),
+					SqlResult.ColumnMeta.of(COL_PRIVILEGE_TYPE, SqlType.VARCHAR),
+					SqlResult.ColumnMeta.of(COL_IS_GRANTABLE, SqlType.VARCHAR)
 			);
 			default -> throw new IllegalArgumentException(MSG_UNKNOWN_VIEW + view);
 		};
@@ -325,6 +362,48 @@ public final class SqlInformationSchemaExecutor {
 						fk.onUpdate().sqlToken()
 				});
 			}
+		}
+		return rows;
+	}
+
+	private static List<Object[]> usersRows(PrivilegeCatalog privileges) {
+		final List<Object[]> rows = new ArrayList<>();
+		for (String user : privileges.userNames()) {
+			rows.add(new Object[]{
+					user,
+					privileges.isAdministrator(user) ? YES : NO
+			});
+		}
+		return rows;
+	}
+
+	private static List<Object[]> rolesRows(PrivilegeCatalog privileges) {
+		final List<Object[]> rows = new ArrayList<>();
+		for (String role : privileges.roleNames()) {
+			rows.add(new Object[]{role});
+		}
+		return rows;
+	}
+
+	private static List<Object[]> roleMembersRows(PrivilegeCatalog privileges) {
+		final List<Object[]> rows = new ArrayList<>();
+		for (PrivilegeCatalog.RoleMembership membership : privileges.roleMemberships()) {
+			rows.add(new Object[]{membership.user(), membership.role()});
+		}
+		return rows;
+	}
+
+	private static List<Object[]> tablePrivilegesRows(PrivilegeCatalog privileges) {
+		final List<Object[]> rows = new ArrayList<>();
+		for (PrivilegeCatalog.TableGrant grant : privileges.tableGrants()) {
+			rows.add(new Object[]{
+					grant.grantee(),
+					grant.roleGrantee() ? GRANTEE_TYPE_ROLE : GRANTEE_TYPE_USER,
+					grant.schemaName(),
+					grant.tableName(),
+					grant.privilege(),
+					NO
+			});
 		}
 		return rows;
 	}

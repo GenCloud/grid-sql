@@ -204,7 +204,7 @@ grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:1
 
 ## JDBC-клиент и Sync без JDBC
 
-Пакет `org.genfork.grid.jdbc` и URL `jdbc:grid://` — стабильный синхронный API на том же протоколе, что и reactive. Sync-фасад: `JdbcSync` → `SyncAwait` на `SyncExecExchange` / `SyncBatchExchange`. Reactive SPI — `ReactiveExecExchange` / `ReactiveBatchExchange`. Fat jar для IDE: `mvn -pl grid-sql-client -am package -DskipTests` → `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`.
+Пакет `org.genfork.grid.jdbc` и URL `jdbc:grid://` — стабильный синхронный API на том же протоколе, что и reactive. Sync-фасад: `JdbcSync` → `SyncAwait` на `SyncExecExchange` / `SyncBatchExchange`. Reactive SPI — `ReactiveExecExchange` / `ReactiveBatchExchange`. Толстый jar для IDE: `mvn -pl grid-sql-client -am package -DskipTests` → `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`.
 
 Для **синхронного приложения без JDBC** используйте `SyncConnectionFactory.fromUrl(gridUrl)` → `open()` → `SyncConnection` (те же опции URL; park/close как у фабрики). Подробности: [JDBC-клиент](jdbc-tooling.md) (§ Sync без JDBC). Замеры ёмкости — только JMeter на `grid://`, не через JDBC.
 

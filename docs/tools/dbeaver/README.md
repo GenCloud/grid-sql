@@ -41,9 +41,9 @@ Default SQL TCP: **15432**. Replication transport (`bind-port` **5615**) is a di
 |-------|--------|
 | Host | `localhost` / `127.0.0.1` |
 | Port | **15432** (not 5615) |
-| Database/Schema | `public` |
-| User / Password | any non-empty (e.g. `u` / `p`) if server auth expects them |
-| URL | `jdbc:grid://u:p@127.0.0.1:15432/public` |
+| Database/Schema | URL path after hosts = **schema** (e.g. `public`) — not a separate JDBC catalog |
+| User / Password | `grid` / `grid` (defaults; override via `grid.sql-server.user`/`password`) |
+| URL | `jdbc:grid://grid:grid@127.0.0.1:15432/public` |
 
 ### `bad frameLen …`
 
@@ -57,16 +57,40 @@ mvn -pl grid-sql-client -am package -DskipTests
 
 Use `grid-sql-client/target/grid-sql-client-*-dbeaver.jar` as Custom Driver.
 Class: `org.genfork.grid.jdbc.GridDriver`
-URL: `jdbc:grid://u:p@127.0.0.1:15432/public`
+URL: `jdbc:grid://grid:grid@127.0.0.1:15432/public`
 
 ## Capabilities
 
 - Schema tree, SQL Editor, TX
+- **Create / Drop schema** from SQL (and Generic DBeaver Create Schema when the menu is available): `CREATE SCHEMA name`, `DROP SCHEMA name` (RESTRICT optional)
+- Driver Manager: do **not** enable “Omit schema(s)” / “Omit single schema”
 - Multi-statement scripts → ANTLR split → BATCH_EXEC
 - `readEndpoints` + `readPreference=REPLICA` → Sync routing (SELECT → replica)
 - Scrollable ResultSet + Data Editor (single-table + PK; materialize for IDE)
 - Statement.cancel → SyncAwait cancel + wire CANCEL
 - Column metadata from SPI RowMetadata / ROW_DESC v2 (JDBC catalog hints only as fallback)
 - Unwrap SyncConnection / ServerMeta; pin/unpin; timezone client-info
+
+### Admin / manage menus (important)
+
+Custom Driver uses DBeaver’s Generic navigator only: there is **no** Administration folder and **no** Manage Users / Manage Schemas wizards.
+
+Use SQL instead:
+
+```sql
+CREATE SCHEMA my_app;
+CREATE USER app WITH PASSWORD 'secret';
+GRANT SELECT ON my_app.accounts TO app;
+SELECT * FROM information_schema.users;
+SELECT * FROM information_schema.roles;
+SELECT * FROM information_schema.role_members;
+SELECT * FROM information_schema.table_privileges;
+```
+
+URL path after the hosts is the **default schema** (`…/my_app` → `Connection.getSchema()` = `my_app`).
+
+## Schemas vs databases
+
+One Grid SQL process = one JDBC catalog (`grid`) with multiple **schemas**. Separate `CREATE DATABASE` catalogs are deferred: same process shares Netty / ThreadService / OpLog, so databases would not reduce contention vs schemas. Split load with separate processes/nodes when needed.
 
 Full guide: [EN jdbc-tooling](../../en/develop/jdbc-tooling.md) / [RU jdbc-tooling](../../ru/develop/jdbc-tooling.md).

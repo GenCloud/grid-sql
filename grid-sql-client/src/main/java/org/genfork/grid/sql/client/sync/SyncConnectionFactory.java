@@ -15,6 +15,8 @@
  */
 package org.genfork.grid.sql.client.sync;
 
+import org.genfork.grid.sql.client.*;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -22,16 +24,6 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.genfork.grid.common.VisibleForTesting;
-import org.genfork.grid.sql.client.ConnectionOptions;
-import org.genfork.grid.sql.client.GridSqlUri;
-import org.genfork.grid.sql.client.HostEndpoint;
-import org.genfork.grid.sql.client.ReadPreference;
-import org.genfork.grid.sql.client.RemoteConnection;
-import org.genfork.grid.sql.client.RemoteConnectionFactory;
-import org.genfork.grid.sql.client.ServerMeta;
-import org.genfork.grid.sql.client.SessionRole;
 
 /**
  * Blocking factory over writer (+ optional READ_REPLICA) {@link RemoteConnectionFactory}.
@@ -224,21 +216,6 @@ public final class SyncConnectionFactory implements AutoCloseable {
 	}
 
 	/**
-	 * Test/smoke harness: dispose every interned shared factory (process exit). Not product API.
-	 */
-	@VisibleForTesting
-	public static void disposeAllSharedForTests() {
-		for (SharedEntry entry : SHARED.values()) {
-			entry.retainers.set(0);
-			entry.factory.writerFactory.dispose();
-			if (entry.factory.readFactory != null) {
-				entry.factory.readFactory.dispose();
-			}
-		}
-		SHARED.clear();
-	}
-
-	/**
 	 * Clamp {@code minConnections}/{@code maxConnections} to at least {@link #MIN_TCP_CHANNELS}.
 	 */
 	public static ConnectionOptions applyTcpFloor(ConnectionOptions base) {
@@ -335,6 +312,20 @@ public final class SyncConnectionFactory implements AutoCloseable {
 	 */
 	public int maxTxContexts() {
 		return writerFactory.maxTxContexts();
+	}
+
+	/**
+	 * AUTH user configured for this factory (JDBC {@code DatabaseMetaData#getUserName}).
+	 */
+	public String user() {
+		return writerFactory.user();
+	}
+
+	/**
+	 * Default schema from the product URL path (JDBC {@code Connection#getSchema} seed).
+	 */
+	public String defaultSchema() {
+		return writerFactory.defaultSchema();
 	}
 
 	RemoteConnectionFactory remoteFactory() {

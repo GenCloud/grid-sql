@@ -17,6 +17,8 @@ Readiness stays DOWN while replication is enabled and consensus has not synced. 
 
 ```bash
 curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.details'
+# Replica / capacity starter profiles use Actuator on 7778:
+# curl -s http://127.0.0.1:7778/health/readiness | jq '.components.gridReadiness.details'
 ```
 
 ## Readiness details
@@ -35,7 +37,7 @@ The `gridReadiness` component reports the following keys. Values marked `n/a` me
 | `repairIssued` / `repairApplied` | long, `n/a` | Gap repair counters |
 | `rpoEstimateMs` | long, `n/a` | Cross-site lag estimate |
 | `swarmHint` | `KEEP`, `ATTRACT_LEARNER`, `SHED_LOAD`, `PREFER_DC`, `n/a` | Latest placement hint, by name |
-| `maxTxContexts` | integer | Present only when `grid.sql.max-tx-contexts` is set in configuration |
+| `maxTxContexts` | integer | May appear when `grid.sql.max-tx-contexts` is set in YAML; Boot does **not** apply it to the TCP listener (hard channel cap stays **8**) — [SQL server](configuration/sql-server.md) |
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Record-lock and cancellation counters |
 
 Liveness (`gridLiveness`) reports `logicExecutor`, `uptimeMs`, `pid`, and the same consensus and repair gauges. It has no `reason` key: a live process with an unsynced cluster is alive but not ready.
@@ -118,7 +120,7 @@ Build alerts on the fields above rather than on invented thresholds.
 4. Replicas show `applyLagStale: false` before you route reads to them.
 5. One write and one read succeed through the application path.
 
-Runbook: [role promotion](operations/ha-promote.md). Topologies: [single-site HA](operations/cluster-ha-highload.md), [multi-site](operations/multi-dc.md).
+Procedure: [role promotion](operations/ha-promote.md). Topologies: [single-site HA](operations/cluster-ha-highload.md), [multi-site](operations/multi-dc.md).
 
 ## Surfaces and their scope
 

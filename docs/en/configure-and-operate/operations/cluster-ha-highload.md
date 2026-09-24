@@ -110,11 +110,13 @@ grid://u:p@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public?connectTimeout
 
 Enable probes (`management.endpoint.health.probes.enabled: true`) and expose `health,prometheus`. Include `gridReadiness` in the readiness group (see `grid-sql-server-starter` `application.yml`).
 
-| Path | Role |
+| Path (starter `base-path: /`) | Role |
 |------|------|
-| `/actuator/health/liveness` | Process alive (`livenessState`) |
-| `/actuator/health/readiness` | Traffic-ready: `gridReadiness` — SQL TCP listening (when enabled) and solo durable **or** ORCHID synced |
-| `/actuator/prometheus` | Micrometer / Prometheus scrape |
+| `/health/liveness` | Process alive (`livenessState`) |
+| `/health/readiness` | Traffic-ready: `gridReadiness` — SQL TCP listening (when enabled) and solo durable **or** ORCHID synced |
+| `/prometheus` | Micrometer / Prometheus scrape |
+
+If Actuator keeps the default Spring base path, the same groups are under `/actuator/health/*` and `/actuator/prometheus`.
 ## YAML recipe -- prod high-load (1-DC)
 
 Tune for write throughput + durable group fsync. Values are a starting point; validate with Jepsen + QG on your hardware.
@@ -127,7 +129,6 @@ grid:
     working-set-max-entries: 2_000_000
   sql:
     default-shards: 16
-    max-tx-contexts: 512
   sql-server:
     enabled: true
     host: 0.0.0.0
@@ -172,7 +173,8 @@ grid:
 |------|------|
 | `op-log.fsync` | Durability; batch path amortizes group fsync |
 | `orchid.tick-ms` / `order-threshold` | Sync admission; keep `2*pi*freq*tick/1000 << 1` |
-| `sql.max-tx-contexts` / `default-shards` | Concurrent TX + shard parallelism |
+| `sql.default-shards` | Shard parallelism on CREATE TABLE |
+| Concurrent TX on one TCP | Hard channel cap is **8**; Boot does not apply `grid.sql.max-tx-contexts` to the listener — open more `Connection`s ([SQL server](../configuration/sql-server.md)) |
 | `durability.working-set-max-entries` + `hydrate-mode` | RAM ceiling vs sealed miss cost |
 | `swarm` / `placement-optimizer` | Load hints; production `apply-auto-cutover` default **true** (see [bio-inspired.md](../../understand/bio-inspired.md); set `false` only to suppress migrate under load) |
 

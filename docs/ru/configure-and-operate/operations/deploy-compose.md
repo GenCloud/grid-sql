@@ -1,6 +1,6 @@
 # Развёртывание через Compose (внутренний HA)
 
-Лабораторные docker-compose топологии отказоустойчивого Grid SQL. Это **стенд для отладки и эталонных knobs HA/multi-DC**, не шаблон продакшена: порты, кворум и образы подобраны под один хост. Дерево: [`examples/compose/`](../../../../examples/compose/).
+Лабораторные docker-compose топологии отказоустойчивого Grid SQL. Это **стенд для отладки и эталонных параметров HA / multi-DC**, не шаблон продакшена: порты, кворум и образы подобраны под один хост. Дерево: [`examples/compose/`](../../../../examples/compose/).
 
 На одном ноутбуке кворум и RTT не похожи на прод: цифры с compose цитируйте как лабораторные, а не как заявленный максимум кластера. Для боевой топологии смотрите [HA](cluster-ha-highload.md) и [несколько ЦОД](multi-dc.md).
 
@@ -12,13 +12,13 @@
 
 ```powershell
 powershell -File .\examples\scripts\build-sql-image.ps1
-# Fat jar: grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar
+# Толстый jar: grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar
 # Dockerfile: examples/docker/Dockerfile
 ```
 
 Переопределение: `GRID_IMAGE=my-registry/grid-sql:tag` в env-файле или в оболочке.
 
-## Эталонные knobs HA / multi-DC
+## Эталонные параметры HA / multi-DC
 
 YAML под каждой топологией совпадает с живыми ориентирами Jepsen / HA Load / Multidc:
 
@@ -71,13 +71,13 @@ volumes:
 ```powershell
 cd examples\compose\1dc-n2
 docker compose --env-file env\mid.env up -d
-# Writer: grid://@127.0.0.1:15432/public
-# Reads:  grid://@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433
+# Writer: grid://grid:grid@127.0.0.1:15432/public
+# Reads:  grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433
 
 cd examples\compose\1dc-n3
 docker compose --env-file env\high.env up -d
-# SQL: grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public
-# Готовность: http://127.0.0.1:7777/actuator/health/readiness
+# SQL: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public
+# Готовность (starter): http://127.0.0.1:7777/health/readiness
 ```
 
 ASYNC и SYNC Multidc делят host-порты — один стек за раз; не пересекайте с Jepsen Multidc.

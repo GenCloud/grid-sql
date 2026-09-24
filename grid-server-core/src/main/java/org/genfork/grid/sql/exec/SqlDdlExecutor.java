@@ -248,6 +248,9 @@ public final class SqlDdlExecutor {
 		final String table = tables.resolveTable(session, s.table());
 		if (!catalog.exists(table)) {
 			if (s.ifExists() || applyingReplicatedDdl.get()) {
+				catalog.deletePersistedTableMeta(table);
+				final String persist = SqlDdlRender.dropTable(s, table);
+				catalog.appendDdl(persist);
 				return SqlResult.ddl(SqlStatementTag.DROP_TABLE);
 			}
 			throw new IllegalStateException("Table not found: " + table);
@@ -327,12 +330,15 @@ public final class SqlDdlExecutor {
 		final TableCatalog catalog = tables.catalog();
 		if (!catalog.schemaExists(s.schema())) {
 			if (s.ifExists() || applyingReplicatedDdl.get()) {
+				catalog.dropSchema(s.schema(), true, catalog.isDdlReplay());
+				final String persist = SqlDdlRender.dropSchema(s);
+				catalog.appendDdl(persist);
 				return SqlResult.ddl(SqlStatementTag.DROP_SCHEMA);
 			}
 			throw new IllegalStateException("Schema not found: " + s.schema());
 		}
 		final long epoch = catalog.nextEpoch();
-		catalog.dropSchema(s.schema(), s.ifExists());
+		catalog.dropSchema(s.schema(), s.ifExists(), catalog.isDdlReplay());
 		final String persist = SqlDdlRender.dropSchema(s);
 		catalog.appendDdl(persist);
 		publishDdl(persist, epoch);

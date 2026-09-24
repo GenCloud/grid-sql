@@ -188,6 +188,109 @@ engine = new SqlEngine(new TableCatalog(), null, 4);
 	}
 
 	@Test
+	void dropSchemaWithoutRestrictKeyword() {
+		engine.execute("CREATE SCHEMA tooling");
+		engine.execute("DROP SCHEMA tooling");
+		assertThrows(IllegalArgumentException.class,
+				() -> engine.execute("SET SCHEMA tooling"));
+	}
+
+	@Test
+	void createSchemaAuthorizationIgnored() {
+		engine.execute("CREATE SCHEMA analytics AUTHORIZATION alice");
+		assertTrue(engine.catalog().schemaExists("analytics"));
+		engine.execute("DROP SCHEMA analytics");
+	}
+
+	@Test
+	void dropSchemaCascadeRejected() {
+		engine.execute("CREATE SCHEMA doomed");
+		assertThrows(IllegalArgumentException.class,
+				() -> engine.execute("DROP SCHEMA doomed CASCADE"));
+		engine.execute("DROP SCHEMA doomed RESTRICT");
+	}
+
+	@Test
+	void dropSchemaRestrictRejectsView() {
+		engine.execute("CREATE SCHEMA app");
+		engine.execute("CREATE TABLE app.base (id INT PRIMARY KEY)");
+		engine.execute("CREATE VIEW app.v AS SELECT id FROM app.base");
+		assertThrows(IllegalStateException.class, () -> engine.execute("DROP SCHEMA app"));
+		engine.execute("DROP VIEW app.v");
+		engine.execute("DROP TABLE app.base");
+		engine.execute("DROP SCHEMA app");
+	}
+
+	@Test
+	void catalogRecoveryAfterDropSchema() throws Exception {
+		final java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("grid-cat-drop");
+		final SqlEngine e1 = new SqlEngine(new TableCatalog(dir), null, 4);
+		e1.execute("CREATE SCHEMA app");
+		e1.execute("CREATE TABLE app.t (id INT PRIMARY KEY, v INT)");
+		e1.execute("DROP TABLE app.t");
+		e1.execute("DROP SCHEMA app");
+
+		final SqlEngine e2 = new SqlEngine(new TableCatalog(dir), null, 4);
+		e2.recoverPersistedCatalog();
+		assertTrue(!e2.catalog().schemaExists("app"));
+		assertTrue(!e2.catalog().exists("app.t"));
+	}
+
+	@Test
+	void catalogRecoverySurvivesPoisonedDropSchemaJournal() throws Exception {
+		final java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("grid-cat-poison");
+		final java.nio.file.Path catalog = dir.resolve("catalog");
+		java.nio.file.Files.createDirectories(catalog);
+		java.nio.file.Files.writeString(catalog.resolve("schemas.list"), "app\n");
+		java.nio.file.Files.writeString(catalog.resolve("ddl.sql"),
+				"""
+						CREATE SCHEMA app
+						CREATE TABLE IF NOT EXISTS app.t (id INT PRIMARY KEY)
+						DROP SCHEMA app RESTRICT
+						CREATE SCHEMA app
+						CREATE TABLE IF NOT EXISTS app.t (id INT PRIMARY KEY, v INT)
+						""");
+
+		final SqlEngine e2 = new SqlEngine(new TableCatalog(dir), null, 4);
+		e2.recoverPersistedCatalog();
+		assertTrue(e2.catalog().schemaExists("app"));
+		assertTrue(e2.catalog().exists("app.t"));
+		assertEquals(2, e2.catalog().requireSchema("app.t").columnCount());
+	}
+
+	@Test
+	void catalogRecoveryCreateDropCreateSameSchema() throws Exception {
+		final java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("grid-cat-cdc");
+		final SqlEngine e1 = new SqlEngine(new TableCatalog(dir), null, 4);
+		e1.execute("CREATE SCHEMA app");
+		e1.execute("CREATE TABLE app.t (id INT PRIMARY KEY)");
+		e1.execute("DROP TABLE app.t");
+		e1.execute("DROP SCHEMA app");
+		e1.execute("CREATE SCHEMA app");
+		e1.execute("CREATE TABLE app.t (id INT PRIMARY KEY, v INT)");
+
+		final SqlEngine e2 = new SqlEngine(new TableCatalog(dir), null, 4);
+		e2.recoverPersistedCatalog();
+		assertTrue(e2.catalog().schemaExists("app"));
+		assertTrue(e2.catalog().exists("app.t"));
+		assertEquals(2, e2.catalog().requireSchema("app.t").columnCount());
+	}
+
+	@Test
+	void dropTableIfExistsClearsOrphanMetaOnRecover() throws Exception {
+		final java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("grid-cat-orphan");
+		final SqlEngine e1 = new SqlEngine(new TableCatalog(dir), null, 4);
+		e1.execute("CREATE SCHEMA app");
+		e1.execute("CREATE TABLE app.t (id INT PRIMARY KEY)");
+		e1.execute("DROP TABLE app.t");
+		e1.execute("DROP TABLE IF EXISTS app.t");
+
+		final SqlEngine e2 = new SqlEngine(new TableCatalog(dir), null, 4);
+		e2.recoverPersistedCatalog();
+		assertTrue(!e2.catalog().exists("app.t"));
+	}
+
+	@Test
 	void catalogRecoveryReplaysSchemaAndTable() throws Exception {
 		final java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("grid-cat-rec");
 final SqlEngine e1 = new SqlEngine(new TableCatalog(dir), null, 4);

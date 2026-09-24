@@ -49,6 +49,8 @@ class PrivilegeCatalogTest {
 	@Test
 	void denySelectWithoutGrant() {
 		final PrivilegeCatalog cat = new PrivilegeCatalog();
+		// First user is bootstrap administrator (full *.* + ensure bypass); seed admin first.
+		cat.createUser("admin", "secret");
 		cat.createUser("alice", "secret");
 		assertThrows(SecurityException.class,
 				() -> cat.ensure("alice", "public", "t", SqlPrivilege.SELECT));

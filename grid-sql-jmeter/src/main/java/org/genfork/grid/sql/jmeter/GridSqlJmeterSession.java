@@ -63,7 +63,7 @@ public final class GridSqlJmeterSession {
 	/** WRITE_ONLY: upserts per TX unit (one OpLog/orchid force for the batch). */
 	public static final String PARAM_WRITE_BATCH_SIZE = "WRITE_BATCH_SIZE";
 
-	public static final String DEFAULT_GRID_URL = "grid://@127.0.0.1:15432/public";
+	public static final String DEFAULT_GRID_URL = "grid://grid:grid@127.0.0.1:15432/public";
 	public static final int DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 	public static final int DEFAULT_OP_TIMEOUT_MS = 10_000;
 	public static final int DEFAULT_WRITE_BATCH_SIZE = 1;

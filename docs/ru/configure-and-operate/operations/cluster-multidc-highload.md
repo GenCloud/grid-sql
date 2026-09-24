@@ -218,7 +218,6 @@ grid:
     working-set-max-entries: 2_000_000
   sql:
     default-shards: 16
-    max-tx-contexts: 512
   sql-server:
     enabled: true
     port: 15432

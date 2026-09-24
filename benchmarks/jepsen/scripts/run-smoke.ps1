@@ -3,6 +3,10 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Repo = (Resolve-Path (Join-Path $Root "../..")).Path
 Set-Location $Root
 
+if (-not $env:JEPSEN_M2 -or $env:JEPSEN_M2 -eq "") {
+  $env:JEPSEN_M2 = Join-Path $env:USERPROFILE ".m2"
+}
+
 $ComposeStatus = "validated"
 $Chaos = "skipped"
 $Full = "not-run"

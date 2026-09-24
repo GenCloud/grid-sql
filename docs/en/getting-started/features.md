@@ -73,18 +73,8 @@ See [ORCHID](../understand/orchid-consensus.md), [replication](../configure-and-
 
 See [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling.md).
 
-## Measured throughput
+## Lab throughput
 
-Lab host, two nodes, `fsync: true`. The lower bound is the regression floor at roughly 95% of the planning figure.
-
-| Scenario | ops/s | Lower bound (~95%) |
-|----------|------:|-------------------:|
-| Write only | **4921.975** | ≈ 4676 |
-| Read only | **52261…59430** | ≈ 52261 |
-| Mixed capacity | **8772…11352** | ≈ 8333 |
-| Long mixed run (128 threads, 120 s) | **9013.292** | — |
-| Single node: write / read / mixed | **7095** / **56564** / **19526** | — |
-
-Point reads and COUNT JOIN average about **0.5 ms** on this host, with read throughput near **55k** ops/s. A sealed key lookup in memory-plus-disk mode over 100k rows takes **0.313 µs** (ceiling ≈ 0.358). Conditions and full tables: [capacity](../performance/capacity-slo.md), [results](../performance/results.md).
+Planning numbers and regression floors live in [capacity](../performance/capacity-slo.md); full stamp tables in [results](../performance/results.md). Do not treat Features as a living scoreboard — re-measure on a calm host before capacity claims.
 
 **Related:** [introduction](what-is-grid.md), [why Grid](positioning.md), [connect clients](connect-clients.md).

@@ -104,9 +104,22 @@ YAML и нагрузка: [несколько ЦОД под нагрузкой](
 2. Сымитировать молчание Active дольше `claim-timeout-ms` (или корректно остановить узлы Active на стенде).
 3. Проверить claim на Hold: новый Active, `regionEpoch` +1, readiness UP, `writerEligible` у победителя.
 4. Клиент: `rediscoverWriter()` — не следующий host в URL; проверочная запись проходит только на новом Active.
-5. Возврат: бывший Active снова как Hold (или по вашей топологии), дождаться подтягивания, зафиксировать окно RPO для `ASYNC_SHIP` против почти нулевого отставания digest для `SYNC_VOTERS`.
+5. Возврат (подробно):
+   - Поднимите бывший Active с ролью **Hold** (в том же семействе `regionEpoch`, что у нового Active — не запускайте второго Active).
+   - Дождитесь подтягивания OpLog / repair до приемлемого отставания; не ставьте его в URL записи как writer.
+   - Клиенты остаются на текущем `writerEligible` (`rediscoverWriter()` только если writer снова сменится).
+   - Позже вернуть роль исходной площадке можно только сознательным claim-drill, не автоматически при рестарте процесса.
+   - Зафиксируйте RPO для `ASYNC_SHIP` против почти нулевого отставания digest для `SYNC_VOTERS`.
 
 **Проверка RPO.** Для `ASYNC_SHIP` снимите отставание Hold (`rpoEstimateMs` / apply lag) до закрытия учебной проверки. Для `SYNC_VOTERS` убедитесь, что удалённые голосующие были в пути кворума. Нагрузка и YAML: [несколько ЦОД под нагрузкой](cluster-multidc-highload.md).
+
+## Чеклист оператора (один экран)
+
+1. Ровно один Active; Hold/Witness не в URL записи как писатели.
+2. Режим выбран осознанно: `ASYNC_SHIP` (RPO на Hold) vs `SYNC_VOTERS_ACROSS_DC` (WAN на каждый commit).
+3. После claim: readiness UP, `writerEligible` у победителя, `regionEpoch` вырос, клиенты вызывают `rediscoverWriter()`.
+4. Перед закрытием учебной потери Active снимите RPO (`rpoEstimateMs` / apply lag).
+5. Полный YAML и нагрузка: [несколько ЦОД под нагрузкой](cluster-multidc-highload.md).
 
 ## Стенды
 

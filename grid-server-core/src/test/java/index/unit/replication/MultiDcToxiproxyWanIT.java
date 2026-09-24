@@ -48,68 +48,75 @@ public class MultiDcToxiproxyWanIT {
 	void latencyIncreasesCommitAndPartitionFailClosed() throws Exception {
 		final int portA = freePort();
 		final int portB = freePort();
+		final long wanDelayMs = 40L;
 
-		final GridConfigurationProperties propsB = ReplTestSupport.props(
-				"wan-b", "wan-mdc", "dc-b", portB, tempDir.resolve("b"),
-				List.of(ReplTestSupport.peer("wan-a", "dc-a", portA))
-		);
-		propsB.getReplication().getCrossDc().setMode(CrossDcMode.ASYNC_SHIP.name());
-		propsB.getReplication().getCrossDc().setPhaseCoupling(false);
-
-		// Start remote first so DelayedTcpProxy upstream accepts immediately.
-		final ReplicationCoordinator b = new ReplicationCoordinator(propsB);
-		b.start();
-
-		try (DelayedTcpProxy proxy = new DelayedTcpProxy("127.0.0.1", portB, 40L)) {
-			final GridConfigurationProperties propsA = ReplTestSupport.props(
-					"wan-a", "wan-mdc", "dc-a", portA, tempDir.resolve("a"),
-					List.of(ReplTestSupport.peer("wan-b", "dc-b", proxy.localPort()))
+		// Delay both directions: inbound HELLO replaces outbound channel in channelsByPeer,
+		// so a one-sided proxy is bypassed when the reverse peer dials direct.
+		try (DelayedTcpProxy proxyToB = new DelayedTcpProxy("127.0.0.1", portB, wanDelayMs);
+		     DelayedTcpProxy proxyToA = new DelayedTcpProxy("127.0.0.1", portA, wanDelayMs)) {
+			final GridConfigurationProperties propsB = ReplTestSupport.props(
+					"wan-b", "wan-mdc", "dc-b", portB, tempDir.resolve("b"),
+					List.of(ReplTestSupport.peer("wan-a", "dc-a", proxyToA.localPort()))
 			);
-			propsA.getReplication().getCrossDc().setMode(CrossDcMode.SYNC_VOTERS_ACROSS_DC.name());
-			propsA.getReplication().getCrossDc().setVoters(List.of("wan-b"));
-			propsA.getReplication().getCrossDc().setPhaseCoupling(false);
-			propsA.getReplication().getCrossDc().setRemoteAckTimeoutMs(4_000L);
+			propsB.getReplication().getCrossDc().setMode(CrossDcMode.ASYNC_SHIP.name());
+			propsB.getReplication().getCrossDc().setPhaseCoupling(false);
 
-			final ReplicationCoordinator a = new ReplicationCoordinator(propsA);
-			a.start();
+			final ReplicationCoordinator b = new ReplicationCoordinator(propsB);
+			b.start();
 			try {
-				waitPeers(a, b, 12_000);
-				Thread.sleep(200);
+				final GridConfigurationProperties propsA = ReplTestSupport.props(
+						"wan-a", "wan-mdc", "dc-a", portA, tempDir.resolve("a"),
+						List.of(ReplTestSupport.peer("wan-b", "dc-b", proxyToB.localPort()))
+				);
+				propsA.getReplication().getCrossDc().setMode(CrossDcMode.SYNC_VOTERS_ACROSS_DC.name());
+				propsA.getReplication().getCrossDc().setVoters(List.of("wan-b"));
+				propsA.getReplication().getCrossDc().setPhaseCoupling(false);
+				propsA.getReplication().getCrossDc().setRemoteAckTimeoutMs(4_000L);
 
-				final List<Long> samples = new ArrayList<>();
-				for (int i = 1; i <= 5; i++) {
-					final long n = i;
-					final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
-							"demo.Wan", 0, n, ReplicationOpType.UPSERT,
-							new byte[]{(byte) n}, new byte[]{1}, 1L, 0L
+				final ReplicationCoordinator a = new ReplicationCoordinator(propsA);
+				a.start();
+				try {
+					waitPeers(a, b, 12_000);
+					Thread.sleep(200);
+
+					final List<Long> samples = new ArrayList<>();
+					for (int i = 1; i <= 5; i++) {
+						final long n = i;
+						final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
+								"demo.Wan", 0, n, ReplicationOpType.UPSERT,
+								new byte[]{(byte) n}, new byte[]{1}, 1L, 0L
+						));
+						final long t0 = System.nanoTime();
+						final long seq = a.getOrchidNode().appendAndWaitCommit(op).get(8, TimeUnit.SECONDS);
+						samples.add((System.nanoTime() - t0) / 1_000_000L);
+						assertTrue(seq >= 1);
+						a.getOrchidNode().confirmPersisted(seq);
+					}
+					samples.sort(Long::compareTo);
+					final long p50 = samples.get(samples.size() / 2);
+					assertTrue(p50 >= 30L, "expected WAN delay to inflate commit p50, got " + p50 + "ms samples=" + samples);
+
+					b.stop();
+					a.getOrchidNode().forgetPeer("wan-b");
+
+					final ReplicationOp op2 = OpLogCodec.withChecksum(new ReplicationOp(
+							"demo.Wan", 0, 99L, ReplicationOpType.UPSERT, new byte[]{9}, new byte[]{2}, 1L, 0L
 					));
-					final long t0 = System.nanoTime();
-					final long seq = a.getOrchidNode().appendAndWaitCommit(op).get(8, TimeUnit.SECONDS);
-					samples.add((System.nanoTime() - t0) / 1_000_000L);
-					assertTrue(seq >= 1);
-					a.getOrchidNode().confirmPersisted(seq);
+					final CompletionException failed = assertThrows(CompletionException.class,
+							() -> a.getOrchidNode().appendAndWaitCommit(op2).join());
+					Throwable cause = failed.getCause() == null ? failed : failed.getCause();
+					assertTrue(cause instanceof OrchidNotSyncedException, "got " + cause);
+					assertTrue(cause.getMessage().contains("remote voter digest timeout"), cause.getMessage());
+				} finally {
+					a.stop();
 				}
-				samples.sort(Long::compareTo);
-				final long p50 = samples.get(samples.size() / 2);
-				assertTrue(p50 >= 30L, "expected WAN delay to inflate commit p50, got " + p50 + "ms samples=" + samples);
-
-				b.stop();
-				a.getOrchidNode().forgetPeer("wan-b");
-
-				final ReplicationOp op2 = OpLogCodec.withChecksum(new ReplicationOp(
-						"demo.Wan", 0, 99L, ReplicationOpType.UPSERT, new byte[]{9}, new byte[]{2}, 1L, 0L
-				));
-				final CompletionException failed = assertThrows(CompletionException.class,
-						() -> a.getOrchidNode().appendAndWaitCommit(op2).join());
-				Throwable cause = failed.getCause() == null ? failed : failed.getCause();
-				assertTrue(cause instanceof OrchidNotSyncedException, "got " + cause);
-				assertTrue(cause.getMessage().contains("remote voter digest timeout"), cause.getMessage());
 			} finally {
-				a.stop();
-			}
-		} finally {
-			if (b.getOrchidNode() != null) {
-				try { b.stop(); } catch (Exception ignored) { }
+				if (b.getOrchidNode() != null) {
+					try {
+						b.stop();
+					} catch (Exception ignored) {
+					}
+				}
 			}
 		}
 	}

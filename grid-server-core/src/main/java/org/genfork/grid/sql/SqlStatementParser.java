@@ -350,10 +350,13 @@ public final class SqlStatementParser {
 		}
 		if (ex.createSchemaStmt() != null) {
 			final SimplifiedSqlParser.CreateSchemaStmtContext cs = ex.createSchemaStmt();
-			return new CreateSchemaSql(cs.ID().getText(), cs.IF() != null);
+			return new CreateSchemaSql(cs.ID(0).getText(), cs.IF() != null);
 		}
 		if (ex.dropSchemaStmt() != null) {
 			final SimplifiedSqlParser.DropSchemaStmtContext ds = ex.dropSchemaStmt();
+			if (ds.CASCADE() != null) {
+				throw new IllegalArgumentException("DROP SCHEMA CASCADE is not supported; use RESTRICT");
+			}
 			return new DropSchemaSql(ds.ID().getText(), ds.IF() != null);
 		}
 		if (ex.setSchemaStmt() != null) {

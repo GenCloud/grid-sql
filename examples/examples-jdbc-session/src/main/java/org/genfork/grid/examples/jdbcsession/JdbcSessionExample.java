@@ -32,7 +32,7 @@ import java.sql.Statement;
  */
 public final class JdbcSessionExample {
 	private static final String GRID_URL =
-			"grid://@127.0.0.1:15432/public"
+			"grid://grid:grid@127.0.0.1:15432/public"
 					+ "?warmup=true&maxConnections=1&fetchWindow=32&connectTimeoutMs=2000";
 
 	private JdbcSessionExample() {

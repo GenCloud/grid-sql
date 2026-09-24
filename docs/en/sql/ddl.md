@@ -152,11 +152,13 @@ Removes the schema, the data and the table's secondary indexes.
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS analytics;
+CREATE SCHEMA reporting AUTHORIZATION alice;
 SET SCHEMA analytics;
-DROP SCHEMA analytics RESTRICT;
+DROP SCHEMA analytics;
+DROP SCHEMA reporting RESTRICT;
 ```
 
-A table name may be qualified: `analytics.orders`. `DROP SCHEMA` requires `RESTRICT` — there is no cascading schema drop.
+A table name may be qualified: `analytics.orders`. `DROP SCHEMA` defaults to RESTRICT when the keyword is omitted; `CASCADE` is rejected. `AUTHORIZATION` on `CREATE SCHEMA` is accepted and ignored (no schema owner).
 
 ## Sequences
 
@@ -240,7 +242,7 @@ The privilege set is `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`. The target i
 | `ALTER TABLE ... ALTER COLUMN TYPE`, renames | Not supported: recreate the table |
 | Column `DEFAULT <expression>` | Defaults come from the application or from `IDENTITY`/`SERIAL` |
 | `CREATE BITMAP INDEX` over several columns | Bitmap is single-column only |
-| `DROP SCHEMA` without `RESTRICT` | There is no cascading schema drop |
+| `DROP SCHEMA … CASCADE` | Cascading schema drop is not supported; omit CASCADE or use RESTRICT |
 | Partial indexes, expression indexes | Only columns are indexed |
 | `ALTER TABLE … DROP CONSTRAINT` | Constraints are dropped by recreating the table |
 | A double-quoted identifier | Names are unquoted words only |

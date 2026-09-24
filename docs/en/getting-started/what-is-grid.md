@@ -18,7 +18,7 @@ Durability (`grid.durability.enabled`) and replication (`grid.replication.enable
 
 Complete dialect and cluster inventory: [features](features.md). The reasoning behind the design: [why Grid](positioning.md).
 
-## Typical scenarios — where to go
+## Typical scenarios
 
 | Goal | Start here | Then |
 |------|------------|------|
@@ -45,13 +45,13 @@ Details: [write path](../understand/write-path-staging.md), [architecture overvi
 
 Applications depend on `grid-sql-client` and connect over `grid://` (reactive) or `jdbc:grid://` (JDBC) — one protocol, two APIs. A single TCP connection carries many logical transactions, bounded by `maxTxContexts`. Details: [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling.md).
 
-## What Grid does not do
+## Boundaries
 
-- **Own application protocol only.** Services speak `grid://` or `jdbc:grid://` (Grid little-endian frames).
-- **No shared `dataDir`** on NFS/SAN for the whole cluster — the directory belongs to one node.
-- **No two writers at once.** One writer; the role changes through `PROMOTE_NOTIFY` / `rediscoverWriter()`, not by rotating hosts in the URL.
-- **No requirement that the dataset fits in RAM.** Memory holds the working set; with durability on, sealed files and the OpLog are authoritative.
-- **No TLS on the SQL port.** Terminate TLS in front of the node (proxy / load balancer); see [security](../configure-and-operate/operations/security.md).
+- Services speak only `grid://` or `jdbc:grid://` (Grid frames).
+- One `dataDir` per node on local disk — not NFS/SAN for the whole cluster.
+- One writer at a time; role change via `PROMOTE_NOTIFY` / `rediscoverWriter()`, not by rotating URL hosts.
+- Memory holds the working set; with durability on, sealed files and the OpLog are authoritative.
+- No TLS on the SQL port — terminate TLS in front of the node ([security](../configure-and-operate/operations/security.md)).
 
 ## Capacity orientation
 

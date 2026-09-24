@@ -25,7 +25,6 @@ import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.io.CleanupMode;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.net.ServerSocket;
@@ -33,6 +32,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,7 +47,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class CrashMidQuorumIT {
 
-	@TempDir(cleanup = CleanupMode.NEVER)
+	private static final String DOMAIN = "chaos.Mid";
+	private static final String PEER_A = "mid-a";
+	private static final String PEER_B = "mid-b";
+	private static final String PEER_C = "mid-c";
+	private static final String DC = "dc-a";
+	private static final String CLUSTER = "midq";
+
+	private static final long BOOT_SYNC_MS = 15_000L;
+	private static final long INFLIGHT_COMMIT_MS = 2_000L;
+	private static final long SURVIVOR_READY_MS = 15_000L;
+	private static final long SURVIVOR_COMMIT_ATTEMPT_MS = 4_000L;
+	private static final long SURVIVOR_COMMIT_BUDGET_MS = 20_000L;
+	private static final long PARK_NS = TimeUnit.MILLISECONDS.toNanos(50L);
+	private static final long GC_SETTLE_NS = TimeUnit.MILLISECONDS.toNanos(200L);
+	private static final int MIN_LIVE_PEERS_AFTER_CRASH = 1;
+
+	@TempDir
 	Path tempDir;
 
 	@Test
@@ -57,16 +73,16 @@ public class CrashMidQuorumIT {
 		final int portB = freePort();
 		final int portC = freePort();
 		final GridConfigurationProperties propsA = ReplTestSupport.safetyProps(
-				"mid-a", "midq", "dc-a", portA, tempDir.resolve("a"),
-				List.of(ReplTestSupport.peer("mid-b", "dc-a", portB), ReplTestSupport.peer("mid-c", "dc-a", portC))
+				PEER_A, CLUSTER, DC, portA, tempDir.resolve("a"),
+				List.of(ReplTestSupport.peer(PEER_B, DC, portB), ReplTestSupport.peer(PEER_C, DC, portC))
 		);
 		final GridConfigurationProperties propsB = ReplTestSupport.safetyProps(
-				"mid-b", "midq", "dc-a", portB, tempDir.resolve("b"),
-				List.of(ReplTestSupport.peer("mid-a", "dc-a", portA), ReplTestSupport.peer("mid-c", "dc-a", portC))
+				PEER_B, CLUSTER, DC, portB, tempDir.resolve("b"),
+				List.of(ReplTestSupport.peer(PEER_A, DC, portA), ReplTestSupport.peer(PEER_C, DC, portC))
 		);
 		final GridConfigurationProperties propsC = ReplTestSupport.safetyProps(
-				"mid-c", "midq", "dc-a", portC, tempDir.resolve("c"),
-				List.of(ReplTestSupport.peer("mid-a", "dc-a", portA), ReplTestSupport.peer("mid-b", "dc-a", portB))
+				PEER_C, CLUSTER, DC, portC, tempDir.resolve("c"),
+				List.of(ReplTestSupport.peer(PEER_A, DC, portA), ReplTestSupport.peer(PEER_B, DC, portB))
 		);
 
 		final GridEntriesProcessor procA = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
@@ -76,45 +92,47 @@ public class CrashMidQuorumIT {
 		final ReplicationCoordinator b = new ReplicationCoordinator(propsB);
 		final ReplicationCoordinator c = new ReplicationCoordinator(propsC);
 		try {
-			a.registerDomain("chaos.Mid", ReplTestSupport.singleShard(procA), true);
-			b.registerDomain("chaos.Mid", ReplTestSupport.singleShard(procB), true);
-			c.registerDomain("chaos.Mid", ReplTestSupport.singleShard(procC), true);
+			a.registerDomain(DOMAIN, ReplTestSupport.singleShard(procA), true);
+			b.registerDomain(DOMAIN, ReplTestSupport.singleShard(procB), true);
+			c.registerDomain(DOMAIN, ReplTestSupport.singleShard(procC), true);
 			a.start();
 			b.start();
 			c.start();
 
-			final long deadline = System.currentTimeMillis() + 15_000;
-			while (System.currentTimeMillis() < deadline
-					&& (!a.getOrchidNode().isSynced() || !b.getOrchidNode().isSynced() || !c.getOrchidNode().isSynced())) {
-				LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(50));
-			}
+			waitThreeSynced(a, b, c, BOOT_SYNC_MS);
 			assertTrue(a.getOrchidNode().isSynced());
 
 			final ReplicationCoordinator ranked =
 					a.getOrchidNode().isPhaseRankedProposer() ? a
 							: b.getOrchidNode().isPhaseRankedProposer() ? b : c;
 			assertTrue(ranked.getOrchidNode().isPhaseRankedProposer());
+			final String crashedId = ranked.getOrchidNode().getNodeId();
 
 			final byte[] key = new byte[]{7, 7};
 			final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
-					"chaos.Mid", 0, 1L, ReplicationOpType.UPSERT, key, new byte[]{1}, 1L, 0L
+					DOMAIN, 0, 1L, ReplicationOpType.UPSERT, key, new byte[]{1}, 1L, 0L
 			));
 			final CompletableFuture<Long> fut = ranked.getOrchidNode().appendAndWaitCommit(op);
 			// Best-effort interrupt mid-quorum; commit may race and finish first.
 			ranked.stop();
 
+			// Survivors must stop waiting on the dead peer (same pattern as OrchidProposerFailoverIT).
+			isolateDeadPeer(b, c, crashedId);
+
 			Long committedSeq = null;
 			try {
-				committedSeq = fut.get(2, TimeUnit.SECONDS);
+				committedSeq = fut.get(INFLIGHT_COMMIT_MS, TimeUnit.MILLISECONDS);
 			} catch (Exception ignored) {
 			}
 
-			final long recoverDeadline = System.currentTimeMillis() + 12_000;
-			while (System.currentTimeMillis() < recoverDeadline
-					&& (!b.getOrchidNode().isSynced() || !c.getOrchidNode().isSynced())) {
-				LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(50));
-			}
-			// Survivors must agree on committed prefix (no fork): max seq matches on B and C when both advanced.
+			final ReplicationCoordinator survivor = waitSurvivorProposer(b, c, SURVIVOR_READY_MS);
+			assertTrue(survivor != null,
+					() -> "expected phase-ranked survivor after crash of " + crashedId
+							+ "; b.proposer=" + b.getOrchidNode().getPhaseRankedProposerId()
+							+ " c.proposer=" + c.getOrchidNode().getPhaseRankedProposerId()
+							+ " b.R=" + b.getOrchidNode().orderParameterR()
+							+ " c.R=" + c.getOrchidNode().orderParameterR());
+
 			final long seqB = b.getOrchidNode().getLastCommittedSeq();
 			final long seqC = c.getOrchidNode().getLastCommittedSeq();
 			if (committedSeq != null) {
@@ -124,22 +142,96 @@ public class CrashMidQuorumIT {
 				assertEquals(Math.min(seqB, seqC), Math.min(seqB, seqC));
 			}
 
-			final ReplicationCoordinator survivor = b.getOrchidNode().isPhaseRankedProposer() ? b
-					: c.getOrchidNode().isPhaseRankedProposer() ? c : null;
-			if (survivor != null && survivor.getOrchidNode().isSynced()) {
-				final ReplicationOp op2 = OpLogCodec.withChecksum(new ReplicationOp(
-						"chaos.Mid", 0, Math.max(seqB, seqC) + 1, ReplicationOpType.UPSERT,
-						new byte[]{8}, new byte[]{2}, 1L, 0L
-				));
-				final long next = survivor.getOrchidNode().appendAndWaitCommit(op2).get(8, TimeUnit.SECONDS);
-				assertTrue(next > Math.max(seqB, seqC) || next >= 1);
-			}
+			final long next = appendOnSurvivor(survivor, b, c, Math.max(seqB, seqC) + 1L);
+			assertTrue(next > Math.max(seqB, seqC) || next >= 1L);
 		} finally {
-			try { a.stop(); } catch (Exception ignored) {}
-			try { b.stop(); } catch (Exception ignored) {}
-			try { c.stop(); } catch (Exception ignored) {}
+			stopQuietly(a);
+			stopQuietly(b);
+			stopQuietly(c);
 			System.gc();
-			LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(200));
+			LockSupport.parkNanos(GC_SETTLE_NS);
+		}
+	}
+
+	private static void waitThreeSynced(ReplicationCoordinator a,
+	                                    ReplicationCoordinator b,
+	                                    ReplicationCoordinator c,
+	                                    long timeoutMs) {
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline
+				&& (!a.getOrchidNode().isSynced() || !b.getOrchidNode().isSynced() || !c.getOrchidNode().isSynced())) {
+			LockSupport.parkNanos(PARK_NS);
+		}
+	}
+
+	private static void isolateDeadPeer(ReplicationCoordinator b, ReplicationCoordinator c, String crashedId) {
+		try {
+			b.isolatePeer(crashedId);
+		} catch (Exception ignored) {
+		}
+		try {
+			c.isolatePeer(crashedId);
+		} catch (Exception ignored) {
+		}
+	}
+
+	private static ReplicationCoordinator waitSurvivorProposer(ReplicationCoordinator b,
+	                                                           ReplicationCoordinator c,
+	                                                           long timeoutMs) {
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			if (isReadyProposer(b)) {
+				return b;
+			}
+			if (isReadyProposer(c)) {
+				return c;
+			}
+			LockSupport.parkNanos(PARK_NS);
+		}
+		return null;
+	}
+
+	private static boolean isReadyProposer(ReplicationCoordinator node) {
+		return node.getOrchidNode().isSynced()
+				&& node.getOrchidNode().isPhaseRankedProposer()
+				&& node.getOrchidNode().liveLocalPeerCount() >= MIN_LIVE_PEERS_AFTER_CRASH;
+	}
+
+	private static long appendOnSurvivor(ReplicationCoordinator initial,
+	                                     ReplicationCoordinator b,
+	                                     ReplicationCoordinator c,
+	                                     long startSeq) throws Exception {
+		final long budgetDeadline = System.currentTimeMillis() + SURVIVOR_COMMIT_BUDGET_MS;
+		ReplicationCoordinator survivor = initial;
+		long nextSeq = startSeq;
+		Exception last = null;
+		while (System.currentTimeMillis() < budgetDeadline) {
+			if (!isReadyProposer(survivor)) {
+				survivor = waitSurvivorProposer(b, c, Math.max(1L, budgetDeadline - System.currentTimeMillis()));
+				if (survivor == null) {
+					break;
+				}
+			}
+			nextSeq = Math.max(b.getOrchidNode().getLastCommittedSeq(), c.getOrchidNode().getLastCommittedSeq()) + 1L;
+			final ReplicationOp op2 = OpLogCodec.withChecksum(new ReplicationOp(
+					DOMAIN, 0, nextSeq, ReplicationOpType.UPSERT,
+					new byte[]{8}, new byte[]{2}, 1L, 0L
+			));
+			try {
+				return survivor.getOrchidNode().appendAndWaitCommit(op2)
+						.get(SURVIVOR_COMMIT_ATTEMPT_MS, TimeUnit.MILLISECONDS);
+			} catch (TimeoutException | java.util.concurrent.ExecutionException e) {
+				last = e;
+				LockSupport.parkNanos(PARK_NS);
+			}
+		}
+		throw new AssertionError("survivor commit after crash timed out; last=" + last);
+	}
+
+	private static void stopQuietly(ReplicationCoordinator node) {
+		try {
+			node.stop();
+		} catch (Exception ignored) {
 		}
 	}
 
