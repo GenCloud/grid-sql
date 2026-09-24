@@ -1,0 +1,109 @@
+package index.unit.replication;
+
+import org.genfork.grid.mem.GridScalableMap;
+import org.genfork.grid.mem.stage.GridEntriesProcessor;
+import org.genfork.grid.mem.stage.WorkingSetBudget;
+import org.genfork.grid.replication.snapshot.sealed.SealedGridMapReader;
+import org.genfork.grid.replication.snapshot.sealed.SealedGridMapWriter;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+
+/**
+ * @author: GenCloud
+ * @date: 2026/09
+ */
+class WorkingSetEvictionIT {
+	@TempDir
+	Path tmp;
+
+	@Test
+	void missLoadsFromSealedAndEvictsCold() throws Exception {
+		final Path file = tmp.resolve("ws_0.gmap");
+		final List<SealedGridMapWriter.Kv> kvs = new ArrayList<>();
+		for (int i = 0; i < 20; i++) {
+			final byte[] k = ("k" + i).getBytes(StandardCharsets.UTF_8);
+			final byte[] v = ("v" + i).getBytes(StandardCharsets.UTF_8);
+			kvs.add(new SealedGridMapWriter.Kv(k, v));
+		}
+		SealedGridMapWriter.write(file, "ws", 0, 10L, kvs);
+
+		final GridEntriesProcessor proc = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+		final WorkingSetBudget budget = new WorkingSetBudget(5);
+		budget.setEvictHandler((shard, key) -> proc.evictCommitted(key));
+		proc.setWorkingSetBudget(budget);
+		try (SealedGridMapReader reader = SealedGridMapReader.open(file)) {
+			proc.setSealedReader(reader);
+			for (int i = 0; i < 20; i++) {
+				final byte[] k = ("k" + i).getBytes(StandardCharsets.UTF_8);
+				final byte[] got = proc.getCommitted(k);
+				assertArrayEquals(("v" + i).getBytes(StandardCharsets.UTF_8), got);
+			}
+			assertTrue(proc.mapSize() <= 5, "mapSize=" + proc.mapSize());
+			assertTrue(budget.size() <= 5);
+
+			// Hot key still readable via sealed after eviction.
+			assertArrayEquals("v0".getBytes(StandardCharsets.UTF_8),
+					proc.getCommitted("k0".getBytes(StandardCharsets.UTF_8)));
+		}
+	}
+
+	@Test
+	void concurrentTouchDoesNotDeadlock() throws Exception {
+		final Path file = tmp.resolve("ws_stress.gmap");
+		final List<SealedGridMapWriter.Kv> kvs = new ArrayList<>();
+		for (int i = 0; i < 64; i++) {
+			kvs.add(new SealedGridMapWriter.Kv(
+					("k" + i).getBytes(StandardCharsets.UTF_8),
+					("v" + i).getBytes(StandardCharsets.UTF_8)));
+		}
+		SealedGridMapWriter.write(file, "ws", 0, 1L, kvs);
+
+		final GridEntriesProcessor proc = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+		final WorkingSetBudget budget = new WorkingSetBudget(8);
+		budget.setEvictHandler((shard, key) -> proc.evictCommitted(key));
+		proc.setWorkingSetBudget(budget);
+
+		final int threads = 8;
+		final CountDownLatch start = new CountDownLatch(1);
+		final AtomicInteger errors = new AtomicInteger();
+		final ExecutorService pool = Executors.newFixedThreadPool(threads);
+		try (SealedGridMapReader reader = SealedGridMapReader.open(file)) {
+			proc.setSealedReader(reader);
+			for (int t = 0; t < threads; t++) {
+				final int tid = t;
+				pool.submit(() -> {
+					try {
+						start.await();
+						for (int i = 0; i < 200; i++) {
+							final int id = (tid * 17 + i) % 64;
+							proc.getCommitted(("k" + id).getBytes(StandardCharsets.UTF_8));
+						}
+					} catch (Exception e) {
+						errors.incrementAndGet();
+					}
+				});
+			}
+			start.countDown();
+			pool.shutdown();
+			assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS), "timeout");
+			if (errors.get() > 0) {
+				fail("concurrent touch errors=" + errors.get());
+			}
+			assertTrue(budget.size() <= 8, "budget.size=" + budget.size());
+		}
+	}
+}

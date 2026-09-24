@@ -1,0 +1,103 @@
+# Internal HA lab: 1-DC N=3. Product image: jamoa-grid-sql:local (grid-sql-server-starter)
+# Build: powershell -File examples/scripts/build-sql-image.ps1
+# Start: docker compose --env-file env/mid.env up -d
+# Configs: ./config/application-n{1,2,3}.yml (bind-mounted)
+name: grid-ha-1dc-n3
+
+x-node-common: &node-common
+  image: ${GRID_IMAGE:-jamoa-grid-sql:local}
+  restart: unless-stopped
+  volumes:
+    - ./config:/app/config:ro
+
+services:
+  n1:
+    <<: *node-common
+    container_name: grid-ha-n1
+    hostname: n1
+    environment:
+      SPRING_PROFILES_ACTIVE: n1
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - n1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-n1.yml
+    ports:
+      - "${SQL_PORT_N1:-15432}:15432"
+      - "${HTTP_PORT_N1:-7777}:7777"
+      - "${REPL_PORT_N1:-5615}:5615"
+    networks: [ha-net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7777/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 60s
+
+  n2:
+    <<: *node-common
+    container_name: grid-ha-n2
+    hostname: n2
+    depends_on:
+      n1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: n2
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - n2-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-n2.yml
+    ports:
+      - "${SQL_PORT_N2:-15433}:15433"
+      - "${HTTP_PORT_N2:-7778}:7778"
+      - "${REPL_PORT_N2:-5616}:5616"
+    networks: [ha-net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7778/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 60s
+
+  n3:
+    <<: *node-common
+    container_name: grid-ha-n3
+    hostname: n3
+    depends_on:
+      n1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: n3
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - n3-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-n3.yml
+    ports:
+      - "${SQL_PORT_N3:-15434}:15434"
+      - "${HTTP_PORT_N3:-7779}:7779"
+      - "${REPL_PORT_N3:-5617}:5617"
+    networks: [ha-net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7779/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 60s
+
+networks:
+  ha-net:
+    name: grid-ha-1dc-net
+    driver: bridge
+
+volumes:
+  n1-data:
+  n2-data:
+  n3-data:

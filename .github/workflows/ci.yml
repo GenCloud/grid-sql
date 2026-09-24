@@ -1,0 +1,92 @@
+# Build + unit/IT gate for Grid SQL (Java 25, --enable-preview).
+# Lab gates (QG / Jepsen / Multi-DC / OSS / JMH / Load) stay host-side; never co-run here.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_OPTS: >-
+    -Xmx2g
+    -Dfile.encoding=UTF-8
+    -Dsun.stdout.encoding=UTF-8
+    -Dsun.stderr.encoding=UTF-8
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Verify Java
+        run: |
+          java -version
+          mvn -version
+
+      - name: Compile (reactor, skip tests)
+        run: mvn -B -ntp package -DskipTests
+
+      - name: Test (Surefire unit + IT; JMH excluded by pom)
+        run: mvn -B -ntp verify
+
+      - name: Upload Surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: |
+            **/target/surefire-reports/**
+            **/target/failsafe-reports/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+  package-starters:
+    name: Package product starters
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Package server + Jepsen starters
+        run: >
+          mvn -B -ntp
+          -pl grid-sql-server-starter,grid-sql-jepsen-starter
+          -am package
+          -DskipTests
+
+      - name: Upload fat jars
+        uses: actions/upload-artifact@v4
+        with:
+          name: grid-sql-starters
+          path: |
+            grid-sql-server-starter/target/grid-sql-server-starter-*.jar
+            grid-sql-jepsen-starter/target/grid-sql-jepsen-starter-*.jar
+          if-no-files-found: error
+          retention-days: 7

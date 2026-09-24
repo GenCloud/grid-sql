@@ -1,0 +1,5 @@
+org.genfork.grid.context.config.GridAutoConfiguration
+org.genfork.grid.context.config.GridDuplexAutoConfiguration
+org.genfork.grid.context.config.GridReplicationAutoConfiguration
+org.genfork.grid.context.config.GridSqlAutoConfiguration
+org.genfork.grid.context.config.GridObservabilityAutoConfiguration

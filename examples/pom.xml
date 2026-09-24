@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.genfork</groupId>
+        <artifactId>grid-sql</artifactId>
+        <version>1.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>examples</artifactId>
+    <packaging>pom</packaging>
+    <name>examples</name>
+    <description>Runnable grid-sql-client cases (reactive + JDBC) and local compose HA labs</description>
+
+    <modules>
+        <module>examples-common</module>
+        <module>examples-warmup</module>
+        <module>examples-connect</module>
+        <module>examples-autocommit</module>
+        <module>examples-tx</module>
+        <module>examples-batch</module>
+        <module>examples-prepare</module>
+        <module>examples-savepoints</module>
+        <module>examples-streaming</module>
+        <module>examples-parallel-tx</module>
+        <module>examples-replica-reads</module>
+        <module>examples-dml</module>
+        <module>examples-indexes</module>
+        <module>examples-join-agg</module>
+        <module>examples-explain</module>
+        <module>examples-for-update</module>
+        <module>examples-session</module>
+        <module>examples-pin</module>
+        <module>examples-ha-url</module>
+        <module>examples-jdbc-connect</module>
+        <module>examples-jdbc-dml</module>
+        <module>examples-jdbc-tx</module>
+        <module>examples-jdbc-savepoints</module>
+        <module>examples-jdbc-batch</module>
+        <module>examples-jdbc-session</module>
+        <module>examples-jooq</module>
+    </modules>
+
+    <properties>
+        <maven.compiler.release></maven.compiler.release>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
+        <java.version>25</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <exec-maven-plugin.version>3.5.0</exec-maven-plugin.version>
+    </properties>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>${exec-maven-plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

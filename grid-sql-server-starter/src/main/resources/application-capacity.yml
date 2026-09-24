@@ -1,0 +1,85 @@
+# Honest single-node durable ceiling (product durability, no peer ship).
+# fsync=true - same OpLog durability knob as primary. Not a "fsync off" lab cheat.
+# Use when measuring local durable max without HA wait.
+# For product HA max: run primary + replica profiles and push JMeter concurrency.
+# --spring.profiles.active=capacity
+grid:
+  sql:
+    default-shards: 32
+    data-dir: ./data-capacity/catalog
+  sql-server:
+    enabled: true
+    host: 0.0.0.0
+    port: 15432
+  codec:
+    duplex:
+      enabled: true
+      schema-epoch: 1
+  overlay:
+    enabled: false
+    durable: false
+  durability:
+    enabled: true
+    hydrate-mode: LAZY
+    working-set-max-entries: 1048576
+    adaptive-disk-first: true
+  replication:
+    enabled: false
+    node-id: capacity-1
+    cluster-id: capacity-solo
+    orchid:
+      coupling: 15.0
+      natural-freq-hz: 1.0
+      order-threshold: 0.85
+      tick-ms: 10
+      digest-quorum: MAJORITY
+      max-propose-in-flight: 64
+    transport:
+      bind-host: 127.0.0.1
+      bind-port: 5615
+      connect-timeout-ms: 5000
+      peers: []
+    cross-dc:
+      enabled: false
+    op-log:
+      segment-size: 64
+      data-dir: ./data-capacity/oplog
+      fsync: true
+    flow:
+      max-inflight-ops: 100000
+      domains: []
+    swarm:
+      enabled: false
+    repair:
+      homologous-enabled: false
+    placement-optimizer:
+      enabled: false
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  main:
+    banner-mode: "off"
+  config:
+    activate:
+      on-profile: capacity
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+      base-path: /
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: grid-sql-server-capacity
+
+server:
+  port: 7778

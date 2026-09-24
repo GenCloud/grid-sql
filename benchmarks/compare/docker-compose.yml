@@ -1,0 +1,111 @@
+# Side-by-side compare stack (etcd). Host volumes for fair fsync.
+# Windows: use published ports (host network mode is Linux-oriented).
+services:
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: jamoa-etcd1
+    environment:
+      ETCDCTL_API: "3"
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd1
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://127.0.0.1:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://127.0.0.1:2380
+      - --initial-cluster=etcd1=http://127.0.0.1:2380
+      - --initial-cluster-token=jamoa-bench
+      - --initial-cluster-state=new
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd1-data:/etcd-data
+
+  etcd-a:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: jamoa-etcd-a
+    profiles: ["cluster3"]
+    environment:
+      ETCDCTL_API: "3"
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd-a
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://127.0.0.1:2479
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd-a:2380
+      - --initial-cluster=etcd-a=http://etcd-a:2380,etcd-b=http://etcd-b:2380,etcd-c=http://etcd-c:2380
+      - --initial-cluster-token=jamoa-bench3
+      - --initial-cluster-state=new
+    ports:
+      - "2479:2379"
+    volumes:
+      - etcd-a-data:/etcd-data
+
+  etcd-b:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: jamoa-etcd-b
+    profiles: ["cluster3"]
+    environment:
+      ETCDCTL_API: "3"
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd-b
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://127.0.0.1:2480
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd-b:2380
+      - --initial-cluster=etcd-a=http://etcd-a:2380,etcd-b=http://etcd-b:2380,etcd-c=http://etcd-c:2380
+      - --initial-cluster-token=jamoa-bench3
+      - --initial-cluster-state=new
+    ports:
+      - "2480:2379"
+    volumes:
+      - etcd-b-data:/etcd-data
+
+  etcd-c:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: jamoa-etcd-c
+    profiles: ["cluster3"]
+    environment:
+      ETCDCTL_API: "3"
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd-c
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://127.0.0.1:2481
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd-c:2380
+      - --initial-cluster=etcd-a=http://etcd-a:2380,etcd-b=http://etcd-b:2380,etcd-c=http://etcd-c:2380
+      - --initial-cluster-token=jamoa-bench3
+      - --initial-cluster-state=new
+    ports:
+      - "2481:2379"
+    volumes:
+      - etcd-c-data:/etcd-data
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: jamoa-redis
+    ports:
+      - "6379:6379"
+
+  redis-replica:
+    image: redis:7.2-alpine
+    container_name: jamoa-redis-replica
+    command: ["redis-server", "--replicaof", "redis", "6379"]
+    ports:
+      - "6380:6379"
+    depends_on:
+      - redis
+
+volumes:
+  etcd1-data:
+  etcd-a-data:
+  etcd-b-data:
+  etcd-c-data:

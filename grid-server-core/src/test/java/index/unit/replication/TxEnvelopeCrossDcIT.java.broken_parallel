@@ -1,0 +1,137 @@
+package index.unit.replication;
+
+import org.genfork.grid.mem.GridScalableMap;
+import org.genfork.grid.mem.stage.GridEntriesProcessor;
+import org.genfork.grid.replication.ReplicationNodeState;
+import org.genfork.grid.replication.apply.ReplicaApplier;
+import org.genfork.grid.replication.codec.OpLogSegment;
+import org.genfork.grid.replication.codec.ReplicationOp;
+import org.genfork.grid.replication.codec.ReplicationOpType;
+import org.genfork.grid.replication.crossdc.CrossDcMode;
+import org.genfork.grid.replication.crossdc.CrossDcPublisher;
+import org.genfork.grid.replication.log.OpLog;
+import org.genfork.grid.replication.transport.ReplicationPeer;
+import org.genfork.grid.replication.tx.TxEnvelopeCodec;
+import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+import static index.unit.replication.TxEnvelopeOpFixtures.op;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * Plan G: multi-shard TX envelope — Cross-DC ship + remote apply atomicity.
+ *
+ * @author: GenCloud
+ * @date: 2026/09
+ */
+public class TxEnvelopeCrossDcIT {
+
+	@TempDir
+	Path tempDir;
+
+	@Test
+	void remoteApplyWaitsForFullEnvelope() throws Exception {
+		final ReplicationNodeState state = new ReplicationNodeState("remote", "c", "dc-b", 1L);
+		final TxEnvelopeCoordinator gate = new TxEnvelopeCoordinator();
+		try (OpLog opLog = new OpLog(tempDir.resolve("oplog"), false)) {
+			final GridScalableMap map0 = new GridScalableMap();
+			final GridScalableMap map1 = new GridScalableMap();
+			final GridEntriesProcessor proc0 = new GridEntriesProcessor(0, map0, null, null);
+			final GridEntriesProcessor proc1 = new GridEntriesProcessor(1, map1, null, null);
+			final ReplicaApplier applier = new ReplicaApplier(
+					state, opLog, shard -> shard == 0 ? proc0 : proc1, null, true);
+			applier.setEnvelopeCoordinator(gate);
+
+			final long txId = 0x71L;
+			final byte[] key = Long.toHexString(txId).getBytes(StandardCharsets.UTF_8);
+			final byte[] env = TxEnvelopeCodec.encode(List.of(
+					new TxEnvelopeCodec.StreamRef("env.T", 0),
+					new TxEnvelopeCodec.StreamRef("env.T", 1)
+			));
+
+			applier.apply(op("env.T", 0, 1L, ReplicationOpType.TX_BEGIN, key, env), false);
+			applier.apply(op("env.T", 0, 2L, ReplicationOpType.UPSERT, new byte[]{10}, new byte[]{99}), false);
+			applier.apply(op("env.T", 0, 3L, ReplicationOpType.TX_COMMIT, key, null), false);
+
+			assertNull(proc0.get(new byte[]{10}), "shard0 must stay invisible until envelope complete");
+			assertTrue(gate.hasOpenApplyEnvelope(txId));
+			assertTrue(gate.applyStagedCount(txId) >= 1);
+
+			applier.apply(op("env.T", 1, 4L, ReplicationOpType.TX_BEGIN, key, env), false);
+			applier.apply(op("env.T", 1, 5L, ReplicationOpType.UPSERT, new byte[]{11}, new byte[]{88}), false);
+			assertNull(proc1.get(new byte[]{11}));
+
+			applier.apply(op("env.T", 1, 6L, ReplicationOpType.TX_COMMIT, key, null), false);
+
+			assertEquals(99, proc0.get(new byte[]{10})[0] & 0xff);
+			assertEquals(88, proc1.get(new byte[]{11})[0] & 0xff);
+		}
+	}
+
+	@Test
+	void killMidShipLeavesNoPartialVisibleRemote() throws Exception {
+		final ReplicationNodeState primaryState = new ReplicationNodeState("p", "c", "dc-a", 1L);
+		final TxEnvelopeCoordinator shipGate = new TxEnvelopeCoordinator();
+		final CrossDcPublisher publisher = new CrossDcPublisher(
+				primaryState,
+				CrossDcMode.ASYNC_SHIP,
+				100,
+				60_000L,
+				false,
+				1_000L,
+				List.of(),
+				List.of()
+		);
+		publisher.setEnvelopeCoordinator(shipGate);
+		publisher.setRemotePeers(List.of(new ReplicationPeer("r1", "127.0.0.1", 1, "dc-b")));
+
+		final List<OpLogSegment> shipped = new ArrayList<>();
+		publisher.setShipper((peer, segment) -> shipped.add(segment));
+
+		final long txId = 0x72L;
+		final byte[] key = Long.toHexString(txId).getBytes(StandardCharsets.UTF_8);
+		final byte[] env = TxEnvelopeCodec.encode(List.of(
+				new TxEnvelopeCodec.StreamRef("env.T", 0),
+				new TxEnvelopeCodec.StreamRef("env.T", 1)
+		));
+
+		publisher.onAppended(op("env.T", 0, 1L, ReplicationOpType.TX_BEGIN, key, env));
+		publisher.onAppended(op("env.T", 0, 2L, ReplicationOpType.UPSERT, new byte[]{10}, new byte[]{1}));
+		publisher.onAppended(op("env.T", 0, 3L, ReplicationOpType.TX_COMMIT, key, null));
+		assertTrue(shipped.isEmpty(), "envelope incomplete — no Cross-DC ship");
+
+		publisher.onAppended(op("env.T", 1, 4L, ReplicationOpType.TX_BEGIN, key, env));
+		publisher.onAppended(op("env.T", 1, 5L, ReplicationOpType.UPSERT, new byte[]{11}, new byte[]{2}));
+		publisher.onAppended(op("env.T", 1, 6L, ReplicationOpType.TX_COMMIT, key, null));
+
+		assertEquals(2, shipped.size(), "envelope release ships one segment per stream");
+
+		final ReplicationNodeState remoteState = new ReplicationNodeState("r", "c", "dc-b", 1L);
+		final TxEnvelopeCoordinator applyGate = new TxEnvelopeCoordinator();
+		try (OpLog opLog = new OpLog(tempDir.resolve("remote-oplog"), false)) {
+			final GridEntriesProcessor proc0 = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+			final GridEntriesProcessor proc1 = new GridEntriesProcessor(1, new GridScalableMap(), null, null);
+			final ReplicaApplier remote = new ReplicaApplier(
+					remoteState, opLog, shard -> shard == 0 ? proc0 : proc1, null, true);
+			remote.setEnvelopeCoordinator(applyGate);
+
+			// Kill mid-ship: only first stream segment arrives on remote DC.
+			for (ReplicationOp arrived : shipped.getFirst().ops()) {
+				remote.apply(arrived, false);
+			}
+
+			assertNull(proc0.get(new byte[]{10}), "partial Cross-DC arrival must not be visible");
+			assertNull(proc1.get(new byte[]{11}));
+			assertTrue(applyGate.hasOpenApplyEnvelope(txId));
+		}
+	}
+
+}

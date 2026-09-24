@@ -1,0 +1,17 @@
+.git
+**/.git
+**/target
+**/node_modules
+**/.idea
+benchmarks/jepsen/clojure/store
+benchmarks/jepsen/clojure/target
+**/*.iml
+**/.DS_Store
+**/hs_err_pid*
+**/*.log
+docs
+*.md
+!README.md
+!benchmarks/jepsen/README.md
+!benchmarks/jepsen/docker-staging/
+!benchmarks/jepsen/docker-staging/**

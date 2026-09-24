@@ -1,0 +1,193 @@
+# Product Multi-DC HA lab. Image: jamoa-grid-sql:local (grid-sql-server-starter)
+# Build: powershell -File examples/scripts/build-sql-image.ps1
+# Configs: ./config/application-{a1,a2,a3,b1,b2,w1}.yml (bind-mounted)
+name: grid-ha-multidc-sync
+
+x-node-common: &node-common
+  image: ${GRID_IMAGE:-jamoa-grid-sql:local}
+  restart: unless-stopped
+
+services:
+  a1:
+    <<: *node-common
+    container_name: grid-ha-sync-a1
+    hostname: a1
+    environment:
+      SPRING_PROFILES_ACTIVE: a1
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - a1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-a1.yml
+    ports:
+      - "7777:7777"
+      - "15432:15432"
+      - "5615:5615"
+    networks: [dc-a, dc-link]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7777/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 90s
+
+  a2:
+    <<: *node-common
+    container_name: grid-ha-sync-a2
+    hostname: a2
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: a2
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - a2-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-a2.yml
+    ports:
+      - "7778:7778"
+      - "15433:15433"
+      - "5616:5616"
+    networks: [dc-a, dc-link]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7778/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 90s
+
+  a3:
+    <<: *node-common
+    container_name: grid-ha-sync-a3
+    hostname: a3
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: a3
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - a3-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-a3.yml
+    ports:
+      - "7779:7779"
+      - "15434:15434"
+      - "5617:5617"
+    networks: [dc-a, dc-link]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7779/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 90s
+
+  b1:
+    <<: *node-common
+    container_name: grid-ha-sync-b1
+    hostname: b1
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: b1
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - b1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-b1.yml
+    ports:
+      - "7780:7780"
+      - "15435:15435"
+      - "5618:5618"
+    networks: [dc-b, dc-link]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7780/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 90s
+
+  b2:
+    <<: *node-common
+    container_name: grid-ha-sync-b2
+    hostname: b2
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: b2
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - b2-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-b2.yml
+    ports:
+      - "7781:7781"
+      - "15436:15436"
+      - "5619:5619"
+    networks: [dc-b, dc-link]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7781/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 90s
+
+
+  w1:
+    <<: *node-common
+    container_name: grid-ha-sync-w1
+    hostname: w1
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: w1
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:---enable-preview --add-modules=jdk.incubator.vector}
+      GRID_LOAD_TIER: ${GRID_LOAD_TIER:-mid}
+    volumes:
+      - ./config:/app/config:ro
+      - w1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-w1.yml
+    ports:
+      - "7782:7782"
+      - "15437:15437"
+      - "5620:5620"
+    networks: [dc-link]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7782/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 90s
+
+networks:
+  dc-a:
+    name: grid-ha-sync-dc-a
+    driver: bridge
+  dc-b:
+    name: grid-ha-sync-dc-b
+    driver: bridge
+  dc-link:
+    name: grid-ha-sync-dc-link
+    driver: bridge
+
+volumes:
+  a1-data:
+  a2-data:
+  a3-data:
+  b1-data:
+  b2-data:

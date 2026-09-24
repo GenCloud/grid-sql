@@ -1,0 +1,13 @@
+# Local Jepsen harness ignores (also mirrored in repo root .gitignore)
+clojure/store/
+clojure/target/
+*.log
+app.jar
+*.jar
+!clojure/project.clj
+docker-ctx/
+docker-staging/app.jar
+docker-staging/*.jar
+.last-*/
+scripts/run-workload-multidc-*.sh
+scripts/run-workload-chaos-*.sh

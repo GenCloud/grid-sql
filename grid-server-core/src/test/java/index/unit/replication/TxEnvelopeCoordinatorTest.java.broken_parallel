@@ -1,0 +1,72 @@
+package index.unit.replication;
+
+import org.genfork.grid.replication.codec.ReplicationOp;
+import org.genfork.grid.replication.tx.TxEnvelopeCodec;
+import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Set;
+
+import static index.unit.replication.TxEnvelopeOpFixtures.abort;
+import static index.unit.replication.TxEnvelopeOpFixtures.begin;
+import static index.unit.replication.TxEnvelopeOpFixtures.commit;
+import static index.unit.replication.TxEnvelopeOpFixtures.upsert;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * Multi-stream Cross-DC envelope hold until all shards commit.
+ *
+ * @author: GenCloud
+ * @date: 2026/09
+ */
+public class TxEnvelopeCoordinatorTest {
+
+	@Test
+	void holdsPartialMultiStreamUntilAllShardsCommit() {
+		final TxEnvelopeCoordinator coord = new TxEnvelopeCoordinator();
+		final long txId = 0xabcL;
+		final Set<TxEnvelopeCodec.StreamRef> streams = Set.of(
+				new TxEnvelopeCodec.StreamRef("t", 0),
+				new TxEnvelopeCodec.StreamRef("t", 1)
+		);
+		final byte[] membership = TxEnvelopeCodec.encode(streams);
+
+		final List<ReplicationOp> shard0 = List.of(
+				begin("t", 0, 1L, txId, membership),
+				upsert("t", 0, 2L, new byte[]{1}, new byte[]{2}),
+				commit("t", 0, 3L, txId)
+		);
+		final List<ReplicationOp> first = coord.takeShippable(shard0);
+		assertTrue(first.isEmpty(), "must not ship until shard1 commits");
+		assertTrue(coord.hasOpenShipEnvelope(txId));
+		assertTrue(coord.heldShipOpCount(txId) >= 3);
+
+		final List<ReplicationOp> shard1 = List.of(
+				begin("t", 1, 1L, txId, membership),
+				upsert("t", 1, 2L, new byte[]{1}, new byte[]{2}),
+				commit("t", 1, 3L, txId)
+		);
+		final List<ReplicationOp> released = coord.takeShippable(shard1);
+		assertEquals(6, released.size());
+		assertFalse(coord.hasOpenShipEnvelope(txId));
+	}
+
+	@Test
+	void abortDropsHeldEnvelope() {
+		final TxEnvelopeCoordinator coord = new TxEnvelopeCoordinator();
+		final long txId = 0xdefL;
+		final byte[] membership = TxEnvelopeCodec.encode(Set.of(
+				new TxEnvelopeCodec.StreamRef("t", 0),
+				new TxEnvelopeCodec.StreamRef("t", 1)
+		));
+		coord.takeShippable(List.of(
+				begin("t", 0, 1L, txId, membership),
+				upsert("t", 0, 2L, new byte[]{1}, new byte[]{2}),
+				abort("t", 0, 3L, txId)
+		));
+		assertFalse(coord.hasOpenShipEnvelope(txId));
+	}
+}

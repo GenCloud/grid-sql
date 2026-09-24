@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.genfork</groupId>
+        <artifactId>grid-sql</artifactId>
+        <version>1.0</version>
+    </parent>
+
+    <artifactId>grid-jooq</artifactId>
+    <name>grid-jooq</name>
+    <description>
+        Optional jOOQ DSL / SQL string builder tuned for Grid SimplifiedSql.
+        Not a DB engine: server parse remains ANTLR SimplifiedSql; product capacity stays on grid:// ConnectionFactory.
+    </description>
+
+    <properties>
+        <maven.compiler.release></maven.compiler.release>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
+        <java.version>25</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Spring Boot 3.5.14 BOM: jooq.version=3.19.32 -->
+        <jooq.version>3.19.32</jooq.version>
+        <jmh.version>1.37</jmh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.genfork</groupId>
+            <artifactId>grid-sql-client</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jooq</groupId>
+            <artifactId>jooq</artifactId>
+            <version>${jooq.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.genfork</groupId>
+            <artifactId>grid-server-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.genfork</groupId>
+            <artifactId>grid-sql-antlr</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>25</release>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                    </compilerArgs>
+                    <!-- Default: skip JMH sources so APT is not required. Enable with -Pjmh. -->
+                    <testExcludes>
+                        <exclude>**/benchmarks/**</exclude>
+                    </testExcludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--enable-preview</argLine>
+                    <includes>
+                        <include>**/Test*.java</include>
+                        <include>**/*Test.java</include>
+                        <include>**/*Tests.java</include>
+                        <include>**/*IT.java</include>
+                    </includes>
+                    <excludes>
+                        <exclude>**/benchmarks/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!--
+              Optional codegen (not bound by default). Introspect via GridDriver information_schema:
+
+              mvn -pl grid-jooq org.jooq.codegen:jooq-codegen-maven:${jooq.version}:generate
+
+              <plugin>
+                <groupId>org.jooq.codegen</groupId>
+                <artifactId>jooq-codegen-maven</artifactId>
+                <version>${jooq.version}</version>
+                <configuration>
+                  <jdbc>
+                    <driver>org.genfork.grid.jdbc.GridDriver</driver>
+                    <url>jdbc:grid://user:pass@127.0.0.1:15432/public</url>
+                  </jdbc>
+                  <generator>
+                    <database>
+                      <name>org.jooq.meta.jdbc.JDBCDatabase</name>
+                      <includes>.*</includes>
+                      <inputSchema>public</inputSchema>
+                    </database>
+                    <target>
+                      <packageName>org.genfork.grid.jooq.gen</packageName>
+                      <directory>target/generated-sources/jooq</directory>
+                    </target>
+                  </generator>
+                </configuration>
+              </plugin>
+            -->
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Opt-in: compile+run JMH under **/benchmarks (mirrors grid-server-core -Pjmh). -->
+        <profile>
+            <id>jmh</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.openjdk.jmh</groupId>
+                    <artifactId>jmh-core</artifactId>
+                    <version>${jmh.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.openjdk.jmh</groupId>
+                    <artifactId>jmh-generator-annprocess</artifactId>
+                    <version>${jmh.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <testExcludes combine.self="override"/>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>org.openjdk.jmh</groupId>
+                                    <artifactId>jmh-generator-annprocess</artifactId>
+                                    <version>${jmh.version}</version>
+                                </path>
+                            </annotationProcessorPaths>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                            <includes>
+                                <include>**/Test*.java</include>
+                                <include>**/*Test.java</include>
+                                <include>**/*Tests.java</include>
+                                <include>**/*IT.java</include>
+                                <include>**/*Benchmark.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

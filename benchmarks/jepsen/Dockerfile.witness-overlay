@@ -1,0 +1,6 @@
+# Bake Witness YAML onto an existing jamoa-grid-jepsen:local image.
+# Build from repo root:
+#   docker build -f benchmarks/jepsen/Dockerfile.witness-overlay -t jamoa-grid-jepsen:local .
+FROM jamoa-grid-jepsen:local
+COPY benchmarks/jepsen/multidc/configs/ /app/config/multidc/
+COPY benchmarks/jepsen/witness/configs/ /app/config/witness/

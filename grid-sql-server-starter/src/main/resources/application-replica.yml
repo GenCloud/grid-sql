@@ -1,0 +1,104 @@
+grid:
+  sql:
+    default-shards: 8
+    data-dir: ./data-replica/catalog
+  sql-server:
+    enabled: true
+    host: 0.0.0.0
+    port: 15433
+  codec:
+    duplex:
+      enabled: true
+      schema-epoch: 1
+  overlay:
+    enabled: false
+    durable: false
+  durability:
+    enabled: true
+    hydrate-mode: LAZY
+    working-set-max-entries: 262144
+    adaptive-disk-first: true
+  replication:
+    enabled: true
+    node-id: replica-1
+    cluster-id: example-grid
+    ha:
+      max-stale-lag: 10000
+      replica-reads-enabled: true
+    orchid:
+      coupling: 15.0
+      natural-freq-hz: 1.0
+      order-threshold: 0.85
+      tick-ms: 10
+      digest-quorum: MAJORITY
+      max-propose-in-flight: 64
+    repair:
+      homologous-enabled: true
+      reconcile-interval-ms: 5000
+    swarm:
+      enabled: true
+      score-window-ms: 5000
+      migrate-threshold: 0.3
+    placement-optimizer:
+      enabled: true
+      dc-population-size: 8
+      node-population-size: 12
+      generations-per-tick: 3
+      mutation-rate: 0.25
+      diversity-weight: 0.15
+      max-migrates-per-tick: 2
+    transport:
+      bind-host: 127.0.0.1
+      bind-port: 5616
+      connect-timeout-ms: 5000
+      peers:
+        - { id: primary-1, host: 127.0.0.1, port: 5615, dc: dc-a }
+    cross-dc:
+      enabled: true
+      local-dc: dc-a
+      mode: ASYNC_SHIP
+      batch-max-ops: 256
+      batch-max-wait-ms: 20
+      require-remote-ack: false
+      learners: []
+    op-log:
+      segment-size: 64
+      data-dir: ./data-replica/replication
+      fsync: true
+    flow:
+      max-inflight-ops: 10000
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  main:
+    banner-mode: "off"
+  config:
+    activate:
+      on-profile: replica
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+      base-path: /
+  endpoint:
+    health:
+      validate-group-membership: false
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState,gridLiveness
+        readiness:
+          include: readinessState,gridReadiness
+  metrics:
+    tags:
+      application: grid-sql-server-replica
+
+server:
+  port: 7778

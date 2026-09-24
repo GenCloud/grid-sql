@@ -1,0 +1,3 @@
+FROM jamoa-grid-jepsen:local
+COPY benchmarks/jepsen/multidc/configs/ /app/config/multidc/
+COPY benchmarks/jepsen/witness/configs/ /app/config/witness/

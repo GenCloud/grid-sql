@@ -1,0 +1,148 @@
+# Jepsen / chaos 3-node cluster. Build context = repo root.
+# Configs are baked into the image (no host bind mounts — Windows Docker share prompts).
+# HTTP: 7777/7778/7779  SQL: 15432/15433/15434  replication: 5615/5616/5617
+services:
+  n1:
+    build:
+      context: ../..
+      dockerfile: benchmarks/jepsen/Dockerfile
+      target: runtime
+    image: jamoa-grid-jepsen:local
+    container_name: jamoa-jepsen-n1
+    hostname: n1
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,n1
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - n1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-n1.yml
+    ports:
+      - "7777:7777"
+      - "15432:15432"
+      - "5615:5615"
+    networks:
+      - jepsen-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7777/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  n2:
+    build:
+      context: ../..
+      dockerfile: benchmarks/jepsen/Dockerfile
+      target: runtime
+    image: jamoa-grid-jepsen:local
+    container_name: jamoa-jepsen-n2
+    hostname: n2
+    depends_on:
+      n1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,n2
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - n2-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-n2.yml
+    ports:
+      - "7778:7778"
+      - "15433:15433"
+      - "5616:5616"
+    networks:
+      - jepsen-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7778/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  n3:
+    build:
+      context: ../..
+      dockerfile: benchmarks/jepsen/Dockerfile
+      target: runtime
+    image: jamoa-grid-jepsen:local
+    container_name: jamoa-jepsen-n3
+    hostname: n3
+    depends_on:
+      n1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,n3
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - n3-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/application-n3.yml
+    ports:
+      - "7779:7779"
+      - "15434:15434"
+      - "5617:5617"
+    networks:
+      - jepsen-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7779/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  jepsen:
+    profiles: ["control"]
+    # JDK 25 required: grid-sql-client is compiled for Java 25 (+ preview).
+    image: eclipse-temurin:25-jdk
+    container_name: jamoa-jepsen-control
+    hostname: jepsen
+    working_dir: /jepsen/jamoa
+    volumes:
+      - ./clojure:/jepsen/jamoa
+      - ./scripts:/jepsen/scripts
+      - ./RESULTS.md:/jepsen/RESULTS.md
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Host Maven local repo — scripts must set JEPSEN_M2 (Windows: $env:USERPROFILE\.m2)
+      - ${JEPSEN_M2}:/root/.m2
+    environment:
+      JEPSEN_NODES: "n1,n2,n3"
+      JEPSEN_HTTP_PORTS: "7777,7778,7779"
+      JEPSEN_SQL_PORTS: "15432,15433,15434"
+      JEPSEN_SCRIPTS: /jepsen/scripts
+      JEPSEN_USE_LOCALHOST: "0"
+      JAVA_HOME: /opt/java/openjdk
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      PATH: /opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    networks:
+      - jepsen-net
+    depends_on:
+      - n1
+      - n2
+      - n3
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        export PATH="/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        if ! command -v lein >/dev/null 2>&1; then
+          apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git
+          curl -fsSL https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein -o /usr/local/bin/lein
+          chmod +x /usr/local/bin/lein
+          lein version || true
+        elif ! command -v git >/dev/null 2>&1; then
+          apt-get update && apt-get install -y --no-install-recommends git
+        fi
+        touch /tmp/jepsen-control-ready
+        sleep infinity
+
+networks:
+  jepsen-net:
+    name: jamoa-jepsen-net
+    driver: bridge
+
+volumes:
+  n1-data:
+  n2-data:
+  n3-data:

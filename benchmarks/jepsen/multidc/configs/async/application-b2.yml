@@ -1,0 +1,106 @@
+# Multi-DC Jepsen stub: node b2 / mode=async (scaffold)
+grid:
+  durability:
+    enabled: true
+    hydrate-mode: FULL
+  sql:
+    default-shards: 8
+    data-dir: ./data/catalog
+  sql-server:
+    enabled: true
+    host: 0.0.0.0
+    port: 15436
+    user: ""
+    password: ""
+  codec:
+    duplex:
+      enabled: true
+      schema-epoch: 1
+  overlay:
+    enabled: false
+    durable: false
+  replication:
+    ha:
+      max-stale-lag: 0
+    enabled: true
+    node-id: b2
+    cluster-id: jepsen-multidc
+    orchid:
+      coupling: 15.0
+      natural-freq-hz: 1.0
+      order-threshold: 0.85
+      tick-ms: 10
+      digest-quorum: MAJORITY
+    repair:
+      homologous-enabled: true
+      reconcile-interval-ms: 2000
+    swarm:
+      enabled: false
+    transport:
+      bind-host: 0.0.0.0
+      bind-port: 5619
+      connect-timeout-ms: 5000
+      peers:
+        - { id: a1, host: a1, port: 5615, dc: dc-a }
+        - { id: a2, host: a2, port: 5616, dc: dc-a }
+        - { id: a3, host: a3, port: 5617, dc: dc-a }
+        - { id: b1, host: b1, port: 5618, dc: dc-b }
+        - { id: w1, host: w1, port: 5620, dc: witness }
+    cross-dc:
+      enabled: true
+      local-dc: dc-b
+      mode: ASYNC_SHIP
+      phase-coupling: false
+      remote-ack-timeout-ms: 5000
+      batch-max-ops: 64
+      batch-max-wait-ms: 20
+      require-remote-ack: false
+      voters: []
+      learners: [b1, b2]
+      write-admission: false
+    region:
+      enabled: true
+      role: HOLD
+      epoch: 1
+      claim-timeout-ms: 5000
+      quorum-size: 2
+    op-log:
+      segment-size: 64
+      data-dir: ./data/replication
+      fsync: true
+    flow:
+      max-inflight-ops: 10000
+      domains: []
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  config:
+    activate:
+      on-profile: b2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+      base-path: /
+  endpoint:
+    health:
+      validate-group-membership: false
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState,gridLiveness
+        readiness:
+          include: readinessState,gridReadiness
+  metrics:
+    tags:
+      application: grid-sql-server-b2
+
+server:
+  port: 7781

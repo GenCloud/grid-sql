@@ -1,0 +1,45 @@
+# OSS peer clusters for fair latency compare (SQL-first distributed memory class).
+# Calm host only. Peers: Apache Ignite 2.x (thin), Apache Geode.
+# Peer compare artifacts stay under benchmarks/oss-peers/ (not product docs; not capacity TOP stamps).
+
+services:
+  ignite:
+    image: apacheignite/ignite:2.16.0
+    container_name: jamoa-oss-ignite
+    ports:
+      - "10800:10800"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/10800' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  geode-locator:
+    image: apachegeode/geode:1.15.1
+    container_name: jamoa-oss-geode-locator
+    command: ["gfsh", "start", "locator", "--name=locator1", "--port=10334", "--bind-address=0.0.0.0"]
+    ports:
+      - "10334:10334"
+    healthcheck:
+      test: ["CMD-SHELL", "gfsh -e \"connect --locator=localhost[10334]\" -e \"list members\" || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
+
+  geode-server:
+    image: apachegeode/geode:1.15.1
+    container_name: jamoa-oss-geode-server
+    depends_on:
+      - geode-locator
+    command:
+      - gfsh
+      - start
+      - server
+      - --name=server1
+      - --locators=geode-locator[10334]
+      - --server-port=40404
+      - --bind-address=0.0.0.0
+    ports:
+      - "40404:40404"

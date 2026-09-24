@@ -1,0 +1,14 @@
+# Overlay: toxiproxy for SYNC_VOTERS WAN latency / partition ITs.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.toxiproxy.yml --profile wan up -d toxiproxy
+# Then MultiDcToxiproxyApiIT talks to http://127.0.0.1:8474 and listen-proxy :19000.
+services:
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: jamoa-toxiproxy
+    profiles: ["wan"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8474:8474"
+      - "19000:19000"

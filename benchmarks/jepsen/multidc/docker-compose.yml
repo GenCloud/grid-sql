@@ -1,0 +1,223 @@
+# Multi-DC Jepsen: DC-A (a1-a3) + DC-B (b1-b2).
+# Image: jamoa-grid-jepsen:local (configs baked at /app/config/multidc/{async|sync-voters}/).
+# No host bind mounts for YAML (Windows Docker Desktop share prompts).
+# Set MULTIDC_MODE=async|sync-voters (default async).
+# Hard partition: docker network disconnect jamoa-multidc-dc-link <container>
+
+x-node-common: &node-common
+  image: jamoa-grid-jepsen:local
+  environment:
+    JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+  restart: "no"
+
+services:
+  a1:
+    <<: *node-common
+    container_name: jamoa-multidc-a1
+    hostname: a1
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,a1
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - a1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/multidc/${MULTIDC_MODE:-async}/application-a1.yml
+    ports:
+      - "7777:7777"
+      - "15432:15432"
+      - "5615:5615"
+    networks:
+      - dc-a
+      - dc-link
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7777/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  a2:
+    <<: *node-common
+    container_name: jamoa-multidc-a2
+    hostname: a2
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,a2
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - a2-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/multidc/${MULTIDC_MODE:-async}/application-a2.yml
+    ports:
+      - "7778:7778"
+      - "15433:15433"
+      - "5616:5616"
+    networks:
+      - dc-a
+      - dc-link
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7778/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  a3:
+    <<: *node-common
+    container_name: jamoa-multidc-a3
+    hostname: a3
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,a3
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - a3-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/multidc/${MULTIDC_MODE:-async}/application-a3.yml
+    ports:
+      - "7779:7779"
+      - "15434:15434"
+      - "5617:5617"
+    networks:
+      - dc-a
+      - dc-link
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7779/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  b1:
+    <<: *node-common
+    container_name: jamoa-multidc-b1
+    hostname: b1
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,b1
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - b1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/multidc/${MULTIDC_MODE:-async}/application-b1.yml
+    ports:
+      - "7780:7780"
+      - "15435:15435"
+      - "5618:5618"
+    networks:
+      - dc-b
+      - dc-link
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7780/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  b2:
+    <<: *node-common
+    container_name: jamoa-multidc-b2
+    hostname: b2
+    depends_on:
+      a1:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,b2
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - b2-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/multidc/${MULTIDC_MODE:-async}/application-b2.yml
+    ports:
+      - "7781:7781"
+      - "15436:15436"
+      - "5619:5619"
+    networks:
+      - dc-b
+      - dc-link
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7781/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+  # Control: no host bind mounts (docker cp sources in run-multidc-full.ps1). docker.sock only.
+  jepsen:
+    profiles: ["control"]
+    image: eclipse-temurin:25-jdk
+    container_name: jamoa-multidc-control
+    hostname: jepsen
+    working_dir: /jepsen/jamoa
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - multidc-jepsen-m2:/root/.m2
+      - multidc-jepsen-work:/jepsen
+    environment:
+      JEPSEN_NODES: "a1,a2,a3,b1,b2"
+      JEPSEN_HTTP_PORTS: "7777,7778,7779,7780,7781"
+      JEPSEN_SQL_PORTS: "15432,15433,15434,15435,15436"
+      JEPSEN_SCRIPTS: /jepsen/scripts
+      JEPSEN_USE_LOCALHOST: "0"
+      JEPSEN_MULTIDC: "1"
+      JEPSEN_MULTI_HOST: "1"
+      JAVA_HOME: /opt/java/openjdk
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      PATH: /opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    networks:
+      - dc-a
+      - dc-b
+      - dc-link
+    depends_on:
+      - a1
+      - a2
+      - a3
+      - b1
+      - b2
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        export PATH="/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        if ! command -v lein >/dev/null 2>&1; then
+          apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git
+          curl -fsSL https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein -o /usr/local/bin/lein
+          chmod +x /usr/local/bin/lein
+          lein version || true
+        elif ! command -v git >/dev/null 2>&1; then
+          apt-get update && apt-get install -y --no-install-recommends git
+        fi
+        if ! command -v docker >/dev/null 2>&1; then
+          curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz | tar xz -C /tmp
+          mv /tmp/docker/docker /usr/local/bin/docker
+          chmod +x /usr/local/bin/docker
+        fi
+        mkdir -p /jepsen/jamoa /jepsen/scripts
+        touch /tmp/jepsen-control-ready
+        sleep infinity
+
+networks:
+  dc-a:
+    name: jamoa-multidc-dc-a
+    driver: bridge
+  dc-b:
+    name: jamoa-multidc-dc-b
+    driver: bridge
+  dc-link:
+    name: jamoa-multidc-dc-link
+    driver: bridge
+
+volumes:
+  a1-data:
+  a2-data:
+  a3-data:
+  b1-data:
+  b2-data:
+  multidc-jepsen-m2:
+  multidc-jepsen-work:

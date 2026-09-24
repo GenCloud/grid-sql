@@ -1,0 +1,659 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Grid SQL Load Suites">
+      <stringProp name="TestPlan.comments">Three suites (enable one at a time; serialize=true): (1) Capacity max — ON by default, KEY_SPACE=1M striping, Error%=0 gate. (2) Chaos — OFF, KEY_SPACE=10k shared PK collisions / lock-wait. (3) Stress — OFF, 128t soak overload. Product grid:// only. Calm host.</stringProp>
+      <boolProp name="TestPlan.serialize_threadgroups">true</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="GRID_URL" elementType="Argument">
+            <stringProp name="Argument.name">GRID_URL</stringProp>
+            <stringProp name="Argument.value">${__P(GRID_URL,grid://@127.0.0.1:15432/public)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="USER" elementType="Argument">
+            <stringProp name="Argument.name">USER</stringProp>
+            <stringProp name="Argument.value">${__P(USER,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="PASSWORD" elementType="Argument">
+            <stringProp name="Argument.name">PASSWORD</stringProp>
+            <stringProp name="Argument.value">${__P(PASSWORD,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="CONNECT_TIMEOUT_MS" elementType="Argument">
+            <stringProp name="Argument.name">CONNECT_TIMEOUT_MS</stringProp>
+            <stringProp name="Argument.value">${__P(CONNECT_TIMEOUT_MS,5000)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="OP_TIMEOUT_MS" elementType="Argument">
+            <stringProp name="Argument.name">OP_TIMEOUT_MS</stringProp>
+            <stringProp name="Argument.value">${__P(OP_TIMEOUT_MS,10000)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="WRITE_BATCH_SIZE" elementType="Argument">
+            <stringProp name="Argument.name">WRITE_BATCH_SIZE</stringProp>
+            <stringProp name="Argument.value">${__P(WRITE_BATCH_SIZE,1)}</stringProp>
+            <stringProp name="Argument.desc">WRITE_ONLY: upserts per TX unit (amortize OpLog/orchid force)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="TABLE_A" elementType="Argument">
+            <stringProp name="Argument.name">TABLE_A</stringProp>
+            <stringProp name="Argument.value">${__P(TABLE_A,)}</stringProp>
+            <stringProp name="Argument.desc">Override load table A (empty = load_slo_a)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="TABLE_B" elementType="Argument">
+            <stringProp name="Argument.name">TABLE_B</stringProp>
+            <stringProp name="Argument.value">${__P(TABLE_B,)}</stringProp>
+            <stringProp name="Argument.desc">Override load table B (empty = load_slo_b)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SQL_EQ_LIMIT" elementType="Argument">
+            <stringProp name="Argument.name">SQL_EQ_LIMIT</stringProp>
+            <stringProp name="Argument.value">${__P(SQL_EQ_LIMIT,)}</stringProp>
+            <stringProp name="Argument.desc">Template with ${tableA}/${id}; empty = living default</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SQL_UPSERT" elementType="Argument">
+            <stringProp name="Argument.name">SQL_UPSERT</stringProp>
+            <stringProp name="Argument.value">${__P(SQL_UPSERT,)}</stringProp>
+            <stringProp name="Argument.desc">Template with ${tableA}/${id}/${val}; empty = living default</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SQL_SHORT_TX_SELECT" elementType="Argument">
+            <stringProp name="Argument.name">SQL_SHORT_TX_SELECT</stringProp>
+            <stringProp name="Argument.value">${__P(SQL_SHORT_TX_SELECT,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SQL_SHORT_TX_UPDATE" elementType="Argument">
+            <stringProp name="Argument.name">SQL_SHORT_TX_UPDATE</stringProp>
+            <stringProp name="Argument.value">${__P(SQL_SHORT_TX_UPDATE,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SQL_COUNT_JOIN" elementType="Argument">
+            <stringProp name="Argument.name">SQL_COUNT_JOIN</stringProp>
+            <stringProp name="Argument.value">${__P(SQL_COUNT_JOIN,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SEED_ROWS" elementType="Argument">
+            <stringProp name="Argument.name">SEED_ROWS</stringProp>
+            <stringProp name="Argument.value">${__P(SEED_ROWS,1000)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="CAPACITY_KEY_SPACE" elementType="Argument">
+            <stringProp name="Argument.name">CAPACITY_KEY_SPACE</stringProp>
+            <stringProp name="Argument.value">${__P(CAPACITY_KEY_SPACE,1000000)}</stringProp>
+            <stringProp name="Argument.desc">Max-capacity suite: low PK collision + striping</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="CHAOS_KEY_SPACE" elementType="Argument">
+            <stringProp name="Argument.name">CHAOS_KEY_SPACE</stringProp>
+            <stringProp name="Argument.value">${__P(CHAOS_KEY_SPACE,10000)}</stringProp>
+            <stringProp name="Argument.desc">Chaos suite: shared random keys → lock collisions</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="STRESS_KEY_SPACE" elementType="Argument">
+            <stringProp name="Argument.name">STRESS_KEY_SPACE</stringProp>
+            <stringProp name="Argument.value">${__P(STRESS_KEY_SPACE,1000000)}</stringProp>
+            <stringProp name="Argument.desc">Stress suite: large space under high concurrency soak</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="REPORT_DIR" elementType="Argument">
+            <stringProp name="Argument.name">REPORT_DIR</stringProp>
+            <stringProp name="Argument.value">${__P(REPORT_DIR,D:/workspace/jamoa-grid-cache/grid-sql-jmeter/reports)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+    </TestPlan>
+    <hashTree>
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup" testname="setUp DDL/seed">
+        <intProp name="ThreadGroup.num_threads">1</intProp>
+        <intProp name="ThreadGroup.ramp_time">0</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="GridSql Open SETUP" enabled="true">
+          <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="GRID_URL" elementType="Argument">
+                <stringProp name="Argument.name">GRID_URL</stringProp>
+                <stringProp name="Argument.value">${GRID_URL}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="USER" elementType="Argument">
+                <stringProp name="Argument.name">USER</stringProp>
+                <stringProp name="Argument.value">${USER}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="PASSWORD" elementType="Argument">
+                <stringProp name="Argument.name">PASSWORD</stringProp>
+                <stringProp name="Argument.value">${PASSWORD}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="CONNECT_TIMEOUT_MS" elementType="Argument">
+                <stringProp name="Argument.name">CONNECT_TIMEOUT_MS</stringProp>
+                <stringProp name="Argument.value">${CONNECT_TIMEOUT_MS}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="OP_TIMEOUT_MS" elementType="Argument">
+                <stringProp name="Argument.name">OP_TIMEOUT_MS</stringProp>
+                <stringProp name="Argument.value">${OP_TIMEOUT_MS}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="KEY_SPACE" elementType="Argument">
+                <stringProp name="Argument.name">KEY_SPACE</stringProp>
+                <stringProp name="Argument.value">${CAPACITY_KEY_SPACE}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="SEED_ROWS" elementType="Argument">
+                <stringProp name="Argument.name">SEED_ROWS</stringProp>
+                <stringProp name="Argument.value">${SEED_ROWS}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="MIX_PROFILE" elementType="Argument">
+                <stringProp name="Argument.name">MIX_PROFILE</stringProp>
+                <stringProp name="Argument.value">${__P(MIX_PROFILE,CAPACITY)}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="STRIPE_THREADS" elementType="Argument">
+                <stringProp name="Argument.name">STRIPE_THREADS</stringProp>
+                <stringProp name="Argument.value">1</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="WRITE_BATCH_SIZE" elementType="Argument">
+                <stringProp name="Argument.name">WRITE_BATCH_SIZE</stringProp>
+                <stringProp name="Argument.value">${WRITE_BATCH_SIZE}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="TABLE_A" elementType="Argument">
+                <stringProp name="Argument.name">TABLE_A</stringProp>
+                <stringProp name="Argument.value">${TABLE_A}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="TABLE_B" elementType="Argument">
+                <stringProp name="Argument.name">TABLE_B</stringProp>
+                <stringProp name="Argument.value">${TABLE_B}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="SQL_EQ_LIMIT" elementType="Argument">
+                <stringProp name="Argument.name">SQL_EQ_LIMIT</stringProp>
+                <stringProp name="Argument.value">${SQL_EQ_LIMIT}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="SQL_UPSERT" elementType="Argument">
+                <stringProp name="Argument.name">SQL_UPSERT</stringProp>
+                <stringProp name="Argument.value">${SQL_UPSERT}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="SQL_SHORT_TX_SELECT" elementType="Argument">
+                <stringProp name="Argument.name">SQL_SHORT_TX_SELECT</stringProp>
+                <stringProp name="Argument.value">${SQL_SHORT_TX_SELECT}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="SQL_SHORT_TX_UPDATE" elementType="Argument">
+                <stringProp name="Argument.name">SQL_SHORT_TX_UPDATE</stringProp>
+                <stringProp name="Argument.value">${SQL_SHORT_TX_UPDATE}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="SQL_COUNT_JOIN" elementType="Argument">
+                <stringProp name="Argument.name">SQL_COUNT_JOIN</stringProp>
+                <stringProp name="Argument.value">${SQL_COUNT_JOIN}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="MODE" elementType="Argument">
+                <stringProp name="Argument.name">MODE</stringProp>
+                <stringProp name="Argument.value">SETUP</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlOpenSampler</stringProp>
+        </JavaSampler>
+        <hashTree/>
+        <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="GridSql Close SETUP" enabled="true">
+          <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlCloseSampler</stringProp>
+        </JavaSampler>
+        <hashTree/>
+      </hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="1) Capacity max" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(capacityThreads,128)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(capacityRampSec,20)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(capacityDurationSec,300)}</stringProp>
+        <longProp name="ThreadGroup.delay">0</longProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">stopthread</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <intProp name="LoopController.loops">-1</intProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <OnceOnlyController guiclass="OnceOnlyControllerGui" testclass="OnceOnlyController" testname="Open once" enabled="true"/>
+        <hashTree>
+          <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="capacity-open" enabled="true">
+            <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="GRID_URL" elementType="Argument">
+                  <stringProp name="Argument.name">GRID_URL</stringProp>
+                  <stringProp name="Argument.value">${GRID_URL}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="USER" elementType="Argument">
+                  <stringProp name="Argument.name">USER</stringProp>
+                  <stringProp name="Argument.value">${USER}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="PASSWORD" elementType="Argument">
+                  <stringProp name="Argument.name">PASSWORD</stringProp>
+                  <stringProp name="Argument.value">${PASSWORD}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="CONNECT_TIMEOUT_MS" elementType="Argument">
+                  <stringProp name="Argument.name">CONNECT_TIMEOUT_MS</stringProp>
+                  <stringProp name="Argument.value">${CONNECT_TIMEOUT_MS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="OP_TIMEOUT_MS" elementType="Argument">
+                  <stringProp name="Argument.name">OP_TIMEOUT_MS</stringProp>
+                  <stringProp name="Argument.value">${OP_TIMEOUT_MS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="KEY_SPACE" elementType="Argument">
+                  <stringProp name="Argument.name">KEY_SPACE</stringProp>
+                  <stringProp name="Argument.value">${CAPACITY_KEY_SPACE}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="SEED_ROWS" elementType="Argument">
+                  <stringProp name="Argument.name">SEED_ROWS</stringProp>
+                  <stringProp name="Argument.value">${SEED_ROWS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="MIX_PROFILE" elementType="Argument">
+                  <stringProp name="Argument.name">MIX_PROFILE</stringProp>
+                  <stringProp name="Argument.value">${__P(MIX_PROFILE,CAPACITY)}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="STRIPE_THREADS" elementType="Argument">
+                  <stringProp name="Argument.name">STRIPE_THREADS</stringProp>
+                  <stringProp name="Argument.value">${__P(capacityThreads,128)}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="WRITE_BATCH_SIZE" elementType="Argument">
+                  <stringProp name="Argument.name">WRITE_BATCH_SIZE</stringProp>
+                  <stringProp name="Argument.value">${WRITE_BATCH_SIZE}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="MODE" elementType="Argument">
+                  <stringProp name="Argument.name">MODE</stringProp>
+                  <stringProp name="Argument.value">OPEN</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlOpenSampler</stringProp>
+          </JavaSampler>
+          <hashTree/>
+        </hashTree>
+        <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="capacity-ReqResp" enabled="true">
+          <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlRequestResponseSampler</stringProp>
+        </JavaSampler>
+        <hashTree/>
+      </hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="2) Chaos (lock collisions)" enabled="false">
+        <stringProp name="ThreadGroup.num_threads">${__P(chaosThreads,64)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(chaosRampSec,5)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(chaosDurationSec,90)}</stringProp>
+        <longProp name="ThreadGroup.delay">0</longProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <intProp name="LoopController.loops">-1</intProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <OnceOnlyController guiclass="OnceOnlyControllerGui" testclass="OnceOnlyController" testname="Open once" enabled="true"/>
+        <hashTree>
+          <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="chaos-open" enabled="true">
+            <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="GRID_URL" elementType="Argument">
+                  <stringProp name="Argument.name">GRID_URL</stringProp>
+                  <stringProp name="Argument.value">${GRID_URL}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="USER" elementType="Argument">
+                  <stringProp name="Argument.name">USER</stringProp>
+                  <stringProp name="Argument.value">${USER}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="PASSWORD" elementType="Argument">
+                  <stringProp name="Argument.name">PASSWORD</stringProp>
+                  <stringProp name="Argument.value">${PASSWORD}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="CONNECT_TIMEOUT_MS" elementType="Argument">
+                  <stringProp name="Argument.name">CONNECT_TIMEOUT_MS</stringProp>
+                  <stringProp name="Argument.value">${CONNECT_TIMEOUT_MS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="OP_TIMEOUT_MS" elementType="Argument">
+                  <stringProp name="Argument.name">OP_TIMEOUT_MS</stringProp>
+                  <stringProp name="Argument.value">${OP_TIMEOUT_MS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="KEY_SPACE" elementType="Argument">
+                  <stringProp name="Argument.name">KEY_SPACE</stringProp>
+                  <stringProp name="Argument.value">${CHAOS_KEY_SPACE}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="SEED_ROWS" elementType="Argument">
+                  <stringProp name="Argument.name">SEED_ROWS</stringProp>
+                  <stringProp name="Argument.value">${SEED_ROWS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="MIX_PROFILE" elementType="Argument">
+                  <stringProp name="Argument.name">MIX_PROFILE</stringProp>
+                  <stringProp name="Argument.value">CHAOS</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="STRIPE_THREADS" elementType="Argument">
+                  <stringProp name="Argument.name">STRIPE_THREADS</stringProp>
+                  <stringProp name="Argument.value">${__P(chaosThreads,64)}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="MODE" elementType="Argument">
+                  <stringProp name="Argument.name">MODE</stringProp>
+                  <stringProp name="Argument.value">OPEN</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlOpenSampler</stringProp>
+          </JavaSampler>
+          <hashTree/>
+        </hashTree>
+        <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="chaos-ReqResp" enabled="true">
+          <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlRequestResponseSampler</stringProp>
+        </JavaSampler>
+        <hashTree/>
+      </hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="3) Stress (overload soak)" enabled="false">
+        <stringProp name="ThreadGroup.num_threads">${__P(stressThreads,128)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(stressRampSec,30)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(stressDurationSec,300)}</stringProp>
+        <longProp name="ThreadGroup.delay">0</longProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <intProp name="LoopController.loops">-1</intProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <OnceOnlyController guiclass="OnceOnlyControllerGui" testclass="OnceOnlyController" testname="Open once" enabled="true"/>
+        <hashTree>
+          <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="stress-open" enabled="true">
+            <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="GRID_URL" elementType="Argument">
+                  <stringProp name="Argument.name">GRID_URL</stringProp>
+                  <stringProp name="Argument.value">${GRID_URL}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="USER" elementType="Argument">
+                  <stringProp name="Argument.name">USER</stringProp>
+                  <stringProp name="Argument.value">${USER}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="PASSWORD" elementType="Argument">
+                  <stringProp name="Argument.name">PASSWORD</stringProp>
+                  <stringProp name="Argument.value">${PASSWORD}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="CONNECT_TIMEOUT_MS" elementType="Argument">
+                  <stringProp name="Argument.name">CONNECT_TIMEOUT_MS</stringProp>
+                  <stringProp name="Argument.value">${CONNECT_TIMEOUT_MS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="OP_TIMEOUT_MS" elementType="Argument">
+                  <stringProp name="Argument.name">OP_TIMEOUT_MS</stringProp>
+                  <stringProp name="Argument.value">${OP_TIMEOUT_MS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="KEY_SPACE" elementType="Argument">
+                  <stringProp name="Argument.name">KEY_SPACE</stringProp>
+                  <stringProp name="Argument.value">${STRESS_KEY_SPACE}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="SEED_ROWS" elementType="Argument">
+                  <stringProp name="Argument.name">SEED_ROWS</stringProp>
+                  <stringProp name="Argument.value">${SEED_ROWS}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="MIX_PROFILE" elementType="Argument">
+                  <stringProp name="Argument.name">MIX_PROFILE</stringProp>
+                  <stringProp name="Argument.value">STRESS</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="STRIPE_THREADS" elementType="Argument">
+                  <stringProp name="Argument.name">STRIPE_THREADS</stringProp>
+                  <stringProp name="Argument.value">${__P(stressThreads,128)}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="MODE" elementType="Argument">
+                  <stringProp name="Argument.name">MODE</stringProp>
+                  <stringProp name="Argument.value">OPEN</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlOpenSampler</stringProp>
+          </JavaSampler>
+          <hashTree/>
+        </hashTree>
+        <JavaSampler guiclass="JavaTestSamplerGui" testclass="JavaSampler" testname="stress-ReqResp" enabled="true">
+          <elementProp name="arguments" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="classname">org.genfork.grid.sql.jmeter.GridSqlRequestResponseSampler</stringProp>
+        </JavaSampler>
+        <hashTree/>
+      </hashTree>
+      <ResultCollector guiclass="StatVisualizer" testclass="ResultCollector" testname="Aggregate Report" enabled="false">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename">${REPORT_DIR}/aggregate-report.csv</stringProp>
+      </ResultCollector>
+      <hashTree/>
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report" enabled="false">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename">${REPORT_DIR}/summary-report.csv</stringProp>
+      </ResultCollector>
+      <hashTree/>
+      <ResultCollector guiclass="GraphVisualizer" testclass="ResultCollector" testname="Graph Results" enabled="false">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>false</message>
+            <threadName>false</threadName>
+            <dataType>false</dataType>
+            <encoding>false</encoding>
+            <assertions>false</assertions>
+            <subresults>false</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>false</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>false</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+          </value>
+        </objProp>
+        <stringProp name="filename">${REPORT_DIR}/graph-results.csv</stringProp>
+      </ResultCollector>
+      <hashTree/>
+      <ResultCollector guiclass="RespTimeGraphVisualizer" testclass="ResultCollector" testname="Response Time Graph" enabled="false">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>false</message>
+            <threadName>false</threadName>
+            <dataType>false</dataType>
+            <encoding>false</encoding>
+            <assertions>false</assertions>
+            <subresults>false</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>false</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>false</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+          </value>
+        </objProp>
+        <stringProp name="filename">${REPORT_DIR}/resp-time-graph.csv</stringProp>
+      </ResultCollector>
+      <hashTree/>
+      <ResultCollector guiclass="TableVisualizer" testclass="ResultCollector" testname="View Results in Table" enabled="false">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename">${REPORT_DIR}/view-results-table.csv</stringProp>
+      </ResultCollector>
+      <hashTree/>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

@@ -1,0 +1,38 @@
+# UTF-8 no BOM
+# Overlay: add Witness voter w1 beside Multi-DC Active + two Holds.
+# Usage (from benchmarks/jepsen/multidc):
+#   $env:MULTIDC_MODE='async'
+#   docker compose -f docker-compose.yml -f ../witness/docker-compose.witness-overlay.yml up -d
+#
+# Requires image jamoa-grid-jepsen:local with /app/config/witness/ baked (see Dockerfile).
+# Stamp PASS only in RESULTS.md after lein chaos (kill-dc-a) shows single claim winner.
+#
+# Health: management.endpoints.web.base-path=/ -> /health/liveness (not /replication/status).
+
+services:
+  w1:
+    image: jamoa-grid-jepsen:local
+    container_name: jamoa-multidc-w1
+    hostname: w1
+    environment:
+      SPRING_PROFILES_ACTIVE: jepsen,w1
+      JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    volumes:
+      - w1-data:/app/data
+    command:
+      - --spring.config.additional-location=file:/app/config/witness/application-w1.yml
+    ports:
+      - "7782:7782"
+      - "15437:15437"
+      - "5620:5620"
+    networks:
+      - dc-link
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7782/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 90s
+
+volumes:
+  w1-data:

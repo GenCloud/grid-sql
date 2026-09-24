@@ -1,0 +1,84 @@
+grid:
+  sql:
+    default-shards: 8
+    data-dir: ./data/catalog
+  sql-server:
+    enabled: true
+    host: 0.0.0.0
+    port: 15434
+    user: ""
+    password: ""
+  codec:
+    duplex:
+      enabled: true
+      schema-epoch: 1
+  overlay:
+    enabled: false
+    durable: false
+  replication:
+    enabled: true
+    node-id: n3
+    cluster-id: jepsen-grid
+    orchid:
+      coupling: 15.0
+      natural-freq-hz: 1.0
+      order-threshold: 0.85
+      tick-ms: 10
+      digest-quorum: MAJORITY
+    repair:
+      homologous-enabled: true
+      reconcile-interval-ms: 2000
+    swarm:
+      enabled: false
+    transport:
+      bind-host: 0.0.0.0
+      bind-port: 5617
+      connect-timeout-ms: 5000
+      peers:
+        - { id: n1, host: n1, port: 5615, dc: dc-a }
+        - { id: n2, host: n2, port: 5616, dc: dc-a }
+    cross-dc:
+      enabled: false
+      local-dc: dc-a
+      mode: ASYNC_SHIP
+      learners: []
+    op-log:
+      segment-size: 64
+      data-dir: ./data/replication
+      fsync: true
+    flow:
+      max-inflight-ops: 10000
+      domains: []
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  config:
+    activate:
+      on-profile: n3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+      base-path: /
+  endpoint:
+    health:
+      validate-group-membership: false
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState,gridLiveness
+        readiness:
+          include: readinessState,gridReadiness
+  metrics:
+    tags:
+      application: grid-sql-server-n3
+
+server:
+  port: 7779
