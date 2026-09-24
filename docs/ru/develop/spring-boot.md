@@ -4,12 +4,12 @@ Grid встраивается в Spring Boot двумя разными спос�
 
 | Роль процесса | Что подключаете | Что получаете |
 |---------------|-----------------|---------------|
-| **Узел СУБД** | `grid-sql-server-starter` (fat jar) или зависимость на `grid-server-core` | Движок, каталог, хранение, репликация, TCP SQL listener |
+| **Узел СУБД** | `grid-sql-server-starter` (толстый jar) или зависимость на `grid-server-core` | Движок, каталог, хранение, репликация, приём SQL по TCP |
 | **Приложение-клиент** | `grid-sql-client` | `ConnectionFactory` по `grid://`; движок в процесс не тянется |
 
 Типовое приложение — второй случай: сервис не хостит базу, он к ней подключается.
 
-Автоконфигурация лежит в `grid-server-core`: `GridAutoConfiguration` (ядро и хранение), `GridSqlAutoConfiguration` (`SqlServerRuntime` + TCP listener), `GridReplicationAutoConfiguration` (ORCHID, OpLog, пиры). Все они включаются от префикса `grid.*`.
+Автоконфигурация лежит в `grid-server-core`: `GridAutoConfiguration` (ядро и хранение), `GridSqlAutoConfiguration` (`SqlServerRuntime` + приём SQL по TCP), `GridReplicationAutoConfiguration` (ORCHID, OpLog, пиры). Все они включаются от префикса `grid.*`.
 
 ## Запуск узла
 
@@ -25,14 +25,23 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.ja
 | Профиль | SQL | Репликация | HTTP | Назначение |
 |---------|----:|-----------:|-----:|------------|
 | `primary` | **15432** | **5615** | 7777 | узел демо-пары, который может писать (`writerEligible`) |
-| `replica` | **15433** | **5616** | 7777 | Второй узел той же пары |
+| `replica` | **15433** | **5616** | 7778 | Второй узел той же пары |
 | `capacity` | **15432** | — | 7778 | Одиночный узел с записью на диск (`replication.enabled: false`, `fsync: true`) |
 
 `capacity` — честный потолок одного узла: локальная запись на диск включена, ожидания пиров нет. Это не «режим без репликации с выключенным fsync».
 
 ## Конфигурация узла
 
-Ниже — ключи, которые реально читаются автоконфигурацией (значения из профиля `primary`).
+Автоконфигурация читает ключи `grid.*` ниже. YAML — **образец профиля starter `primary`**, а не голые значения по умолчанию из `GridConfigurationProperties`.
+
+| Параметр | Default библиотеки (без профиля) | Типичный `primary` / `capacity` |
+|----------|----------------------------------|----------------------------------|
+| `durability.hydrate-mode` | `FULL` | `LAZY` |
+| `durability.working-set-max-entries` | `0` (без потолка) | например `262144` |
+| `replication.op-log.segment-size` | `1024` (МиБ) | например `64` |
+| `replication.ha.replica-reads-enabled` | `false` | `true` на демо `primary`/`replica` |
+
+Полные таблицы defaults: [долговременное хранение](../configure-and-operate/configuration/durability.md), [репликация](../configure-and-operate/configuration/replication.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md). Ключи архива PITR (`oplog-archive.*`) и multi-site `region.*` — на тех страницах; по умолчанию выключены.
 
 ```yaml
 grid:
@@ -52,9 +61,10 @@ grid:
     durable: false
   durability:
     enabled: true
-    hydrate-mode: LAZY            # FULL | LAZY
+    hydrate-mode: LAZY            # профиль; в библиотеке по умолчанию FULL
     working-set-max-entries: 262144
     adaptive-disk-first: true
+    # oplog-archive.enabled: false   # включить до нагрузки, которую может понадобиться откатить — см. PITR
   replication:
     enabled: true
     node-id: primary-1
@@ -101,7 +111,7 @@ grid:
 | Группа | Смысл |
 |--------|-------|
 | `grid.sql` | Каталог и шардирование: `default-shards` — число шардов по умолчанию для новых таблиц, `data-dir` — дерево каталога и запечатанных файлов |
-| `grid.sql-server` | TCP listener. Включайте **только** на серверных узлах; приложению-клиенту он не нужен |
+| `grid.sql-server` | Приём SQL по TCP. Включайте **только** на серверных узлах; приложению-клиенту он не нужен |
 | `grid.durability` | Локальная запись на диск: OpLog + запечатанные GMAP. Работает и без реплик (одиночный узел) |
 | `grid.replication` | Обмен с пирами: ORCHID, отправка журнала, подтягивание, размещение. Отдельный выключатель от `durability` |
 | `grid.replication.op-log.fsync` | `true` для любых заявляемых цифр. `false` — только лаборатория |
@@ -137,7 +147,7 @@ management:
           include: readinessState,gridReadiness
 ```
 
-`gridReadiness` и `gridLiveness` — индикаторы состояния узла: readiness учитывает готовность движка и репликации, поэтому в Kubernetes его можно вешать на readinessProbe. Метрики — [мониторинг](../configure-and-operate/monitoring.md).
+`gridReadiness` и `gridLiveness` — индикаторы состояния узла: readiness учитывает готовность движка и репликации, поэтому в Kubernetes его можно повесить на пробу готовности. Метрики — [мониторинг](../configure-and-operate/monitoring.md).
 
 ## Приложение как клиент
 
@@ -168,7 +178,7 @@ spring:
 Правила для клиентской стороны:
 
 - **Не** включайте `grid.sql-server.enabled` и не тащите `grid-server-core` в каждый сервис — движок не должен подниматься в процессе приложения.
-- Одна фабрика на процесс (или на peer), а не фабрика на запрос.
+- Одна фабрика на процесс (или на соседний узел), а не фабрика на запрос.
 - Чтения с реплик: в URL клиента — `readEndpoints`; на **сервере** ещё `grid.replication.ha.replica-reads-enabled: true` (в library по умолчанию выключено; профили starter `primary`/`replica` включают). См. [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 - Не блокируйте реактивные цепочки внутри сервиса; `.block()` — только на границе приложения. См. [Java-клиент](java-client.md).
 

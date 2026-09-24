@@ -16,7 +16,7 @@ param(
   [int]$Clients = 128,
   [int]$DurationSec = 120,
   [int]$RampSec = 5,
-  [string]$GridUrl = "grid://@127.0.0.1:15432/public",
+  [string]$GridUrl = "grid://grid:grid@127.0.0.1:15432/public",
   [string]$User = "",
   [string]$Password = "",
   [double]$TpsFloor = 0,

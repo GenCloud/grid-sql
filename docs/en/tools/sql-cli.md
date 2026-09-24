@@ -38,11 +38,15 @@ Defaults are host `127.0.0.1` and SQL port **15432**; a local replica serves rea
 
 ## Common errors
 
+Statement errors print to **stderr** and the interactive session continues (`quit` / `exit` / EOF ends the process). A failed connect aborts `main` with an exception (non-zero process status from the JVM). There is no per-statement process exit code for SQL failures.
+
 | Symptom | Cause |
 |---------|-------|
+| `bad frameLen` | CLI pointed at a replication port (**5615** / **5616**) |
 | AUTH rejected | Wrong user or password, or the node has users while the URL carries none |
 | Schema or table not found | Wrong schema in the URL (usually `/public` is meant) or DDL not run yet |
 | Connect timeout | Node not listening on SQL, wrong host/port, or readiness still DOWN |
+| `maxTxContexts=8 exhausted` | More than eight open sessions on one TCP — use another connection or close idle TX |
 
 ## Session commands
 

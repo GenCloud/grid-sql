@@ -1531,8 +1531,8 @@ public class GridConfigurationProperties {
 		private boolean enabled = false;
 		private String host = "0.0.0.0";
 		private int port = 15432;
-		private String user = "";
-		private String password = "";
+		private String user = "grid";
+		private String password = "grid";
 
 		public boolean isEnabled() {
 			return enabled;

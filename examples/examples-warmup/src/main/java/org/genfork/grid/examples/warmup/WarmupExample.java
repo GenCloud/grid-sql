@@ -31,7 +31,7 @@ import reactor.core.publisher.Mono;
  */
 public final class WarmupExample {
 	private static final String URL_WARM =
-			"grid://@127.0.0.1:15432/public?warmup=true&minConnections=1&maxConnections=2";
+			"grid://grid:grid@127.0.0.1:15432/public?warmup=true&minConnections=1&maxConnections=2";
 	private static final String SELECT_ONE = "SELECT 1 AS one";
 
 	private WarmupExample() {
@@ -70,7 +70,7 @@ public final class WarmupExample {
 
 	private static void demoProgrammatic() {
 		final RemoteConnectionFactory factory = new RemoteConnectionFactory(
-				"127.0.0.1", 15432, "", "", 32, 2, "public", true);
+				"127.0.0.1", 15432, "grid", "grid", 32, 2, "public", true);
 		try {
 			factory.warmup()
 					.doOnSuccess(v -> ExampleSupport.println(
@@ -105,7 +105,7 @@ public final class WarmupExample {
 
 	private static void demoColdObtainAllowed() {
 		ExampleSupport.runWithoutWarmup(
-				"grid://@127.0.0.1:15432/public?warmup=false&maxConnections=1",
+				"grid://grid:grid@127.0.0.1:15432/public?warmup=false&maxConnections=1",
 				factory -> factory.obtain()
 						.flatMap(conn -> conn.createStatement(SELECT_ONE)
 								.fetchOne()

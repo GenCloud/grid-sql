@@ -44,8 +44,8 @@
 
 (defn- auth-prefix
   []
-  (let [user (or (System/getenv "JEPSEN_SQL_USER") "")
-        pass (or (System/getenv "JEPSEN_SQL_PASSWORD") "")]
+  (let [user (or (System/getenv "JEPSEN_SQL_USER") "grid")
+        pass (or (System/getenv "JEPSEN_SQL_PASSWORD") "grid")]
     (if (str/blank? user)
       ""
       (str user (when-not (str/blank? pass) (str ":" pass)) "@"))))

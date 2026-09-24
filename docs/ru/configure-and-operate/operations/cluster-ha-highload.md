@@ -117,11 +117,13 @@ grid://u:p@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public?connectTimeout
 
 Включите пробы (`management.endpoint.health.probes.enabled: true`) и откройте группы `health,prometheus`. В readiness добавьте `gridReadiness` — пример есть в `application.yml` модуля `grid-sql-server-starter`.
 
-| Путь | Что проверяет |
+| Путь (starter, `base-path: /`) | Что проверяет |
 |------|---------------|
-| `/actuator/health/liveness` | Процесс жив (`livenessState`) |
-| `/actuator/health/readiness` | Узел готов принимать трафик: SQL TCP слушает (если включён) и узел либо одиночный durable, либо синхронизирован по ORCHID |
-| `/actuator/prometheus` | Сбор метрик Micrometer / Prometheus |
+| `/health/liveness` | Процесс жив (`livenessState`) |
+| `/health/readiness` | Узел готов принимать трафик: SQL TCP слушает (если включён) и узел либо одиночный durable, либо синхронизирован по ORCHID |
+| `/prometheus` | Сбор метрик Micrometer / Prometheus |
+
+Если оставлен стандартный базовый путь Spring, те же группы — под `/actuator/health/*` и `/actuator/prometheus`.
 
 Что именно попадает в детали probe и какие метрики смотреть: [мониторинг](../monitoring.md).
 
@@ -137,7 +139,6 @@ grid:
     working-set-max-entries: 2_000_000
   sql:
     default-shards: 16
-    max-tx-contexts: 512
   sql-server:
     enabled: true
     host: 0.0.0.0
@@ -182,7 +183,8 @@ grid:
 |----------|------|
 | `op-log.fsync` | Сохранность данных; пакетная запись амортизирует групповой fsync |
 | `orchid.tick-ms` и `order-threshold` | Допуск записи; держите произведение `2*pi*freq*tick/1000` заметно меньше единицы |
-| `sql.max-tx-contexts`, `sql.default-shards` | Параллелизм транзакций и число шардов |
+| `sql.default-shards` | Параллелизм шардов при CREATE TABLE |
+| Параллельные TX на одном TCP | Жёсткий потолок канала **8**; Boot не применяет `grid.sql.max-tx-contexts` к слушателю — откройте больше `Connection` ([SQL-сервер](../configuration/sql-server.md)) |
 | `durability.working-set-max-entries` и `hydrate-mode` | Компромисс между потолком RAM и промахами в запечатанном хранилище |
 | `swarm`, `placement-optimizer` | Подсказки по размещению; `apply-auto-cutover` по умолчанию **true** ([overlay и размещение](../../understand/overlay-and-swarm.md); `false` — только временное подавление migrate) |
 

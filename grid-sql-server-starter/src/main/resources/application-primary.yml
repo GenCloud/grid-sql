@@ -6,6 +6,8 @@ grid:
     enabled: true
     host: 0.0.0.0
     port: 15432
+    user: "grid"
+    password: "grid"
   codec:
     duplex:
       enabled: true
@@ -103,3 +105,5 @@ management:
 
 server:
   port: 7777
+    user: "grid"
+    password: "grid"

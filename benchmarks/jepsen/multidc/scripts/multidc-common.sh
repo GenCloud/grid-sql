@@ -50,7 +50,7 @@ ${lat_line}| notes | $notes |
 Multi-host SQL URL:
 
 \`\`\`
-grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public
+grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public
 \`\`\`
 
 See [README.md](README.md). Parent 1-DC: [../RESULTS.md](../RESULTS.md).
@@ -65,7 +65,7 @@ EOF
 }
 
 echo "=== Multi-DC $MODE_LABEL ==="
-echo "SQL URL: grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public"
+echo "SQL URL: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   echo "Docker unavailable"

@@ -33,16 +33,10 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.ja
 
 | Process | Profile | SQL | Replication | Actuator | `dataDir` |
 |---------|---------|----:|------------:|---------:|-----------|
-| primary | `primary` | **15432** | **5615** | 7777 | `./data-primary/…` |
-| replica | `replica` | **15433** | **5616** | 7777 | `./data-replica/…` |
+| primary | `primary` | **15432** | **5615** | **7777** | `./data-primary/…` |
+| replica | `replica` | **15433** | **5616** | **7778** | `./data-replica/…` |
 
-Both profiles ship with `fsync: true` and already point at each other in `peers`, so a local stand needs no hand-edited configuration.
-
-If both processes run on one machine, override the Actuator port on the second one or it will fail to start:
-
-```powershell
-java -jar … --spring.profiles.active=replica --server.port=7788
-```
+Both profiles ship with `fsync: true`, distinct Actuator ports, and peers already pointed at each other, so a local stand needs no hand-edited configuration.
 
 Three things trip people up most often:
 
@@ -59,7 +53,8 @@ grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public
 Create a table and write a row on the primary, then read it back from the replica (`readEndpoints=127.0.0.1:15433`). Node health is visible through Actuator: `gridReadiness` covers both engine and replication readiness, so it is safe to use as a readiness probe.
 
 ```powershell
-curl http://127.0.0.1:7777/health
+curl http://127.0.0.1:7777/health/readiness
+curl http://127.0.0.1:7778/health/readiness
 ```
 
 ## Single node without replicas

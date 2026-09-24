@@ -15,7 +15,7 @@ Parsing is strict. There is no error recovery and no "best effort" execution of 
 | Prepared | `PREPARE name AS <statement>`, `EXECUTE name [USING v, …]`, `DEALLOCATE [PREPARE] name` |
 | Tables | `CREATE TABLE [IF NOT EXISTS]`, `DROP TABLE [IF EXISTS]`, `ALTER TABLE … ADD COLUMN`, `ALTER TABLE … ADD [CONSTRAINT c] CHECK (…)`, `ALTER TABLE … DROP COLUMN` |
 | Indexes | `CREATE INDEX`, `CREATE UNIQUE INDEX`, `CREATE BITMAP INDEX`, `DROP INDEX name [ON table]` |
-| Schemas | `CREATE SCHEMA [IF NOT EXISTS]`, `DROP SCHEMA name RESTRICT`, `SET SCHEMA name` |
+| Schemas | `CREATE SCHEMA [IF NOT EXISTS] [AUTHORIZATION user]`, `DROP SCHEMA [IF EXISTS] name [RESTRICT]`, `SET SCHEMA name` | `AUTHORIZATION` ignored (no owner); `RESTRICT` optional (default); `CASCADE` rejected |
 | Views | `CREATE VIEW … AS <query>`, `CREATE MATERIALIZED VIEW … AS <query>`, `REFRESH MATERIALIZED VIEW`, `DROP VIEW [IF EXISTS]` |
 | Sequences | `CREATE SEQUENCE [IF NOT EXISTS] s [START WITH n] [INCREMENT BY n] [RECLAIM]`, `DROP SEQUENCE`, `SELECT NEXTVAL('s')`, `SELECT CURRVAL('s')` |
 | Functions | `CREATE FUNCTION f(args) RETURNS type AS CLASS 'fqcn' METHOD 'name'`, `DROP FUNCTION` |

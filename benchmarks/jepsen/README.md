@@ -60,10 +60,10 @@ Without `-Full` / `MULTIDC_FULL=1`: compose config validate only (scaffold).
 Multi-host SQL URL (control / docs):
 
 ```
-grid://@a1:15432,a2:15433,a3:15434,b1:15435/public
+grid://grid:grid@a1:15432,a2:15433,a3:15434,b1:15435/public
 ```
 
-Host-published equivalent: `grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public`.
+Host-published equivalent: `grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public`.
 
 **Harness vs prod write URL:** Jepsen may list a Hold endpoint for reconnect-after-claim. Prod with region fencing off should use the Active DC ring only; with region fencing on, dual-DC write URLs are allowed (`a1..a3,b1,b2`) and pin on `writerEligible && regionEpoch`. See [multidc/README.md](multidc/README.md), [ha-promote.md](../../docs/en/ha-promote.md).
 

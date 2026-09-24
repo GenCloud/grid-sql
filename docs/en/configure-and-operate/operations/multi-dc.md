@@ -104,9 +104,22 @@ On a lab or secondary stand (not during peak write on the only live Active), per
 2. Simulate Active silence past `claim-timeout-ms` (or stop Active nodes cleanly on the stand).
 3. Verify Hold claim: new Active, `regionEpoch` +1, readiness UP, `writerEligible` on the winner.
 4. Client path: `rediscoverWriter()` — not the next URL host; smoke write succeeds only on the new Active.
-5. Failback: restore the former Active as Hold (or per your topology), wait for catch-up, record RPO window for `ASYNC_SHIP` vs near-zero digest lag for `SYNC_VOTERS`.
+5. Failback (detail):
+   - Bring the former Active back with role **Hold** (same `regionEpoch` family as the new Active — do not start a second Active).
+   - Wait for OpLog catch-up / repair until lag is acceptable; do not put it in the write URL as a writer.
+   - Clients stay on the current `writerEligible` node (`rediscoverWriter()` only if the writer changes again).
+   - Optional later reclaim of the original site is a deliberate claim drill, not automatic on process restart.
+   - Record RPO for `ASYNC_SHIP` vs near-zero digest lag for `SYNC_VOTERS`.
 
 **RPO check.** For `ASYNC_SHIP`, measure Hold lag (`rpoEstimateMs` / apply lag) before declaring the drill done. For `SYNC_VOTERS`, confirm remote voters were in the quorum path. Full load recipes: [multi-DC under load](cluster-multidc-highload.md).
+
+## Operator checklist (one screen)
+
+1. Exactly one Active; Hold/Witness not in the write URL as writers.
+2. Mode chosen deliberately: `ASYNC_SHIP` (Hold RPO) vs `SYNC_VOTERS_ACROSS_DC` (WAN on every commit).
+3. After claim: readiness UP, `writerEligible` on the winner, `regionEpoch` advanced, clients call `rediscoverWriter()`.
+4. Measure RPO (`rpoEstimateMs` / apply lag) before closing an Active-loss drill.
+5. Full YAML and load stamps: [multi-site under load](cluster-multidc-highload.md).
 
 ## Labs
 

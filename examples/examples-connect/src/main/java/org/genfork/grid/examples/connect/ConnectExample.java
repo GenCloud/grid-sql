@@ -54,7 +54,7 @@ public final class ConnectExample {
 
 	private static Mono<Void> demoProgrammatic() {
 		final RemoteConnectionFactory factory = new RemoteConnectionFactory(
-				"127.0.0.1", 15432, "", "", 32, 2, "public", true);
+				"127.0.0.1", 15432, "grid", "grid", 32, 2, "public", true);
 		ExampleSupport.println("RemoteConnectionFactory(..., warmup=true)");
 		return factory.warmup()
 				.then(factory.obtain())

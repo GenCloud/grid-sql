@@ -11,8 +11,8 @@ A live SQL port:
 ```powershell
 mvn -pl grid-sql-server-starter -am package -DskipTests
 java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=capacity
-# → grid://@127.0.0.1:15432/public
-# → jdbc:grid://@127.0.0.1:15432/public
+# → grid://grid:grid@127.0.0.1:15432/public
+# → jdbc:grid://grid:grid@127.0.0.1:15432/public
 ```
 
 Or compose (`examples/compose/1dc-n2`) for replica / HA demos.

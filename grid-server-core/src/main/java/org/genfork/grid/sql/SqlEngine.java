@@ -272,7 +272,7 @@ public final class SqlEngine {
 	}
 
 	public SqlSession newSession() {
-		return newSession("anonymous", true);
+		return newSession(localExecuteUser(), true);
 	}
 
 	public SqlSession newSession(String user, boolean authenticated) {
@@ -282,6 +282,17 @@ public final class SqlEngine {
 			session.setEnvelopeCoordinator(replication.getTxEnvelopeCoordinator());
 		}
 		return session;
+	}
+
+	/**
+	 * In-process {@link #execute(String)} identity: open catalog → anonymous; else bootstrap admin.
+	 */
+	private String localExecuteUser() {
+		if (privileges == null || privileges.isOpen()) {
+			return "anonymous";
+		}
+		final String admin = privileges.firstAdministrator();
+		return admin != null ? admin : "anonymous";
 	}
 
 	public SqlResult execute(String sql) {
@@ -477,7 +488,10 @@ public final class SqlEngine {
 			}
 			case CreateUserSql s -> {
 				rejectDdlInTx(session);
-				privileges.createUser(s.user(), s.password());
+				// OpLog / sealed hydrate may replay CREATE USER after privilege meta already loaded.
+				if (!(applyingReplicatedDdl.get() && privileges.userExists(s.user()))) {
+					privileges.createUser(s.user(), s.password());
+				}
 				publishPrivilegeDdl(sql);
 				yield SqlResult.ddl(SqlStatementTag.CREATE_USER);
 			}
@@ -495,7 +509,9 @@ public final class SqlEngine {
 			}
 			case CreateRoleSql s -> {
 				rejectDdlInTx(session);
-				privileges.createRole(s.role());
+				if (!(applyingReplicatedDdl.get() && privileges.roleExists(s.role()))) {
+					privileges.createRole(s.role());
+				}
 				publishPrivilegeDdl(sql);
 				yield SqlResult.ddl(SqlStatementTag.CREATE_ROLE);
 			}
@@ -821,6 +837,10 @@ public final class SqlEngine {
 				execute(line.trim());
 			}
 			for (TableSchema meta : metas) {
+				if (!catalog.shouldHydrateMeta(meta)) {
+					catalog.deletePersistedTableMeta(meta.tableName());
+					continue;
+				}
 				if (catalog.exists(meta.tableName())) {
 					catalog.ensureEpochAtLeast(meta.schemaEpoch());
 					continue;
@@ -828,10 +848,12 @@ public final class SqlEngine {
 				catalog.createTable(meta);
 				catalog.ensureEpochAtLeast(meta.schemaEpoch());
 			}
+			catalog.pruneOrphanMetaFiles();
 		} finally {
 			catalog.endDdlReplay();
 			applyingReplicatedDdl.set(false);
 		}
+		catalog.rewriteCompactedDdl();
 	}
 
 	/** Test hook: privilege catalog snapshot bytes. */

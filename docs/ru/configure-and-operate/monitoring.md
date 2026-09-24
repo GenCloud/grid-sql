@@ -15,6 +15,13 @@
 
 Если base-path оставлен по умолчанию (`/actuator`), те же группы доступны как `/actuator/health/liveness` и `/actuator/health/readiness`.
 
+Профили starter: primary Actuator на **7777**, replica и capacity — на **7778**. Пример:
+
+```bash
+curl -s http://127.0.0.1:7777/health/readiness
+# curl -s http://127.0.0.1:7778/health/readiness
+```
+
 Пока узел не синхронизировался по ORCHID, readiness остаётся DOWN. Трафик на него не пойдёт: узел не объявляет себя готовым в расчёте на то, что синхронизация подтянется позже.
 
 ### Если растёт p99 записи
@@ -41,7 +48,7 @@
 | `reason` | Краткая причина DOWN (`sql_tcp_down`, `orchid_not_synced`, …) |
 | `writerEligible`, `orchidSynced`, `applyLagStale` | `ReplicationCoordinator` |
 | `orchidR` | `OrchidNode` / `ReplicationNodeState` |
-| `maxTxContexts` | Лимит параллельных TX на SQL-сервере |
+| `maxTxContexts` | Может появиться, если в YAML задан `grid.sql.max-tx-contexts`; Boot **не** применяет его к TCP-слушателю (жёсткий потолок канала остаётся **8**) — [SQL-сервер](configuration/sql-server.md) |
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | Счётчики блокировок и CANCEL |
 | `repairIssued`, `repairApplied` | `HomologousRepair` |
 | `rpoEstimateMs` | `CrossDcMetrics` |
@@ -69,15 +76,19 @@
 
 ### На что ставить алерт
 
-Открывайте инцидент, если выполняется любое из условий (поля readiness / Micrometer уже документированы — без выдуманных порогов):
+Стройте алерты по полям ниже, а не по выдуманным числовым SLO. Ориентиры нагрузки — [ёмкость](../performance/capacity-slo.md).
 
-| Сигнал | Зачем |
-|--------|--------|
-| `readiness` DOWN после прогрева | Узел не должен принимать трафик |
-| `applyLagStale: true` на реплике для чтения | Устаревшие или отклоняемые чтения |
-| ORCHID не синхронен / `orchid_r` ниже допуска | Запись не допускается |
-| Давление OpLog / диска (растёт `oplogFsyncP99Ns`, диск заполнен) | Путь долговечности тормозит |
-| `repair_issued` растёт без `repair_applied` | Подтягивание застрял |
+| Условие | Почему важно | Тяжесть |
+|---------|--------------|---------|
+| Readiness DOWN после окна прогрева | Узел не должен принимать трафик | Page |
+| Ни один узел не сообщает `writerEligible: true` | Нет допуска записи | Page |
+| Два узла с `writerEligible: true` на разных площадках | Риск двух писателей | Page; [несколько ЦОД](operations/multi-dc.md) |
+| `orchid_r` ниже `orchid.order-threshold` длительно | Запись будет отклоняться | Page |
+| `applyLagStale: true` на узле, с которого читают | Чтения отклоняются или устарели | Ticket, затем разбор lag |
+| `repair_issued` растёт, `repair_applied` стоит | Подтягивание застряло | Ticket |
+| Растёт `oplog_fsync_p99_ns` / диск почти полный | Путь долговечности тормозит | Page |
+| Растёт `rpo_estimate_ms` без известного сетевого события | Растёт окно потерь между ЦОД | Ticket |
+| Растут `lock.wait_timeouts` | Клиенты получают ошибки блокировок | Ticket |
 
 ## Разбор типичных сигналов
 

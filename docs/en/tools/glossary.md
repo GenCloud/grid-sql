@@ -18,7 +18,7 @@ Short definitions for the terms used across the operations and architecture page
 | Ownership cutover | Shard ownership change after catch-up (`CUTOVER_DONE`); see [placement](../understand/overlay-and-swarm.md) |
 | `grid://` | SQL URL of the reactive client |
 | `jdbc:grid://` | SQL URL of the JDBC client (same protocol) |
-| `maxTxContexts` | Cap on logical sessions carried by one TCP connection |
+| `maxTxContexts` | Cap on logical sessions on one TCP. **Client** URL default **256**; **server** channel hard-cap **8** (Boot does not raise it from YAML) — open another `Connection` when exhausted |
 | `writerEligible` | Wire metadata: the node may accept writes |
 | `regionEpoch` | Epoch counter of the Active site under region fencing |
 | AQE | Adaptive Query Execution: parallel scan and `DIST_MAP` for heavy SELECTs |

@@ -59,7 +59,14 @@ Every statement in the batch sees the same dirty buffer; on an error the remaind
 
 ## Parallel transactions
 
-Several `connection.begin()` calls on one connection give several independent transactions. The soft cap is `maxTxContexts` (256 by default): it bounds the number of concurrent logical sessions on a socket, not the number of sockets.
+Several `connection.begin()` calls on one connection give several independent transactions. There are **two** caps — do not confuse them:
+
+| Cap | Where | Default | Role |
+|-----|--------|---------|------|
+| Client `maxTxContexts` | URL / `ConnectionOptions` | **256** | Soft limit on concurrent logical sessions the client will open on one TCP |
+| Server channel | SQL TCP listen (`SqlServer`) | **8** | Hard limit per accepted channel; Boot does **not** forward `grid.sql.max-tx-contexts` |
+
+If the server answers `maxTxContexts=8 exhausted`, open another `Connection` (or raise the server listen default in the config that actually binds the listener). Details: [SQL server](../configure-and-operate/configuration/sql-server.md).
 
 This is not a JDBC pool: do not open N connections to get N transactions. Isolation between them rests on record locks, `TX_*` markers in the journal and prepare handles, not on separate TCP channels.
 

@@ -43,7 +43,7 @@ Common options:
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| `maxTxContexts` | `256` | Soft cap on concurrent transactions over one socket |
+| `maxTxContexts` | `256` | Soft cap on concurrent transactions over one socket (**client** side) |
 | `minConnections` | `1` | TCP connections opened on warm-up or first `obtain` |
 | `maxConnections` | `1` | Upper bound on TCP sockets in the factory |
 | `connectTimeoutMs` | `5000` | Connect timeout |
@@ -53,11 +53,13 @@ Common options:
 | `timezone` | `UTC` | Zone applied to temporal types |
 | `readEndpoints` / `readPreference` / `staleReadPolicy` | — / `PRIMARY` / `FAIL_CLOSED` | Replica routing; see [replica reads](../configure-and-operate/operations/replica-reads.md) |
 
+The **server** accepts at most **8** open sessions per TCP channel by default. Spring Boot does **not** forward `grid.sql.max-tx-contexts` into the listener — if the client asks for more than eight on one socket, open additional `Connection`s ([SQL server](../configure-and-operate/configuration/sql-server.md), [transactions](../develop/transactions.md)).
+
 Full list (including HA helpers): [Java client](../develop/java-client.md). JDBC and Sync without JDBC: [JDBC client](../develop/jdbc-tooling.md). Writer hand-off: [promote](../configure-and-operate/operations/ha-promote.md).
 
 ### One connection, many transactions
 
-A single TCP socket multiplexes independent transactions: every `connection.begin()` returns its own `TxContext` with its own dirty buffer. A "one transaction per socket" pool is neither required nor useful here — the ceiling is `maxTxContexts`. Details: [transactions](../develop/transactions.md).
+A single TCP socket multiplexes independent transactions: every `connection.begin()` returns its own `TxContext` with its own dirty buffer. A "one transaction per socket" pool is neither required nor useful here — the ceiling is the **lower** of the client `maxTxContexts` and the server channel cap (**8** today). Details: [transactions](../develop/transactions.md).
 
 ### Replica reads
 

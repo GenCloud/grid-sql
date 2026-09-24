@@ -81,15 +81,21 @@ final class MetaResultSets {
         ), rows);
     }
 
-    static ResultSet indexInfo(GridConnection connection, List<Object[]> rows) {
-        return of(connection, List.of(
-                "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "NON_UNIQUE", "INDEX_QUALIFIER",
-                "INDEX_NAME", "TYPE", "ORDINAL_POSITION", "COLUMN_NAME", "ASC_OR_DESC",
-                "CARDINALITY", "PAGES", "FILTER_CONDITION"
-        ), rows);
-    }
+	static ResultSet indexInfo(GridConnection connection, List<Object[]> rows) {
+		return of(connection, List.of(
+				"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "NON_UNIQUE", "INDEX_QUALIFIER",
+				"INDEX_NAME", "TYPE", "ORDINAL_POSITION", "COLUMN_NAME", "ASC_OR_DESC",
+				"CARDINALITY", "PAGES", "FILTER_CONDITION"
+		), rows);
+	}
 
-    static ResultSet typeInfo(GridConnection connection, List<Object[]> rows) {
+	static ResultSet tablePrivileges(GridConnection connection, List<Object[]> rows) {
+		return of(connection, List.of(
+				"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "GRANTOR", "GRANTEE", "PRIVILEGE", "IS_GRANTABLE"
+		), rows);
+	}
+
+	static ResultSet typeInfo(GridConnection connection, List<Object[]> rows) {
         return of(connection, List.of(
                 "TYPE_NAME", "DATA_TYPE", "PRECISION", "LITERAL_PREFIX", "LITERAL_SUFFIX",
                 "CREATE_PARAMS", "NULLABLE", "CASE_SENSITIVE", "SEARCHABLE", "UNSIGNED_ATTRIBUTE",

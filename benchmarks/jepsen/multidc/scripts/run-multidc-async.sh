@@ -10,7 +10,7 @@ export JEPSEN_M2="${JEPSEN_M2:-${HOME}/.m2}"
 TIME_LIMIT="${JEPSEN_TIME_LIMIT:-60}"
 
 echo "=== Multi-DC ASYNC_SHIP ==="
-echo "SQL URL: grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public"
+echo "SQL URL: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public"
 echo "Validating docker compose config..."
 docker compose config >/dev/null
 echo "compose config OK (MULTIDC_MODE=$MULTIDC_MODE)"
@@ -64,7 +64,7 @@ export JEPSEN_NODES=a1,a2,a3,b1,b2
 export JEPSEN_HTTP_PORTS=7777,7778,7779,7780,7781
 export JEPSEN_SQL_PORTS=15432,15433,15434,15435,15436
 export JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0 JEPSEN_MULTIDC=1 JEPSEN_MULTI_HOST=1
-export JEPSEN_GRID_URL='grid://@a1:15432,a2:15433,a3:15434,b1:15435/public?maxConnections=1&maxTxContexts=64'
+export JEPSEN_GRID_URL='grid://grid:grid@a1:15432,a2:15433,a3:15434,b1:15435/public?maxConnections=1&maxTxContexts=64'
 lein run -m jamoa-jepsen.core test --workload $wl --time-limit $TIME_LIMIT
 echo LEIN_EXIT=\$?
 "

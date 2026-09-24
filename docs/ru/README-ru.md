@@ -33,6 +33,9 @@ Grid — распределённая SQL-база данных: скорост�
 - [Обновление узла](configure-and-operate/operations/upgrade.md)
 - [Повышение роли узла](configure-and-operate/operations/ha-promote.md)
 - [Чтение с реплики](configure-and-operate/operations/replica-reads.md)
+- [Несколько ЦОД](configure-and-operate/operations/multi-dc.md)
+- [HA под нагрузкой](configure-and-operate/operations/cluster-ha-highload.md)
+- [Несколько ЦОД под нагрузкой](configure-and-operate/operations/cluster-multidc-highload.md)
 - [Overlay PIN](configure-and-operate/configuration/overlay-pin.md)
 - [Восстановление на момент времени (PITR)](configure-and-operate/operations/pitr.md)
 

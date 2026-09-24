@@ -24,23 +24,11 @@ Catch-up-only nodes and Witness never serve client SQL.
 | `createStatement` read-only SELECT/EXPLAIN | `readEndpoints` when present | `READ_REPLICA` | v2 ANTLR client route + server admission |
 | `createReadStatement` / `executeRead` | `readEndpoints` | `READ_REPLICA` | explicit API (still supported) |
 
-### FOR UPDATE and distributed peers
+### FOR UPDATE and peer locks
 
-`FOR UPDATE` / `SKIP LOCKED` always run on the **writer** (never a read replica). With
-`DistForUpdatePeerLockAgent`s configured (from `grid.sql.distributed-peers` / Boot wiring),
-indexed wire keys are locked **locally** via `LockAwareKeyCursor` and on **peers** via
-`DistForUpdateCoordinator` (Netty `FOR_UPDATE_LOCK_*`, fail-closed). Autocommit releases
-statement peer leases in `finally`; open-TX leases stay until COMMIT/ROLLBACK.
-Prepare/commit-dec votes (`DistForUpdatePrepareVotes` + Netty `FOR_UPDATE_PREPARE_*` / `COMMIT_DEC`) are product-wired 2PC-lite for peer row locks — not a full XA 2PC. Multi-table / INNER JOIN `FOR UPDATE` locks are supported.
+`FOR UPDATE` / `SKIP LOCKED` always run on the **writer** (never a read replica). Indexed wire keys are locked locally via `LockAwareKeyCursor`. When replication is on and the coordinator has peers, product Boot wiring installs Netty `DistForUpdatePeerLockAgent`s from **replication `peers`** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`), so peers take the same locks through `DistForUpdateCoordinator` (fail-closed on Netty errors). Autocommit releases statement peer leases in `finally`; open-TX leases stay until COMMIT/ROLLBACK. Prepare/commit-dec is product 2PC-lite for peer row locks — not XA. Multi-table / INNER JOIN `FOR UPDATE` is supported.
 
-If `grid.sql.distributed-peers` is empty or unset, locks stay **local** on the writer only.
-
-```yaml
-grid:
-  sql:
-    distributed-peers:
-      - { host: 127.0.0.1, port: 5616 }   # peer agent endpoint as wired
-```
+With replication off or an empty peer list, locks stay **local** on the writer only. There is no separate operational YAML key to list DistForUpdate endpoints.
 
 ### v2 auto-route (recommended)
 

@@ -17,14 +17,14 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.ja
 
 The `capacity` profile listens for SQL on **15432** with `fsync: true` and replication off. From an IDE you can run `org.genfork.grid.sql.SqlServerMain` with the same profile.
 
-Readiness: `http://127.0.0.1:7777/actuator/health/readiness` when Actuator listens on 7777.
+Readiness for the `capacity` profile: `http://127.0.0.1:7778/health/readiness` (starter sets Actuator `server.port` to **7778** and `base-path: /`).
 
 ## First client
 
 URL:
 
 ```
-grid://@127.0.0.1:15432/public
+grid://grid:grid@127.0.0.1:15432/public
 ```
 
 Use `RemoteConnectionFactory` from `grid-sql-client`, or the [SQL CLI](../tools/sql-cli.md) for one-off statements.
@@ -56,7 +56,7 @@ Ports: SQL **15432** / **15433**, replication **5615** / **5616**. Multi-host UR
 
 | Symptom | Check |
 |---------|-------|
-| Port in use, bind failed | Another process on **15432**, or Actuator on **7777** |
+| Port in use, bind failed | Another process on **15432**, or Actuator on **7778** (capacity) |
 | Readiness DOWN | With replication, wait for ORCHID sync; otherwise read the startup logs |
 | Client reports `bad frameLen` | You connected to a replication port (**5615** / **5616**) instead of SQL |
 | AUTH or connect rejected | `capacity` starts with no users — use a URL without `user:pass`, or create a user first |

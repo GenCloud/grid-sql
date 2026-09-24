@@ -17,7 +17,7 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 | SYNC_VOTERS register | PASS (:valid? true) |
 | SYNC_VOTERS append | PASS (:valid? true) |
 | chaos | ASYNC: full dc-link+kill-voter+kill-dc-a; SYNC: dc-link+kill-voter (register conc=1 for Knossos) |
-| multi-host SQL | `grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public` |
+| multi-host SQL | `grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public` |
 | notes | Post residual wave; twin 1-DC `2026-09-22-residuals-gates-jepsen-1dc`; time-limit=30; harness: mid-op connect=info for mutations; no floor weaken |
 
 ## History

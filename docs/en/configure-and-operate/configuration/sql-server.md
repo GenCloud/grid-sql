@@ -26,7 +26,7 @@ grid:
 | `grid.sql-server.enabled` | `false` | Bind the SQL TCP listener |
 | `grid.sql-server.host` | `0.0.0.0` | Bind address; restrict it when the host is multi-homed |
 | `grid.sql-server.port` | `15432` | SQL port |
-| `grid.sql-server.user` / `password` | `""` | Static channel credentials used while the user catalog is empty |
+| `grid.sql-server.user` / `password` | `grid` / `grid` | Bootstrap master credentials; when the user catalog is empty they are seeded as administrator (full power). Blank both → open-auth (no seed) |
 | `grid.sql.default-shards` | `4` | Shard count for tables created without an explicit clause |
 | `grid.sql.data-dir` | `./data/catalog` | Catalog root; `catalog/privileges.meta` lives under it |
 | `grid.sql.lock-wait-timeout-ms` | `8000` | Record-lock wait ceiling before `lock wait timeout` |
@@ -34,6 +34,10 @@ grid:
 | `grid.sql.catalog-meta-cache-size` | `256` | Catalog metadata cache entries |
 | `grid.sql.timezone` | `UTC` | Default session time zone |
 | `grid.sql.recursive-cte-max-depth` | `32` | Recursion ceiling for recursive common table expressions |
+
+`FOR UPDATE` peer locks (when replication is on) use Netty agents built from **replication `peers`**, not from `grid.sql.distributed-peers` — see [replica reads](../operations/replica-reads.md).
+
+`grid.sql.distributed-peers` is a different knob: it enables **read-only SELECT/JOIN fan-out** to remote SQL peers (`DistributedKeyFanOut` in the query executor). Empty list = local-only queries. It does **not** install Dist FOR UPDATE lock agents.
 
 Pick `default-shards` for the largest tables you expect: it sets shard parallelism and cannot be changed for an existing table without recreating it. Eight to sixteen shards is a reasonable starting range on a multi-core host.
 
@@ -43,7 +47,8 @@ Pick `default-shards` for the largest tables you expect: it sets shard paralleli
 |-----:|----------|---------|
 | 15432 | SQL frames (`grid://`, `jdbc:grid://`) | Applications, DBeaver, load tools |
 | 5615 and up | Replication Netty | Nodes only |
-| 7777 (starter default) | Actuator HTTP | Orchestrator probes, scrapes |
+| 7777 (starter primary default) | Actuator HTTP | Orchestrator probes, scrapes |
+| 7778 (starter `replica` and `capacity`) | Actuator HTTP | Same, on replica or capacity process |
 
 A SQL client pointed at a replication port fails frame decoding with `bad frameLen`. When you co-locate several nodes on one host, give each its own SQL port, its own replication port, and its own Actuator `server.port`.
 
@@ -74,7 +79,7 @@ The AUTH frame establishes channel identity only. It does not arbitrate commits:
 
 | Catalog state | Behaviour |
 |---------------|-----------|
-| No users defined | Any credentials are accepted unless `grid.sql-server.user` / `password` are set; the first `CREATE USER` becomes administrator |
+| No users defined | Server seeds master from `grid.sql-server.user`/`password` (defaults `grid`/`grid`) with absolute privileges on all schemas/tables; blank both keeps open-auth |
 | Users defined | Credentials are required in the URL; frames without AUTH are rejected with `not authenticated` |
 
 Restrict network access to the SQL port before the first `CREATE USER` — see [security](../operations/security.md).
@@ -87,13 +92,13 @@ Restrict network access to the SQL port before the first `CREATE USER` — see [
 4. Connect and run a trivial statement:
 
 ```text
-grid://@127.0.0.1:15432/public
+grid://grid:grid@127.0.0.1:15432/public
 SELECT 1;
 ```
 
 See [SQL CLI](../../tools/sql-cli.md) for the interactive client.
 
-5. Create the first user, grant the application account, and switch clients to credentialled URLs.
+5. Optionally create application users and grant them narrowly; change the master password in production.
 6. Only then point application or load traffic at the node.
 
 ## Running without Spring Boot

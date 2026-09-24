@@ -17,7 +17,7 @@ Docs: [cluster-multidc-highload.md](../../../docs/en/cluster-multidc-highload.md
 
 | Audience | URL | Why |
 |----------|-----|-----|
-| **Jepsen harness** (control) | `grid://@a1:15432,a2:15433,a3:15434,b1:15435/public` | Discovers sticky via wire `ServerMeta`; may include a Hold endpoint for reconnect after claim |
+| **Jepsen harness** (control) | `grid://grid:grid@a1:15432,a2:15433,a3:15434,b1:15435/public` | Discovers sticky via wire `ServerMeta`; may include a Hold endpoint for reconnect after claim |
 | **Prod write (region fencing off)** | `grid://u:p@a1:15432,a2:15433,a3:15434/public?...` | Active DC ring only |
 | **Prod write (region fencing on)** | `grid://u:p@a1:15432,a2:15433,a3:15434,b1:15435,b2:15436/public?...` | Dual-DC authority; pin on `writerEligible && regionEpoch` |
 

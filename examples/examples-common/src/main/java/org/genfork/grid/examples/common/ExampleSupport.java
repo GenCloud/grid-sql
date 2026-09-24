@@ -46,7 +46,7 @@ public final class ExampleSupport {
 	public static final String ENV_GRID_URL = "GRID_URL";
 
 	/** Solo / primary SQL port (capacity or primary profile). */
-	public static final String DEFAULT_URL = "grid://@127.0.0.1:15432/public";
+	public static final String DEFAULT_URL = "grid://grid:grid@127.0.0.1:15432/public";
 
 	/**
 	 * Product-path URL: optional preheat via {@link ConnectionFactory#warmup()}.
@@ -60,14 +60,14 @@ public final class ExampleSupport {
 	 * ({@code readPreference=REPLICA}).
 	 */
 	public static final String DEFAULT_REPLICA_URL =
-			"grid://@127.0.0.1:15432/public"
+			"grid://grid:grid@127.0.0.1:15432/public"
 					+ "?readEndpoints=127.0.0.1:15433&readPreference=REPLICA&warmup=true";
 
 	/**
 	 * Multi-host writer candidate list (1dc-n2 / primary+replica). Sticky, not LB.
 	 */
 	public static final String DEFAULT_HA_URL =
-			"grid://@127.0.0.1:15432,127.0.0.1:15433/public?warmup=true&retryMode=FIXED&maxRetries=2";
+			"grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public?warmup=true&retryMode=FIXED&maxRetries=2";
 
 	/** Default JDBC tooling URL ({@code jdbc:grid://…}). */
 	public static final String DEFAULT_JDBC_URL = toJdbcUrl(DEFAULT_WARMUP_URL);

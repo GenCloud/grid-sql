@@ -8,7 +8,7 @@ cd examples\compose\1dc-n2
 docker compose --env-file env\mid.env up -d
 ```
 
-Writer: `grid://@127.0.0.1:15432/public`  
+Writer: `grid://grid:grid@127.0.0.1:15432/public`  
 С репликой: `?readEndpoints=127.0.0.1:15433`
 
 EN: [README.md](README.md)

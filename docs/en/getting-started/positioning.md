@@ -58,7 +58,7 @@ Applications use `grid://` with `ConnectionFactory`, or JDBC with `jdbc:grid://`
 
 See [Java client](../develop/java-client.md), [connect clients](connect-clients.md), [features](features.md).
 
-## What Grid does not promise
+## What Grid leaves outside the product
 
 - Two writers at once and merging their journals.
 - A shared `dataDir` on NFS/SAN for the whole cluster — the directory belongs to one node.

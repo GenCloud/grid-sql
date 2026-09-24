@@ -18,6 +18,7 @@ package index.sql;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
+import org.genfork.grid.sql.SqlSession;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -112,5 +113,37 @@ class SqlInformationSchemaTest {
 		final SqlResult r = engine.execute("select v from mixed_case_kw where id = 1");
 		assertEquals(1, r.rows().size());
 		assertEquals(42, ((Number) r.rows().getFirst()[0]).intValue());
+	}
+
+	@Test
+	void countStarOverSchemata() {
+		final SqlResult all = engine.execute("SELECT COUNT(*) FROM information_schema.schemata");
+		assertEquals(1, all.rows().size());
+		assertTrue(((Number) all.rows().getFirst()[0]).doubleValue() >= 1.0d);
+		final SqlResult pub = engine.execute(
+				"SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'public'");
+		assertEquals(1, pub.rows().size());
+		assertEquals(1.0d, ((Number) pub.rows().getFirst()[0]).doubleValue(), 0.001);
+	}
+
+	@Test
+	void usersRolesViewsWhenPrivilegesConfigured() {
+		engine.execute("CREATE USER alice PASSWORD 'secret'");
+		final SqlSession admin = engine.newSession("alice", true);
+		engine.execute(admin, "CREATE ROLE readers");
+		engine.execute(admin, "GRANT ROLE readers TO alice");
+		engine.execute(admin, "GRANT SELECT ON TABLE t TO alice");
+		final SqlResult users = engine.execute(admin, "SELECT user_name FROM information_schema.users");
+		assertEquals(1, users.rows().size());
+		assertEquals("alice", String.valueOf(users.rows().getFirst()[0]));
+		final SqlResult roles = engine.execute(admin, "SELECT role_name FROM information_schema.roles");
+		assertEquals(1, roles.rows().size());
+		assertEquals("readers", String.valueOf(roles.rows().getFirst()[0]));
+		final SqlResult members = engine.execute(admin,
+				"SELECT user_name, role_name FROM information_schema.role_members");
+		assertEquals(1, members.rows().size());
+		final SqlResult grants = engine.execute(admin,
+				"SELECT privilege_type FROM information_schema.table_privileges WHERE grantee = 'alice'");
+		assertTrue(grants.rows().size() >= 1);
 	}
 }

@@ -28,7 +28,11 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.spec.InvalidKeySpecException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -60,6 +64,7 @@ public final class PrivilegeCatalog {
 	private static final int KDF_PBKDF2 = 2;
 	private static final String WILDCARD = "*";
 	private static final String KEY_SEPARATOR = "\0";
+	private static final int GRANT_KEY_PARTS = 3;
 	private static final int SNAPSHOT_MAGIC = 0x50524956;
 	private static final int SNAPSHOT_VERSION_LEGACY = 1;
 	private static final int SNAPSHOT_VERSION_V2 = 2;
@@ -106,12 +111,39 @@ public final class PrivilegeCatalog {
 				throw new IllegalStateException("User already exists: " + normalized);
 			}
 			if (administrator) {
-				grants.computeIfAbsent(
-								key(normalized, WILDCARD, WILDCARD),
-								ignored -> ConcurrentHashMap.newKeySet())
-						.addAll(EnumSet.of(SqlPrivilege.DDL));
+				grantAllStarStarLocked(normalized);
 			}
 		});
+	}
+
+	/**
+	 * Bootstrap / config master: ensure {@code user} exists as administrator with full {@code *.*}
+	 * grants and the given password (config is source of truth on start).
+	 */
+	public void ensureMasterAdministrator(String user, String password) {
+		final String normalized = normalize(user);
+		if (normalized.isEmpty() || password == null) {
+			throw new IllegalArgumentException("user and password required");
+		}
+		mutateAndPersist(() -> {
+			final byte[] salt = new byte[SALT_BYTES];
+			random.nextBytes(salt);
+			final byte[] hash = hashPbkdf2(password, salt);
+			final UserRecord existing = users.get(normalized);
+			if (existing == null) {
+				users.put(normalized, new UserRecord(salt, hash, true, KDF_PBKDF2));
+			} else {
+				users.put(normalized, new UserRecord(salt, hash, true, KDF_PBKDF2));
+			}
+			grantAllStarStarLocked(normalized);
+		});
+	}
+
+	private void grantAllStarStarLocked(String normalizedUser) {
+		grants.computeIfAbsent(
+						key(normalizedUser, WILDCARD, WILDCARD),
+						ignored -> ConcurrentHashMap.newKeySet())
+				.addAll(EnumSet.allOf(SqlPrivilege.class));
 	}
 
 	/**
@@ -223,6 +255,112 @@ public final class PrivilegeCatalog {
 		return record != null && record.administrator();
 	}
 
+	/**
+	 * First administrator user name, or {@code null} if none (open catalog / no admin bit).
+	 */
+	public String firstAdministrator() {
+		for (String name : userNames()) {
+			if (isAdministrator(name)) {
+				return name;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Snapshot of user names (no password material). Sorted for stable tooling output.
+	 */
+	public List<String> userNames() {
+		final List<String> names = new ArrayList<>(users.keySet());
+		Collections.sort(names);
+		return List.copyOf(names);
+	}
+
+	/**
+	 * Snapshot of role names. Sorted for stable tooling output.
+	 */
+	public List<String> roleNames() {
+		final List<String> names = new ArrayList<>(roles);
+		Collections.sort(names);
+		return List.copyOf(names);
+	}
+
+	/**
+	 * User → role memberships for information_schema / JDBC tooling.
+	 */
+	public List<RoleMembership> roleMemberships() {
+		final List<RoleMembership> out = new ArrayList<>();
+		for (Map.Entry<String, Set<String>> entry : memberships.entrySet()) {
+			final String user = entry.getKey();
+			final List<String> assigned = new ArrayList<>(entry.getValue());
+			Collections.sort(assigned);
+			for (String role : assigned) {
+				out.add(new RoleMembership(user, role));
+			}
+		}
+		out.sort(Comparator.comparing(RoleMembership::user).thenComparing(RoleMembership::role));
+		return List.copyOf(out);
+	}
+
+	/**
+	 * Table-level grants for users and roles (no password hashes).
+	 */
+	public List<TableGrant> tableGrants() {
+		final List<TableGrant> out = new ArrayList<>();
+		appendTableGrants(out, grants, false);
+		appendTableGrants(out, roleGrants, true);
+		out.sort(Comparator
+				.comparing(TableGrant::grantee)
+				.thenComparing(TableGrant::schemaName)
+				.thenComparing(TableGrant::tableName)
+				.thenComparing(TableGrant::privilege));
+		return List.copyOf(out);
+	}
+
+	private static void appendTableGrants(
+			List<TableGrant> out,
+			Map<String, Set<SqlPrivilege>> source,
+			boolean roleGrantee
+	) {
+		for (Map.Entry<String, Set<SqlPrivilege>> entry : source.entrySet()) {
+			final String[] parts = entry.getKey().split(KEY_SEPARATOR, -1);
+			if (parts.length != GRANT_KEY_PARTS) {
+				continue;
+			}
+			final List<SqlPrivilege> privs = new ArrayList<>(entry.getValue());
+			privs.sort(Comparator.comparing(Enum::name));
+			for (SqlPrivilege privilege : privs) {
+				out.add(new TableGrant(parts[0], parts[1], parts[2], privilege.name(), roleGrantee));
+			}
+		}
+	}
+
+	/**
+	 * User or role membership row.
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/09
+	 * @since: 1.0
+	 */
+	public record RoleMembership(String user, String role) {
+	}
+
+	/**
+	 * Schema/table privilege grant for tooling views.
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/09
+	 * @since: 1.0
+	 */
+	public record TableGrant(
+			String grantee,
+			String schemaName,
+			String tableName,
+			String privilege,
+			boolean roleGrantee
+	) {
+	}
+
 	public void grant(String user, String schema, String table, Set<SqlPrivilege> privileges) {
 		final String normalized = normalize(user);
 		mutateAndPersist(() -> {
@@ -244,7 +382,8 @@ public final class PrivilegeCatalog {
 	}
 
 	public void ensure(String user, String schema, String table, SqlPrivilege privilege) {
-		if (isOpen() || has(user, schema, table, privilege) || has(user, schema, WILDCARD, privilege)
+		if (isOpen() || isAdministrator(user)
+				|| has(user, schema, table, privilege) || has(user, schema, WILDCARD, privilege)
 				|| has(user, WILDCARD, WILDCARD, privilege)) {
 			return;
 		}

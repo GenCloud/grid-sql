@@ -20,8 +20,9 @@ PITR — про сохранность и откат, не про TPS. Не ос
 ## Короткий сценарий инцидента
 
 1. **Инцидент.** Остановить узел; не писать в повреждённый `dataDir`.
-2. **Офлайн-восстановление.** Пустой `dataDir` → установить base → `PitrRestoreMain --until-seq T` → replay архива `[W+1 … T]`.
-3. **Вернуть в кластер.** Поднять узел; догонять реплики. При Multi-DC учитывать `regionEpoch`.
+2. **Base.** Иметь (или установить) sealed base на watermark `W ≤ T` через `SealedBaseBackupUtil` — см. [резервное копирование](backup-restore.md).
+3. **Офлайн-восстановление.** Пустой `dataDir` → установить base → `PitrRestoreMain --until-seq T` → replay архива `[W+1 … T]`.
+4. **Вернуть в кластер.** Поднять узел; догонять реплики. При Multi-DC учитывать `regionEpoch`.
 
 ```mermaid
 flowchart LR
@@ -45,7 +46,7 @@ flowchart LR
 | Состояние | После restore |
 |-----------|----------------|
 | Открытые (dirty) транзакции до COMMIT | Нет — их не было в OpLog |
-| RAM working set | Пересоберётся (LAZY/FULL hydrate) |
+| Рабочий набор в RAM | Пересоберётся (LAZY/FULL hydrate) |
 | Чужой `cluster-id` / чужой epoch | Узел не «подменит» пиров сам — нужна правильная конфигурация |
 
 ## Настройки

@@ -33,6 +33,9 @@ Russian mirror: [`docs/ru/`](ru/README-ru.md). Same page layout in both language
 - [Upgrade a node](en/configure-and-operate/operations/upgrade.md)
 - [Promote a node](en/configure-and-operate/operations/ha-promote.md)
 - [Replica reads](en/configure-and-operate/operations/replica-reads.md)
+- [Multi-site](en/configure-and-operate/operations/multi-dc.md)
+- [HA under load](en/configure-and-operate/operations/cluster-ha-highload.md)
+- [Multi-site under load](en/configure-and-operate/operations/cluster-multidc-highload.md)
 - [Overlay PIN](en/configure-and-operate/configuration/overlay-pin.md)
 - [Point-in-time recovery (PITR)](en/configure-and-operate/operations/pitr.md)
 

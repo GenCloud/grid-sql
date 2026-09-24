@@ -2,6 +2,14 @@
 
 Правила, которые делают работу Grid предсказуемой: размещение данных на диске, доступ, восстановление, мониторинг, схема и работа клиентов. Тот же материал в виде контрольного списка перед вводом в эксплуатацию — в [чек-листе](production-checklist.md).
 
+## Порядок на запуске
+
+1. Настройте пробы Actuator **liveness** и **readiness** (`/health/*` в starter) — трафик только после readiness UP ([мониторинг](../configure-and-operate/monitoring.md)).
+2. Ограничьте SQL-порт, создайте первого администратора, выдайте `GRANT` приложениям ([безопасность](../configure-and-operate/operations/security.md)).
+3. Убедитесь, что клиенты закрепляются на `writerEligible` и обрабатывают `PROMOTE_NOTIFY` / `rediscoverWriter()` ([повышение роли](../configure-and-operate/operations/ha-promote.md)).
+4. Включите `oplog-archive`, снимите base, отработайте офлайн-restore ([PITR](../configure-and-operate/operations/pitr.md), [резервное копирование](../configure-and-operate/operations/backup-restore.md)).
+5. Перед вводом в эксплуатацию прогоните drill повышения роли на стенде ([отказы](../configure-and-operate/operations/failures.md)).
+
 ## Эксплуатация
 
 - **Отдельный `dataDir` на каждый узел**, на локальном диске. Общий каталог или том NFS/SAN на весь кластер не поддерживаются.

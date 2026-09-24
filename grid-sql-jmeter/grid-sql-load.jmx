@@ -9,7 +9,7 @@
         <collectionProp name="Arguments.arguments">
           <elementProp name="GRID_URL" elementType="Argument">
             <stringProp name="Argument.name">GRID_URL</stringProp>
-            <stringProp name="Argument.value">${__P(GRID_URL,grid://@127.0.0.1:15432/public)}</stringProp>
+            <stringProp name="Argument.value">${__P(GRID_URL,grid://grid:grid@127.0.0.1:15432/public)}</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
           <elementProp name="USER" elementType="Argument">

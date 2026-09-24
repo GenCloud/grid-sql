@@ -6,13 +6,13 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-09-23-style-refactor-jepsen-1dc-r2 |
-| date | 2026-09-23T23:21:22.9352547+03:00 |
-| git | 8633c43 |
+| stamp | 2026-09-24-jepsen-smoke |
+| date | 2026-09-24T14:33:46.4872316+03:00 |
+| git | eec3953 |
 | host | DESKTOP-4IC511D |
-| mode | `full-jepsen` |
-| outcome | `PASS` |
-| notes | register=PASS; append=PASS |
+| mode | `smoke` |
+| outcome | `HARNESS_READY` |
+| notes | compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows) |
 
 ## History
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
@@ -441,3 +441,23 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - full-jepsen: PASS
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
+
+### 2026-09-24-jepsen-smoke
+- mode: smoke
+- outcome: FAIL
+- git: eec3953
+- compose: invalid
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-09-24-jepsen-smoke
+- mode: smoke
+- outcome: HARNESS_READY
+- git: eec3953
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)

@@ -35,7 +35,7 @@ $env:MULTIDC_MODE = "async"
 $env:JEPSEN_WITNESS = "1"
 $env:MSYS_NO_PATHCONV = "1"
 $env:DOCKER_BUILDKIT = "1"
-$GridUrl = "grid://@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435,127.0.0.1:15437/public"
+$GridUrl = "grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435,127.0.0.1:15437/public"
 $Utf8 = New-Object System.Text.UTF8Encoding $false
 $ControlName = "jamoa-multidc-control"
 function Write-Utf8File([string]$Path, [string]$Content) { [System.IO.File]::WriteAllText($Path, $Content, $Utf8) }

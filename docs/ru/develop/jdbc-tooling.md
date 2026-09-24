@@ -49,15 +49,15 @@ try (Connection c = DriverManager.getConnection(
 }
 ```
 
-Зависимость — тот же артефакт `grid-sql-client` (или fat jar `*-dbeaver.jar` для IDE). Reactive удобнее, когда нужен неблокирующий параллельный обмен на одном event loop; JDBC — когда стек приложения уже sync (Spring JDBC, MyBatis, ручной DAO).
+Зависимость — тот же артефакт `grid-sql-client` (или толстый jar `*-dbeaver.jar` для IDE). Reactive удобнее, когда нужен неблокирующий параллельный обмен на одном event loop; JDBC — когда стек приложения уже sync (Spring JDBC, MyBatis, ручной DAO).
 
-## Runnable-примеры
+## Примеры для запуска
 
 В [`examples/`](../../../examples/): `examples-jdbc-connect`, `examples-jdbc-dml`, `examples-jdbc-tx`, `examples-jdbc-savepoints`, `examples-jdbc-batch`, `examples-jdbc-session`. Тот же SQL-порт, что у reactive-демо; URL через `GRID_URL` → `jdbc:grid://…`. См. [`examples/README.ru.md`](../../../examples/README.ru.md).
 
 ## Требование к JRE
 
-Драйвер и его fat jar собраны под **Java 25** (версия класс-файла 69). Встроенная JRE DBeaver обычно 17 или 21, и тогда при подключении вы увидите:
+Драйвер и его толстый jar собраны под **Java 25** (версия класс-файла 69). Встроенная JRE DBeaver обычно 17 или 21, и тогда при подключении вы увидите:
 
 ```
 GridDriver has been compiled by a more recent version of the Java Runtime
@@ -85,16 +85,16 @@ mvn -pl grid-sql-client -am package -DskipTests
 
 1. **Database → Driver Manager → New**, добавьте jar.
 2. Class name: `org.genfork.grid.jdbc.GridDriver`
-3. URL template / URL: `jdbc:grid://u:p@127.0.0.1:15432/public`
+3. URL template / URL: `jdbc:grid://grid:grid@127.0.0.1:15432/public`
 
 | Поле | Значение |
 |------|----------|
 | Host | `127.0.0.1` |
 | Port | **15432** (реплика — **15433**) |
-| Database / Schema | `public` |
+| Database / Schema | Path после хостов = **схема** (например `public`), не отдельный JDBC catalog |
 | User / Password | Пустой каталог — можно без пароля; после первого `CREATE USER` — те же credentials, что в AUTH (см. [безопасность](../configure-and-operate/operations/security.md)) |
 
-Формат URL тот же, что у `grid://`, только с префиксом `jdbc:`: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. Параметр `?hosts=` не поддерживается — несколько хостов пишутся через запятую в authority.
+Формат URL тот же, что у `grid://`, только с префиксом `jdbc:`: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. Path после хостов — **default schema** (не отдельный database catalog). Параметр `?hosts=` не поддерживается — несколько хостов пишутся через запятую в authority.
 
 Драйвер снимает префикс `jdbc:` и разбирает URL тем же парсером, что reactive-клиент. Точка входа — **`SyncConnectionFactory.fromUrl` / `shared`** (те же product URL semantics, что `ConnectionFactory.fromUrl`): при `readEndpoints` + `readPreference=REPLICA` autocommit SELECT/EXPLAIN уходят в read pool. Наследуются опции `grid://`: `maxTxContexts`, `readEndpoints`, `readPreference`, `fetchWindow`, кольцо хостов для HA. Подробности URL: [подключение клиентов](../getting-started/connect-clients.md).
 
@@ -107,11 +107,16 @@ jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.
 ## Что работает
 
 - Дерево схемы: каталог, таблицы, колонки, индексы.
+- `Connection.getSchema()` отражает schema из path URL (например `…/my_app` → `my_app`).
+- Создание / удаление схем через SQL (`CREATE SCHEMA` / `DROP SCHEMA`; RESTRICT опционален). В Driver Manager DBeaver не включайте «Omit schema(s)».
+- Админ только через SQL — у Custom Driver нет папки «Администрирование» / Manage Users:
+  - `CREATE USER` / `DROP USER` / `GRANT` / `REVOKE`
+  - `SELECT * FROM information_schema.users|roles|role_members|table_privileges`
 - SQL Editor: разовые `SELECT` и DML в пределах упрощённого диалекта.
 - **Многооператорные скрипты** (через `;`): ANTLR `script` → `BATCH_EXEC` (DBeaver script без Bad SQL).
 - Транзакции, в том числе точки сохранения. Параллельные TX = N JDBC `Connection` с одной фабрики (multiplex), не один TX на сокет.
 - Прокручиваемый `ResultSet` и Data Editor — для одиночной таблицы с первичным ключом (materialize для IDE).
-- `Statement.cancel()` отменяет in-flight SyncAwait и шлёт wire `CANCEL`.
+- `Statement.cancel()` отменяет незавершённый SyncAwait и отправляет по протоколу кадр `CANCEL`.
 - `Statement.setQueryTimeout` → бюджет SyncAwait; timezone через `setClientInfo("timezone", …)` / unwrap `SyncConnection`.
 - Unwrap: `SyncConnection`, `ServerMeta`, `SyncConnectionFactory`; `pin` / `unpin` на `GridConnection`.
 - Метаданные колонок приходят из `RowMetadata` / `ROW_DESC`; JDBC-подсказки каталога используются только как запасной путь.

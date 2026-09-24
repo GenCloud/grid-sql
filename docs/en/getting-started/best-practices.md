@@ -2,6 +2,14 @@
 
 Working rules that keep a Grid installation predictable: disk layout, access, recovery, monitoring, schema, and client usage. For a go-live gate in checklist form, see [production checklist](production-checklist.md).
 
+## Bring-up order
+
+1. Wire Actuator **liveness** and **readiness** (`/health/*` on starter) — no traffic until readiness UP ([monitoring](../configure-and-operate/monitoring.md)).
+2. Restrict the SQL port, create the first admin, `GRANT` for apps ([security](../configure-and-operate/operations/security.md)).
+3. Confirm clients pin on `writerEligible` and handle `PROMOTE_NOTIFY` / `rediscoverWriter()` ([promote](../configure-and-operate/operations/ha-promote.md)).
+4. Enable `oplog-archive`, take a base backup, practise offline restore ([PITR](../configure-and-operate/operations/pitr.md), [backup](../configure-and-operate/operations/backup-restore.md)).
+5. Run a promote drill on a stand before go-live ([failures](../configure-and-operate/operations/failures.md)).
+
 ## Operations
 
 - **One `dataDir` per node**, on local disk. A shared directory or an NFS/SAN volume for the cluster is not supported.

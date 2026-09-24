@@ -60,8 +60,18 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 	private static final String SQL_REFERENTIAL_CONSTRAINTS =
 			"SELECT constraint_schema, constraint_name, unique_constraint_schema, unique_constraint_name, "
 					+ "delete_rule, update_rule FROM information_schema.referential_constraints";
+	private static final String SQL_TABLE_PRIVILEGES =
+			"SELECT grantee, table_schema, table_name, privilege_type, is_grantable "
+					+ "FROM information_schema.table_privileges";
 	private static final String CONSTRAINT_PRIMARY = "PRIMARY KEY";
 	private static final String IDENTITY_YES = "YES";
+	private static final String GRANTOR_SYSTEM = "";
+	private static final String IS_GRANTABLE_NO = "NO";
+	/**
+	 * Simplified SQL keywords for Generic JDBC / DBeaver dialect sniffing (comma-separated).
+	 */
+	private static final String SQL_KEYWORDS =
+			"SCHEMA,USER,ROLE,GRANT,REVOKE,IDENTITY,UPSERT,EXPLAIN,ANALYZE,BITMAP";
 
 	private final GridConnection connection;
 
@@ -86,7 +96,7 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 
 	@Override
 	public String getUserName() {
-		return "";
+		return connection.authUser();
 	}
 
 	@Override
@@ -201,7 +211,7 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 
 	@Override
 	public String getSQLKeywords() {
-		return "";
+		return SQL_KEYWORDS;
 	}
 
 	@Override
@@ -416,7 +426,7 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 
 	@Override
 	public boolean supportsSchemasInPrivilegeDefinitions() {
-		return false;
+		return true;
 	}
 
 	@Override
@@ -838,7 +848,29 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 	@Override
 	public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern)
 			throws SQLException {
-		return emptyResult(List.of("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "PRIVILEGE"));
+		final List<Object[]> rows = new ArrayList<>();
+		try (ResultSet rs = connection.createStatement().executeQuery(SQL_TABLE_PRIVILEGES)) {
+			while (rs.next()) {
+				final String schema = rs.getString(2);
+				final String table = rs.getString(3);
+				if (!GridJdbcMetaDataSupport.matchPattern(schemaPattern, schema)) {
+					continue;
+				}
+				if (!GridJdbcMetaDataSupport.matchPattern(tableNamePattern, table)) {
+					continue;
+				}
+				rows.add(new Object[]{
+						CATALOG_NAME,
+						schema,
+						table,
+						GRANTOR_SYSTEM,
+						rs.getString(1),
+						rs.getString(4),
+						rs.getString(5) == null ? IS_GRANTABLE_NO : rs.getString(5)
+				});
+			}
+		}
+		return MetaResultSets.tablePrivileges(connection, rows);
 	}
 
 	@Override

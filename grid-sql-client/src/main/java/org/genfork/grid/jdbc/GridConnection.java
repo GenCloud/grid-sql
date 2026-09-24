@@ -106,6 +106,8 @@ public final class GridConnection implements Connection {
 		}
 		this.spi = remote;
 		this.sync = sync;
+		/* URL path schema is applied on SESSION_OPEN; expose it via JDBC getSchema(). */
+		this.schema = syncFactory.defaultSchema();
 	}
 
 	RemoteConnection spi() throws SQLException {
@@ -115,6 +117,14 @@ public final class GridConnection implements Connection {
 
 	Duration timeout() {
 		return syncFactory.timeout();
+	}
+
+	/**
+	 * AUTH user from the shared Sync factory (may be empty under open-auth).
+	 */
+	String authUser() {
+		final String user = syncFactory.user();
+		return user == null ? "" : user;
 	}
 
 	/**

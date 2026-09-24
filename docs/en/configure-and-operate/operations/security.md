@@ -18,19 +18,24 @@ AUTH is **not** 2PC and does not decide whether a row may commit. Durability: [d
 
 | State | Behaviour |
 |-------|-----------|
-| No users | Passwordless entry; the first `CREATE USER` becomes administrator |
+| No users + configured `grid.sql-server.user`/`password` (defaults `grid`/`grid`) | Runtime seeds that user as **administrator** with absolute rights on all operations and all schemas/tables |
+| No users + both credentials blank | Open-auth (passwordless) until the first `CREATE USER` |
 | Users exist | URL needs credentials; frames without AUTH are rejected |
 
-Typical bootstrap:
+Typical connect after bootstrap:
+
+```text
+jdbc:grid://grid:grid@127.0.0.1:15432/public
+```
+
+Then as master (or after `ALTER USER`):
 
 ```sql
-CREATE USER admin PASSWORD '…';
--- then only as admin
 CREATE USER app PASSWORD '…';
 GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA public TO app;
 ```
 
-Password change: `ALTER USER … PASSWORD` (PBKDF2). Do not store passwords in a shared repository config.
+Password change: `ALTER USER … PASSWORD` (PBKDF2). Do not store production passwords in a shared repository config.
 
 ## What is checked
 
@@ -43,6 +48,8 @@ The client (reactive `grid://` or JDBC `jdbc:grid://`) passes the same credentia
 ## Where the catalog lives
 
 File `privileges.meta` is under the SQL data directory: `{grid.sql.data-dir}/catalog/privileges.meta` (default next to `./data-…/catalog`). Per-node local file, not shared NFS.
+
+**No cluster sync.** Replication does **not** ship `privileges.meta`. `CREATE USER` / `GRANT` / password rotation must be applied on **every** node that apps may hit (or bootstrap identical catalogs and copy the file as part of your node procedure). A user that exists only on the writer will AUTH-fail on a replica SQL port.
 
 ## DDL limits
 

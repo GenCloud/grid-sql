@@ -56,6 +56,12 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 2. **Verify.** Read-your-writes via replica is **not** guaranteed. Check `ha.max-stale-lag` and `readPreference`.
 3. **Escalate.** If the product needs read-your-writes — read from the writer or wait for catch-up; do not “fix” by rotating hosts in the client.
 
+### E. Multi-site: Active silent, Hold must claim
+
+1. **Signal.** Active site quiet longer than `claim-timeout-ms`; writes stall or fail with region / epoch rejects.
+2. **Verify.** Exactly one Hold (plus Witness if configured) gathers claim quorum; `regionEpoch` increments; new Active shows `writerEligible: true`. Witness never accepts DML.
+3. **Escalate.** Clients call `rediscoverWriter()` — do not rotate the next host in the write URL. Two Actives → stop the extra process ([multi-site](multi-dc.md), [promote](ha-promote.md)).
+
 ## Writer loss (one site)
 
 1. Ensure the old process is not writing the same `dataDir`.
