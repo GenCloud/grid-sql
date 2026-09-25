@@ -89,7 +89,7 @@ Mono<Void> partial = Mono.usingWhen(
 
 Locks are taken per record key through `SqlRecordLockManager`: a fair queue on `(table, key)`. Waiting happens on a logic virtual thread, never on the Netty event loop.
 
-`FOR UPDATE` and `SKIP LOCKED` execute **on the writer only** — a read replica rejects such a statement. With peer-lock agents configured, the same indexed wire keys are locked on peers via `DistForUpdateCoordinator` (fail-closed Netty path). Without agents, behaviour stays local-only. Multi-table / INNER JOIN `FOR UPDATE` locks are supported. Prepare/commit-dec peer votes are product-wired — not external XA.
+`FOR UPDATE` and `SKIP LOCKED` execute **on the writer only** — a read replica rejects such a statement. With replication on, peer-lock agents are wired from **replication `peers`** (not `grid.sql.distributed-peers` — that knob is read-only SELECT/JOIN fan-out); the same indexed wire keys are locked on peers via `DistForUpdateCoordinator` (fail-closed Netty path). Without agents, behaviour stays local-only. Multi-table / INNER JOIN `FOR UPDATE` locks are supported. Prepare/commit-dec peer votes are product-wired — not external XA. Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 A typical queue pattern:
 

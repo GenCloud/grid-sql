@@ -57,6 +57,21 @@ curl http://127.0.0.1:7777/health/readiness
 curl http://127.0.0.1:7778/health/readiness
 ```
 
+### Verify and common failures
+
+| Check | Expect |
+|-------|--------|
+| Both readiness probes UP | SQL listening; with replication — ORCHID synced |
+| One `writerEligible: true` | Usually the primary; client meta matches |
+| Smoke write on **15432**, read via `readEndpoints=…:15433` | Row visible after catch-up (`applyLagStale` false) |
+
+| Symptom | Likely cause |
+|---------|--------------|
+| `bad frameLen …` on the client | Client pointed at a **replication** port (5615/5616), not SQL |
+| Second process on the same `dataDir` | Dual writer / torn files — stop the extra process |
+| Readiness DOWN forever | Peers unreachable or ORCHID not synced — check `peers` and Actuator details |
+| AUTH fail on replica after `CREATE USER` on primary only | `privileges.meta` is per-node — [security](../configure-and-operate/operations/security.md) |
+
 ## Single node without replicas
 
 ```mermaid

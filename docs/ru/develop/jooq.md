@@ -18,15 +18,15 @@
 
 ```text
 Приложения / jOOQ / DBeaver
-  └─ GridDataSource  ≡  GridDriver   (один Sync* API)
-       └─ SyncConnectionFactory.shared (intern на URL target)
+  └─ GridDataSource  ≡  GridDriver   (один синхронный API)
+       └─ SyncConnectionFactory.shared (общий на целевой URL)
             └─ RemoteConnectionFactory: минимум TCP-каналов ≥ MIN_TCP_CHANNELS (10)
-                 └─ Connection.close = park; DataSource.close = release retain
+                 └─ Connection.close → канал в пул простоя; DataSource.close → отпустить фабрику
 ```
 
-Лимиты TCP / idle / `maxTxContexts` — **только** в Sync*/`RemoteConnectionFactory`. Отдельного JDBC pool/registry нет. **Не** подменяйте Hikari `maximumPoolSize=N`.
+Лимиты TCP / простоя / `maxTxContexts` задаются только в `SyncConnectionFactory` / `RemoteConnectionFactory` (клиент по умолчанию **256**; серверный потолок канала **8**, Boot не поднимает из YAML). Отдельного пула JDBC нет. **Не** подменяйте Hikari `maximumPoolSize=N`.
 
-`grid-jooq` использует только `javax.sql` / `java.sql` + `GridSQL` / `GridDSL` — без импортов Sync*/Remote*.
+`grid-jooq` использует только `javax.sql` / `java.sql` + `GridSQL` / `GridDSL` — без прямых импортов синхронного фасада и `RemoteConnectionFactory`.
 
 ## Зависимость
 

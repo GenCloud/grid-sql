@@ -3,6 +3,7 @@
 ![Grid](docs/assets/brand/grid-wordmark.svg)
 
 [![CI](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml)
+[![Jepsen QG](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml)
 
 SQL-first in-memory DBMS with durable local storage (OpLog + sealed GridMap) and ORCHID replication. Applications connect over TCP with `grid://` (reactive) or `jdbc:grid://` (stable sync peer).
 
@@ -30,12 +31,24 @@ Step-by-step: [English quick start](docs/en/getting-started/quick-start.md) · [
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) on `push` / `pull_request` to `master`/`main`:
+Two GitHub Actions workflows (never co-run lab load with unit CI on the same host):
 
-1. **Build and test** — `mvn verify` for the reactor except `grid-sql-jmeter` (needs a local Apache JMeter install)
+### Unit CI — [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+
+On `push` / `pull_request` to `master`/`main`:
+
+1. **Build and test** — reactor `mvn package` then `mvn verify` (Surefire unit + IT)
 2. **Package starters** — fat jars for `grid-sql-server-starter` and `grid-sql-jepsen-starter` (uploaded as artifacts)
 
-Lab capacity gates (QG / Jepsen / Multi-DC / JMH / Load) are **not** in CI — run them separately on a calm host.
+JMeter **load** SLO runs still need a local Apache JMeter install on a calm host; they are not part of this workflow.
+
+### Jepsen QG — [`.github/workflows/jepsen-qg.yml`](.github/workflows/jepsen-qg.yml)
+
+Matrix: 1-DC chaos / 1-DC nochao (+ `qg-gate`), Multi-DC async / sync, witness. Runs on `push` to `main`/`master`, nightly schedule, and `workflow_dispatch`. On pull requests — only when labeled `jepsen`.
+
+On GitHub Actions, `qg-gate` Ref B **p95** is **CI_ADVISORY** (p50 still hard); living Ref B / algorithm PASS claims need a calm-host re-stamp. Details: [benchmarks/jepsen/README.md](benchmarks/jepsen/README.md) (§ GitHub Actions).
+
+**Still calm-host only** (not in Actions; run one at a time): JMH compare tracks, Load/JMeter SLO, OSS `run-compare-all`.
 
 ## Minimal config
 
@@ -60,14 +73,14 @@ Full knobs: [durability](docs/en/configure-and-operate/configuration/durability.
 | Reactive | `grid://user:pass@host:15432/public` | Reactor / non-blocking |
 | JDBC | `jdbc:grid://user:pass@host:15432/public` | DataSource / DAO / IDEs |
 
-Schema is SQL DDL (`CREATE TABLE`). One TCP can multiplex many logical sessions (`maxTxContexts`). Details: [connect clients](docs/en/getting-started/connect-clients.md), [JDBC](docs/en/develop/jdbc-tooling.md).
+Schema is SQL DDL (`CREATE TABLE`). One TCP multiplexes many logical sessions: client `maxTxContexts` soft default **256**, server channel hard-cap **8** (Boot does not raise it from YAML). Details: [connect clients](docs/en/getting-started/connect-clients.md), [JDBC](docs/en/develop/jdbc-tooling.md).
 
 ## Modules
 
 | Artifact | Role |
 |----------|------|
 | `grid-commons` | Shared types and wire helpers (JDK-only) |
-| `grid-sql-client` | ConnectionFactory, remote client, JDBC tooling |
+| `grid-sql-client` | ConnectionFactory, remote client, JDBC client |
 | `grid-server-core` | Engine, catalog, store, SQL TCP, replication, Boot auto-config |
 | `grid-sql-server-starter` | Product Boot fat jar |
 | `grid-sql-jepsen-starter` | Lab nodes for consistency checks |

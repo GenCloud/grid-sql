@@ -2,11 +2,11 @@
 
 Стабильный **синхронный** клиент Grid в модуле **`grid-sql-client`**, пакет `org.genfork.grid.jdbc` (FQCN драйвера: `org.genfork.grid.jdbc.GridDriver`). Отдельного модуля `grid-jdbc` нет.
 
-JDBC стоит **наравне** с reactive API (`ConnectionFactory` / Reactor): один протокол (кадры little-endian на SQL-порту), два входа в приложение. Внутри драйвера `GridDriver` и `GridDataSource` делят один `SyncConnectionFactory.shared` на URL target; obtain/park только через Sync* (`obtainStage` + `SyncAwait` / `SyncExecutors`, без `Mono.toFuture`). `JdbcSync` только маппит в `SQLException`. Лимиты TCP — в Sync*/`RemoteConnectionFactory`, без JDBC pool registry. `Connection.close` = park; `DataSource.close` = release retain. Разбор входящих кадров общий для reactive и sync.
+JDBC стоит **наравне** с реактивным API (`ConnectionFactory` / Reactor): один протокол (кадры little-endian на SQL-порту), два входа в приложение. `GridDriver` и `GridDataSource` делят одну фабрику `SyncConnectionFactory.shared` на целевой URL. Получение и возврат канала — через синхронный фасад (`obtainStage` + `SyncAwait` / `SyncExecutors`), без `Mono.toFuture`. `JdbcSync` только переводит ошибки в `SQLException`. Лимиты TCP задаются в `SyncConnectionFactory` / `RemoteConnectionFactory`, отдельного пула JDBC нет. `Connection.close` возвращает канал в пул простоя; `DataSource.close` отпускает удерживаемую фабрику. Разбор входящих кадров общий для реактивного и синхронного путей.
 
 Интеграционные тесты драйвера — в `grid-server-core` (`GridJdbcIT`).
 
-## Когда JDBC / когда reactive
+## Когда JDBC / когда реактивный API
 
 | Сценарий | Использовать |
 |----------|--------------|
@@ -14,9 +14,9 @@ JDBC стоит **наравне** с reactive API (`ConnectionFactory` / Reacto
 | Sync-приложение **без** типов JDBC | `SyncConnectionFactory` + `SyncAwait` (тот же модуль) |
 | Сервис на Reactor / много параллельных запросов без блокировок | Reactive: `ConnectionFactory` + `grid://` |
 | DBeaver / IntelliJ Database, разовый SQL | JDBC (тот же драйвер) |
-| Замер ёмкости / p95 / JMeter | Только `grid://` (reactive) — sync искажает задержки |
+| Замер ёмкости / p95 / JMeter | Только `grid://` (реактивный) — синхронный путь искажает задержки |
 
-## Sync без JDBC
+## Синхронный доступ без JDBC
 
 Если стек синхронный, но `java.sql.*` не нужен, берите Sync-фасад поверх того же `grid://`:
 
@@ -27,12 +27,12 @@ try (SyncConnectionFactory factory = SyncConnectionFactory.fromUrl(
     try {
         long n = c.executeUpdate("UPSERT INTO t (id) VALUES (1)");
     } finally {
-        c.close(); // park канала в пул простоя
+        c.close(); // вернуть канал в пул простоя
     }
 }
 ```
 
-`fromUrl` разделяет семантику URL с `ConnectionFactory.fromUrl` (включая `readEndpoints`). Ожидание obtain идёт через `RemoteConnectionFactory.obtainStage()` и `SyncAwait` — никогда `Mono.toFuture`. При остановке закройте фабрику (`AutoCloseable`). Reactive-путь: [Java-клиент](java-client.md).
+`fromUrl` разделяет правила URL с `ConnectionFactory.fromUrl` (включая `readEndpoints`). Ожидание канала — через `RemoteConnectionFactory.obtainStage()` и `SyncAwait`, никогда `Mono.toFuture`. При остановке закройте фабрику (`AutoCloseable`). Реактивный путь: [Java-клиент](java-client.md).
 
 ## Пример в сервисе
 
@@ -53,7 +53,7 @@ try (Connection c = DriverManager.getConnection(
 
 ## Примеры для запуска
 
-В [`examples/`](../../../examples/): `examples-jdbc-connect`, `examples-jdbc-dml`, `examples-jdbc-tx`, `examples-jdbc-savepoints`, `examples-jdbc-batch`, `examples-jdbc-session`. Тот же SQL-порт, что у reactive-демо; URL через `GRID_URL` → `jdbc:grid://…`. См. [`examples/README.ru.md`](../../../examples/README.ru.md).
+В [`examples/`](../../../examples/): `examples-jdbc-connect`, `examples-jdbc-dml`, `examples-jdbc-tx`, `examples-jdbc-savepoints`, `examples-jdbc-batch`, `examples-jdbc-session`. Тот же SQL-порт, что у реактивных демо; URL через `GRID_URL` → `jdbc:grid://…`. См. [`examples/README.ru.md`](../../../examples/README.ru.md).
 
 ## Требование к JRE
 
@@ -96,7 +96,7 @@ mvn -pl grid-sql-client -am package -DskipTests
 
 Формат URL тот же, что у `grid://`, только с префиксом `jdbc:`: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. Path после хостов — **default schema** (не отдельный database catalog). Параметр `?hosts=` не поддерживается — несколько хостов пишутся через запятую в authority.
 
-Драйвер снимает префикс `jdbc:` и разбирает URL тем же парсером, что и реактивный клиент. Точка входа — **`SyncConnectionFactory.fromUrl` / `shared`** (те же правила URL продукта, что у `ConnectionFactory.fromUrl`): при `readEndpoints` + `readPreference=REPLICA` autocommit SELECT/EXPLAIN уходят в пул чтения. Наследуются опции `grid://`: `maxTxContexts`, `readEndpoints`, `readPreference`, `fetchWindow`, кольцо хостов для HA. Подробности URL: [подключение клиентов](../getting-started/connect-clients.md).
+Драйвер снимает префикс `jdbc:` и разбирает URL тем же парсером, что и реактивный клиент. Точка входа — **`SyncConnectionFactory.fromUrl` / `shared`** (те же правила URL, что у `ConnectionFactory.fromUrl`): при `readEndpoints` + `readPreference=REPLICA` autocommit SELECT/EXPLAIN уходят на каналы к репликам. Наследуются опции `grid://`: `maxTxContexts` (у клиента по умолчанию **256**; на сервере жёсткий потолок канала **8**, Boot не поднимает из YAML), `readEndpoints`, `readPreference`, `fetchWindow`, кольцо хостов для HA. Подробности URL: [подключение клиентов](../getting-started/connect-clients.md).
 
 Пример replica URL:
 

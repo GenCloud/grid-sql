@@ -119,6 +119,18 @@ Build alerts on the fields above rather than on invented thresholds.
 | `rpo_estimate_ms` climbing with no known network event | Growing cross-site loss window | Ticket |
 | `lock.wait_timeouts` rising | Transaction contention reaching clients as errors | Ticket |
 
+## Typical signals
+
+| Signal | Meaning | First steps |
+|--------|---------|-------------|
+| Readiness DOWN | SQL not listening yet, or ORCHID not synced | Check probe details (`orchidSynced`), start logs; do not send traffic |
+| `orchid_r` below threshold | No write admission | Check peer network, `peers` list, digest load — [replication](configuration/replication.md) |
+| `applyLagStale: true` | Replica too far behind for reads | Do not read from it; catch-up / repair; threshold `ha.max-stale-lag` |
+| Rising OpLog lag | Catch-up between nodes cannot keep up | Network, Applier disk, write load; seq on both. `/replication/compare` is lab-only, not day-to-day HA |
+| `writerEligible: false` after promote | Client still on the old writer | Wait for `PROMOTE_NOTIFY` or `rediscoverWriter()` — [promote](operations/ha-promote.md) |
+| Reject on `regionEpoch` | Client on a stale site epoch | `rediscoverWriter()`, do not rotate the next URL host |
+| `repair_issued` rising, `repair_applied` flat | Catch-up is not applying | HomologousRepair logs, disk, seq mismatch |
+
 ## Verification after a writer hand-off
 
 1. On the intended writer, readiness is UP and `writerEligible: true`.
@@ -137,6 +149,10 @@ Procedure: [role promotion](operations/ha-promote.md). Topologies: [single-site 
 | Actuator health and Micrometer | Orchestrator probes, dashboards, alerts |
 | `GET /replication/compare` | Lag comparison between two nodes on a test stand. Not writer discovery, not an operational consistency check |
 
-Incident procedures: [failures](operations/failures.md). Throughput planning figures: [capacity](../performance/capacity-slo.md).
+Incident procedures: [failures](operations/failures.md).
+
+## Capacity planning
+
+Lab-host TPS figures: [capacity](../performance/capacity-slo.md). How to drive load with JMeter: [load and SLO](../tools/jmeter-load-slo.md). On duty, lean on readiness and the signals above — not on TPS numbers.
 
 **Related:** [failures](operations/failures.md), [role promotion](operations/ha-promote.md), [replication](configuration/replication.md), [durability](configuration/durability.md).

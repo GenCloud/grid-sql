@@ -2,7 +2,7 @@
 
 Restore a node to logical ORCHID seq `T` from a sealed **base** and an OpLog archive.
 
-PITR is about durability and rollback, not TPS. Do not weaken ORCHID, fsync, or living planning numbers for a “faster” backup.
+PITR is about durability and rollback, not TPS. Do not weaken ORCHID, fsync, or capacity planning floors for a “faster” backup.
 
 ## Schedule before an incident
 

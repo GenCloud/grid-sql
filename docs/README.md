@@ -16,10 +16,11 @@ Russian mirror: [`docs/ru/`](ru/README-ru.md). Same page layout in both language
 ### Developers
 
 - [Java client](en/develop/java-client.md)
+- [JDBC client](en/develop/jdbc-tooling.md) (incl. sync without JDBC)
+- [jOOQ DSL](en/develop/jooq.md)
 - [Runnable examples](../examples/README.md)
 - [SQL](en/sql/fundamentals.md)
 - [Transactions](en/develop/transactions.md)
-- [jOOQ DSL](en/develop/jooq.md)
 - [Features](en/getting-started/features.md)
 
 ### Operations

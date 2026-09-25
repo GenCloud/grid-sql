@@ -71,7 +71,7 @@ grid://u:p@n1:15432,n2:15433,n3:15434/public?connectTimeoutMs=1000&retryMode=FIX
 | Application + Jepsen discovery | `PROMOTE_NOTIFY` updates active pinned writer metadata; AUTH / ERROR poll the same `ServerMeta` on reconnect |
 | Orchid / stale / region fence | Do **not** rotate the pinned writer mid-history. Call `rediscoverWriter()` when the old pin loses `writerEligible` or `regionEpoch` mismatches |
 
-`maxTxContexts` limits logical sessions on **one** TCP — not N sockets / Hikari-style pools.
+`maxTxContexts` limits logical sessions on **one** TCP — client URL default **256**, server channel hard-cap **8** (Boot does not raise it from YAML). Not N sockets / Hikari-style pools.
 
 ### Multi-DC
 

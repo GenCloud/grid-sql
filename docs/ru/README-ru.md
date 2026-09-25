@@ -16,10 +16,11 @@ Grid — распределённая SQL-база данных: скорост�
 ### Разработчикам
 
 - [Java-клиент](develop/java-client.md)
+- [JDBC-клиент](develop/jdbc-tooling.md) (в т.ч. синхронный доступ без JDBC)
+- [jOOQ DSL](develop/jooq.md)
 - [Примеры для запуска](../../examples/README.ru.md)
 - [SQL](sql/fundamentals.md)
 - [Транзакции](develop/transactions.md)
-- [jOOQ DSL](develop/jooq.md)
 - [Возможности](getting-started/features.md)
 
 ### Эксплуатация

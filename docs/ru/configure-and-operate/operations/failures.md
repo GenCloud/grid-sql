@@ -1,6 +1,8 @@
 # Отказы и типовые инциденты
 
-Сценарии для дежурства: симптом → действие → куда читать. Это рабочий справочник, не заявление «кластер готов».
+Симптом → действие → куда читать. Это справочник дежурства, не заявление «кластер готов».
+
+Почему отказ лучше «пройти как-нибудь»: при записи на диск Grid предпочитает отдать ошибку клиенту, чем оставить два расходящихся журнала или строку «в памяти есть, на диске нет». Отсюда же запрет отключать `fsync` «чтобы ошибок не было» и запрет крутить следующий host в URL вместо `rediscoverWriter()`.
 
 Перед трафиком всегда смотрите Actuator readiness: [мониторинг](../monitoring.md).
 
@@ -8,9 +10,9 @@
 
 | Фаза | Что сделать |
 |------|-------------|
-| До | Readiness UP; известен текущий writer; archive PITR включён, если нужен откат; сеть SQL (**15432**) отделена от репликации (**5615**) |
+| До | Readiness UP; известен текущий пишущий; archive PITR включён, если нужен откат; сеть SQL (**15432**) отделена от репликации (**5615**) |
 | Во время | Не писать в чужой/`битый` `dataDir`; не крутить следующий host в URL; не отключать `fsync` «чтобы прошло» |
-| После | Новый writer: `writerEligible` + совпадение меты клиента; реплики догнали; при Multi-DC — один Active и актуальный `regionEpoch` |
+| После | Новый пишущий: `writerEligible` + совпадение меты клиента; реплики догнали; при Multi-DC — один Active и актуальный `regionEpoch` |
 
 Метрики в первую очередь: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, `rpoEstimateMs` — [мониторинг](../monitoring.md).
 
@@ -20,13 +22,14 @@
 |---------|-------------|-----------|
 | Узел не отвечает / процесс умер | Не писать в чужой `dataDir`. Поднять тот же каталог или восстановить по PITR. Клиент — `rediscoverWriter()`, не следующий host в URL | [повышение роли](ha-promote.md), [PITR](pitr.md) |
 | `readiness` DOWN при старте с репликацией | Дождаться ORCHID sync; не слать нагрузку. Смотреть `orchidSynced`, `reason`, `orchid_r` | [мониторинг](../monitoring.md), [ORCHID](../../understand/orchid-consensus.md) |
-| Запись отклонена (`OrchidNotSyncedException` / нет допуска) | Проверить peers, сеть, порог `R`, диск/`fsync`. Не отключать fsync ради TPS | [репликация](../configuration/replication.md) |
+| Запись отклонена (`OrchidNotSyncedException` / нет допуска) | Проверить соседние узлы, сеть, порог `R`, диск/`fsync`. Не отключать fsync ради TPS — лучше отказ, чем два журнала | [репликация](../configuration/replication.md) |
 | Диск полный / OpLog не пишет | Освободить место; проверить `op-log` и archive. Сбой archive отменяет truncate — это защита | [долговременное хранение](../configuration/durability.md), [PITR](pitr.md) |
 | Клиент пишет на «старый» writer после переключения | Ждать `PROMOTE_NOTIFY` или вызвать `rediscoverWriter()`. Не крутить round-robin хостов | [повышение роли](ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | Один Active; Hold/Witness не в URL записи. Переподключить через rediscover | [несколько ЦОД](multi-dc.md) |
 | Падение Active-ЦОД (`ASYNC_SHIP`) | Возможен RPO на Hold в пределах отставания. Новый Active через claim; клиент — rediscover | [несколько ЦОД](multi-dc.md) |
 | Падение Active-ЦОД (`SYNC_VOTERS`) | Свежие коммиты с кворумом уже на voters. Тот же claim + rediscover; цена — WAN на каждую запись | [несколько ЦОД](multi-dc.md) |
 | Чтение с реплики отклонено / `applyLagStale` | Не «лечить» клиентом. Сначала подтягивание; порог `ha.max-stale-lag` | [чтение с реплики](replica-reads.md) |
+| AUTH fail на реплике после `CREATE USER` только на writer | `privileges.meta` на каждом узле; репликация не доставляет — применяйте на каждом SQL-узле | [безопасность](security.md) |
 | `repair_issued` растёт, `repair_applied` нет | Логи HomologousRepair, диск, seq на пирах; не общий NFS `dataDir` | [мониторинг](../monitoring.md), [состояние репликации](../../understand/replication-state.md) |
 | После restore «пропали» открытые TX | Ожидаемо: dirty до COMMIT не в OpLog | [PITR](pitr.md) |
 

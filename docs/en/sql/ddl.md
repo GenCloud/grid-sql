@@ -230,7 +230,7 @@ DROP ROLE readers;
 
 The privilege set is `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`. The target is a schema or a table. Roles hold privileges; `GRANT ROLE … TO user` attaches membership (checked on authorize).
 
-`REVOKE … FROM user` drops privileges from a user. There is no separate `REVOKE ROLE`: remove membership with `DROP ROLE`. On disk: `{grid.sql.data-dir}/catalog/privileges.meta`. Operators: [security](../configure-and-operate/operations/security.md).
+`REVOKE … FROM user` drops privileges from a user. There is no separate `REVOKE ROLE`: remove membership with `DROP ROLE`. On disk: `{grid.sql.data-dir}/catalog/privileges.meta` — **per node**, not replicated; apply the same DDL (or copy the file in your node procedure) on every SQL listener apps may hit. Operators: [security](../configure-and-operate/operations/security.md).
 
 ## What gets rejected
 

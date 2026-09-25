@@ -1,15 +1,15 @@
 # Features
 
-What Grid supports today: SQL, storage, transactions, cluster behaviour, and tooling.
+What Grid supports today: SQL, storage, transactions, cluster behaviour, and clients.
 
 ## Scope at a glance
 
-| Need | Grid |
-|------|------|
-| SQL, transactions, hot memory, and disk in one product | Yes |
-| Foreign SQL wire for services | No — only `grid://` / `jdbc:grid://` (Grid frames) |
-| Shared NFS `dataDir` for the cluster | No — one directory per node |
-| Two writers at once | No — one writer, hand-off via `PROMOTE_NOTIFY` |
+| Area | In product |
+|------|------------|
+| SQL + TX + hot RAM + disk | Yes — one stack |
+| Clients | `grid://` (reactive) and `jdbc:grid://` (JDBC) |
+| Cluster | ORCHID, peer OpLog ship, HA hand-off, multi-site modes |
+| Foreign SQL wire / shared NFS `dataDir` / dual writers | No |
 
 ## SQL
 
@@ -40,12 +40,12 @@ See [storage](../understand/storage-sealed-gmap.md), [durability](../configure-a
 
 - One TCP connection carries several independent transactions.
 - Changes stay private to their transaction until COMMIT.
-- Per-key record locks; `FOR UPDATE` and `SKIP LOCKED` on the writer node, and on peers when Dist FOR UPDATE agents are wired from **replication `peers`** (not `grid.sql.distributed-peers` — that knob is read-only SELECT/JOIN fan-out). See [replica reads](../configure-and-operate/operations/replica-reads.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
+- Per-key record locks; `FOR UPDATE` / `SKIP LOCKED` on the writer (and peers when Dist FOR UPDATE is on — from replication `peers`, not `distributed-peers`). Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
 - DDL inside an open transaction is rejected.
 
 ## Privileges (RBAC)
 
-- `CREATE USER` / `DROP USER` / `ALTER USER … PASSWORD`, `CREATE ROLE` / `DROP ROLE`, `GRANT` / `REVOKE`, and `GRANT ROLE … TO user`, stored in `privileges.meta`.
+- `CREATE USER` / `DROP USER` / `ALTER USER … PASSWORD`, `CREATE ROLE` / `DROP ROLE`, `GRANT` / `REVOKE`, and `GRANT ROLE … TO user`, stored in `privileges.meta` (per-node local file; replication does not ship it — apply on every SQL node apps may hit). See [security](../configure-and-operate/operations/security.md).
 - An empty catalog means open access, and the first user created becomes administrator.
 - Once users exist, AUTH on the wire is mandatory and table privileges are enforced, including both sides of a JOIN.
 - There is no separate `REVOKE ROLE`; membership is removed with `DROP ROLE`.
@@ -75,6 +75,6 @@ See [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling
 
 ## Lab throughput
 
-Planning numbers and regression floors live in [capacity](../performance/capacity-slo.md); full stamp tables in [results](../performance/results.md). Do not treat Features as a living scoreboard — re-measure on a calm host before capacity claims.
+Planning numbers and regression floors live in [capacity](../performance/capacity-slo.md); full run tables in [results](../performance/results.md). Re-measure on a calm host before capacity claims — this page is not a live scoreboard.
 
 **Related:** [introduction](what-is-grid.md), [why Grid](positioning.md), [connect clients](connect-clients.md).

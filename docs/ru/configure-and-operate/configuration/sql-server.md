@@ -28,7 +28,7 @@ grid:
 | `grid.sql-server.port` | `15432` | Порт SQL |
 | `grid.sql-server.user` / `password` | `grid` / `grid` | Начальный администратор при пустом каталоге (полные права). Оба пустые → вход без пароля до первого `CREATE USER` |
 | `grid.sql.default-shards` | `4` | Число шардов для таблиц, созданных без явного указания |
-| `grid.sql.data-dir` | `./data/catalog` | Корень каталога; внутри лежит `catalog/privileges.meta` |
+| `grid.sql.data-dir` | `./data/catalog` | Корень каталога; внутри лежит `catalog/privileges.meta` (на узел; репликация не доставляет) |
 | `grid.sql.lock-wait-timeout-ms` | `8000` | Предел ожидания блокировки записи до ошибки `lock wait timeout` |
 | `grid.sql.prepare-pool-size` | `64` | Пул подготовленных запросов на движок |
 | `grid.sql.catalog-meta-cache-size` | `256` | Размер кэша метаданных каталога |

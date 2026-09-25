@@ -1,6 +1,8 @@
 # Failures and common incidents
 
-On-call scenarios: symptom → action → where to read more. Operator handbook — not a “cluster is ready” claim.
+Symptom → action → where to read more. On-call handbook — not a “cluster is ready” claim.
+
+Why reject beats “just make it pass”: with durability on, Grid prefers an error to the client over two diverging journals or a row that is “in memory but not on disk”. Same reason you must not disable `fsync` “so errors go away”, and must not rotate the next URL host instead of `rediscoverWriter()`.
 
 Before traffic, always check Actuator readiness: [monitoring](../monitoring.md).
 
@@ -20,13 +22,14 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 |---------|------------|---------|
 | Node down / process dead | Do not write another process into the same `dataDir`. Restart the same directory or restore via PITR. Client: `rediscoverWriter()`, not the next host in the URL | [promote](ha-promote.md), [PITR](pitr.md) |
 | `readiness` DOWN at start with replication | Wait for ORCHID sync; do not send load. Check `orchidSynced`, `reason`, `orchid_r` | [monitoring](../monitoring.md), [ORCHID](../../understand/orchid-consensus.md) |
-| Write rejected (`OrchidNotSyncedException` / no admission) | Check peers, network, `R` threshold, disk/`fsync`. Do not disable fsync for TPS | [replication](../configuration/replication.md) |
+| Write rejected (`OrchidNotSyncedException` / no admission) | Check peers, network, `R` threshold, disk/`fsync`. Do not disable fsync for TPS — better a reject than two journals | [replication](../configuration/replication.md) |
 | Disk full / OpLog cannot write | Free space; check `op-log` and archive. Archive I/O failure blocks truncate — that is protection | [durability](../configuration/durability.md), [PITR](pitr.md) |
 | Client still writes the old writer after failover | Wait for `PROMOTE_NOTIFY` or call `rediscoverWriter()`. Do not round-robin hosts | [promote](ha-promote.md) |
 | Reject on `regionEpoch` / dual-writer risk | One Active; Hold/Witness not in the write URL. Reconnect via rediscover | [multi-site](multi-dc.md) |
 | Active site loss (`ASYNC_SHIP`) | RPO on Hold within lag is possible. New Active via claim; client rediscover | [multi-site](multi-dc.md) |
 | Active site loss (`SYNC_VOTERS`) | Commits that passed quorum are already on voters. Same claim + rediscover; cost is WAN on every write | [multi-site](multi-dc.md) |
 | Replica read rejected / `applyLagStale` | Do not “fix” in the client. Catch up first; `ha.max-stale-lag` | [replica reads](replica-reads.md) |
+| AUTH fail on replica after `CREATE USER` only on the writer | `privileges.meta` is per-node; replication does not ship it — apply on every SQL node | [security](security.md) |
 | `repair_issued` grows, `repair_applied` does not | HomologousRepair logs, disk, peer seq; no shared NFS `dataDir` | [monitoring](../monitoring.md), [replication state](../../understand/replication-state.md) |
 | After restore “open TX disappeared” | Expected: dirty work before COMMIT is not in OpLog | [PITR](pitr.md) |
 

@@ -71,7 +71,7 @@ See also: [java-client](../develop/java-client.md), [transactions](../develop/tr
 
 Apps should **not** embed `SqlEngine` remotely — talk `grid://` to a starter/node. Boot wiring: [spring-boot](../develop/spring-boot.md).
 
-TCP listen session cap is **8** open contexts per channel (Boot does not raise it from `grid.sql.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
+TCP listen session cap is **8** open contexts per channel (Boot does not raise it from `grid.sql.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` (per-node; replication does not ship it) — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC client
 

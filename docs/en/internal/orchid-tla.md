@@ -41,7 +41,7 @@ pwsh ./scripts/run-tlc-orchid.ps1
 pwsh ./scripts/run-tlc-orchid.ps1 -Heavy
 ```
 
-The hard gate is fast single-site plus multi-site plus RegionClaim. An invariant violation exits non-zero. CI job: `tlc-orchid`. TLC also runs as the first hard step of `scripts/run-perf-gate.{ps1,sh}`, before the optional Jepsen steps.
+The hard gate is fast single-site plus multi-site plus RegionClaim. An invariant violation exits non-zero. There is **no** GitHub Actions job named `tlc-orchid` — run TLC locally via the scripts above, or as the first hard step of `scripts/run-perf-gate.{ps1,sh}` on a calm host (before optional Jepsen). Unit CI is `.github/workflows/ci.yml`; consistency matrix is `jepsen-qg.yml`.
 
 ## State bounds
 

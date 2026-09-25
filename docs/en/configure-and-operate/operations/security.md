@@ -63,7 +63,7 @@ File `privileges.meta` is under the SQL data directory: `{grid.sql.data-dir}/cat
 
 | Expectation | Fact |
 |-------------|------|
-| TLS / mTLS on the SQL port out of the box | No — terminate TLS outside if needed (proxy/LB) |
+| TLS / mTLS on the SQL port (product) | No — terminate TLS outside if needed (proxy/LB) |
 | Separate IdP / OAuth | No — local user catalog |
 | Row-level security | No |
 | AUTH as commit arbiter | No |

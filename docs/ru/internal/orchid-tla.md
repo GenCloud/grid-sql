@@ -41,7 +41,7 @@ pwsh ./scripts/run-tlc-orchid.ps1
 pwsh ./scripts/run-tlc-orchid.ps1 -Heavy
 ```
 
-Жёсткий гейт — это быстрый прогон одного ЦОД плюс Multi-DC плюс RegionClaim. При нарушении инварианта скрипт завершается с ненулевым кодом. Задача CI: `tlc-orchid`.
+Жёсткий гейт — это быстрый прогон одного ЦОД плюс Multi-DC плюс RegionClaim. При нарушении инварианта скрипт завершается с ненулевым кодом. Отдельной GitHub Actions job `tlc-orchid` **нет** — TLC гоняют локально скриптами выше или как первый жёсткий шаг `scripts/run-perf-gate.{ps1,sh}` на спокойном хосте (до опционального Jepsen). Unit CI — `.github/workflows/ci.yml`; матрица согласованности — `jepsen-qg.yml`.
 
 ## Последний успешный прогон (локально)
 
