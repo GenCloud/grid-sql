@@ -126,11 +126,31 @@ ensure_cluster() {
   (( ok == 1 )) || echo "WARN: not fully healthy; continuing"
 }
 
+CONTROL_NAME="${CONTROL_NAME:-jamoa-multidc-control}"
+
+# Multi-DC control has no host bind mounts (named volume). Sync sources + local m2 like run-multidc-full.ps1.
+sync_control_workspace() {
+  echo "docker cp clojure + scripts + grid-sql-client into control..."
+  docker exec "$CONTROL_NAME" bash -lc \
+    'mkdir -p /jepsen/jamoa/store /jepsen/scripts /root/.m2/repository/org/genfork; rm -rf /jepsen/jamoa/src /jepsen/jamoa/project.clj /jepsen/scripts/*'
+  docker cp "$JEPSEN_DIR/clojure/project.clj" "${CONTROL_NAME}:/jepsen/jamoa/project.clj"
+  docker cp "$JEPSEN_DIR/clojure/src" "${CONTROL_NAME}:/jepsen/jamoa/src"
+  docker cp "$JEPSEN_DIR/scripts/." "${CONTROL_NAME}:/jepsen/scripts/"
+  local m2_genfork="${JEPSEN_M2}/repository/org/genfork"
+  if [[ ! -d "$m2_genfork/grid-sql-client" ]]; then
+    echo "ERROR: host m2 missing org.genfork/grid-sql-client at $m2_genfork" >&2
+    return 1
+  fi
+  docker exec "$CONTROL_NAME" bash -lc 'rm -rf /root/.m2/repository/org/genfork'
+  docker cp "$m2_genfork" "${CONTROL_NAME}:/root/.m2/repository/org/genfork"
+}
+
 ensure_control() {
   docker compose --profile control up -d jepsen >/dev/null
   deadline=$((SECONDS + 480))
   while (( SECONDS < deadline )); do
     if docker compose --profile control exec -T jepsen bash -lc 'test -f /tmp/jepsen-control-ready && command -v lein && lein version' 2>/dev/null | grep -q Leiningen; then
+      sync_control_workspace
       return 0
     fi
     echo "control not ready yet"
@@ -143,31 +163,10 @@ ensure_control() {
 run_workload() {
   local workload="$1"
   ensure_control
-  local script_name="run-workload-multidc-${workload}.sh"
-  cat > "$JEPSEN_DIR/scripts/$script_name" <<EOS
-#!/bin/bash
-set +e
-export PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export JAVA_HOME=/opt/java/openjdk
-export JAVA_CMD=/opt/java/openjdk/bin/java
-export JVM_OPTS="-Xmx2g -XX:+UseG1GC"
-export LEIN_JVM_OPTS="-Xmx1g"
-export JAVA_TOOL_OPTIONS="--enable-preview -Xmx2g"
-cd /jepsen/jamoa
-export JEPSEN_NODES=a1,a2,a3,b1,b2
-export JEPSEN_HTTP_PORTS=7777,7778,7779,7780,7781
-export JEPSEN_SQL_PORTS=15432,15433,15434,15435,15436
-export JEPSEN_SCRIPTS=/jepsen/scripts
-export JEPSEN_USE_LOCALHOST=0
-export JEPSEN_MULTI_HOST=1
-command -v lein
-command -v git
-lein run -m jamoa-jepsen.core test --workload $workload --time-limit $TIME_LIMIT --no-nemesis
-echo LEIN_EXIT=\$?
-EOS
-  chmod +x "$JEPSEN_DIR/scripts/$script_name"
+  # Committed runner inside control (synced via docker cp); arg3 non-empty => --no-nemesis.
   local out
-  out="$(docker compose --profile control exec -T jepsen bash "/jepsen/scripts/$script_name" 2>&1 || true)"
+  out="$(docker compose --profile control exec -T -e "MULTIDC_MODE=$MULTIDC_MODE" jepsen \
+    bash /jepsen/scripts/run-workload-multidc.sh "$workload" "$TIME_LIMIT" 1 2>&1 || true)"
   echo "$out"
   if echo "$out" | grep -Eq 'Everything looks good|:valid\? true'; then
     return 0

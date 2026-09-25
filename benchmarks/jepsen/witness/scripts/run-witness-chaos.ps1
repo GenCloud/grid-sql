@@ -29,8 +29,14 @@ $ROOT = (Resolve-Path (Join-Path $JEPSEN_DIR "../..")).Path
 $ResultsPath = Join-Path $WITNESS_DIR "RESULTS.md"
 $Overlay = Join-Path $WITNESS_DIR "docker-compose.witness-overlay.yml"
 Set-Location $MULTIDC_DIR
-if (-not $env:HOME -or $env:HOME -eq "") { $env:HOME = $env:USERPROFILE }
-if (-not $env:JEPSEN_M2 -or $env:JEPSEN_M2 -eq "") { $env:JEPSEN_M2 = Join-Path $env:USERPROFILE ".m2" }
+# Linux GHA / pwsh: USERPROFILE is often unset; prefer HOME then UserProfile folder.
+if (-not $env:HOME -or $env:HOME -eq "") {
+  if ($env:USERPROFILE) { $env:HOME = $env:USERPROFILE }
+  else { $env:HOME = [Environment]::GetFolderPath("UserProfile") }
+}
+if (-not $env:JEPSEN_M2 -or $env:JEPSEN_M2 -eq "") {
+  $env:JEPSEN_M2 = Join-Path $env:HOME ".m2"
+}
 $env:MULTIDC_MODE = "async"
 $env:JEPSEN_WITNESS = "1"
 $env:MSYS_NO_PATHCONV = "1"
@@ -156,7 +162,7 @@ function Sync-ControlWorkspace {
   docker cp (Join-Path $JEPSEN_DIR "clojure\project.clj") "${ControlName}:/jepsen/jamoa/project.clj"
   docker cp (Join-Path $JEPSEN_DIR "clojure\src") "${ControlName}:/jepsen/jamoa/src"
   docker cp (Join-Path $JEPSEN_DIR "scripts\.") "${ControlName}:/jepsen/scripts/"
-  $m2Genfork = Join-Path $env:USERPROFILE ".m2\repository\org\genfork"
+  $m2Genfork = Join-Path $env:JEPSEN_M2 "repository/org/genfork"
   if (-not (Test-Path (Join-Path $m2Genfork "grid-sql-client"))) { throw "host m2 missing org.genfork/grid-sql-client" }
   docker exec $ControlName bash -lc "rm -rf /root/.m2/repository/org/genfork"; docker cp $m2Genfork "${ControlName}:/root/.m2/repository/org/genfork"
 }
