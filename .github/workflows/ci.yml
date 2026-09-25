@@ -1,5 +1,6 @@
 # Build + unit/IT gate for Grid SQL (Java 25, --enable-preview).
 # Lab gates (QG / Jepsen / Multi-DC / OSS / JMH / Load) stay host-side; never co-run here.
+# Jepsen QG matrix (1-DC / Multi-DC / Witness + qg-gate) lives in jepsen-qg.yml — not this workflow.
 name: CI
 
 on:

@@ -104,6 +104,34 @@ powershell -File .\benchmarks\jepsen\scripts\jepsen-purge.ps1 -Scope all -PurgeI
 
 Multi-DC: `scripts/nemesis-dc-link.sh isolate|heal|kill-voter|kill-dc-a` (wired when `JEPSEN_MULTIDC=1`). `kill-dc-a` stops/restarts whole DC-A (`a1`+`a2`+`a3`) for Active→Hold claim chaos.
 
+## GitHub Actions (Jepsen QG)
+
+Separate workflow [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) — **not** unit CI (`.github/workflows/ci.yml`). Never co-run with Load / JMH / OSS compare-all.
+
+| Matrix `config` | Entrypoint | What it gates |
+|-----------------|------------|---------------|
+| `1dc-chaos` | `scripts/run-jepsen.sh` | 1-DC register+append with nemesis (`:valid?`) |
+| `1dc-nochao` | `scripts/run-jepsen-nochao.sh` + `qg-gate.ps1` | No-nemesis consistency + Ref B latency (p50/p95 hard) |
+| `multidc-async` | `multidc/scripts/run-multidc-async.sh` (`MULTIDC_FULL=1`) | 2-DC ASYNC_SHIP register+append |
+| `multidc-sync` | `multidc/scripts/run-multidc-sync-voters.sh` (`MULTIDC_FULL=1`) | 2-DC SYNC_VOTERS register+append |
+| `witness` | `witness/scripts/run-witness-chaos.ps1` | Active+Hold+Witness chaos stamp |
+
+**Triggers:** `workflow_dispatch` (input `time_limit`, default 60), nightly `schedule`, `push` to `main`/`master`. On **PR** only when label `jepsen` is present (or run via Actions → workflow_dispatch).
+
+**Artifacts:** each matrix cell uploads `RESULTS.md`, `ARTIFACTS.txt` (nochao), and `clojure/store/**/{history,results}.edn` when present. Shared image `jamoa-grid-jepsen:local` is built once and loaded per cell (`JEPSEN_REBUILD=0` / `MULTIDC_SKIP_REBUILD=1`).
+
+**Local pre-commit smoke** (calm host; one contour at a time):
+
+```bash
+export JEPSEN_TIME_LIMIT=30 JEPSEN_REBUILD=1
+./benchmarks/jepsen/scripts/build-jepsen-image.sh
+./benchmarks/jepsen/scripts/jepsen-purge.sh all
+./benchmarks/jepsen/scripts/run-jepsen-nochao.sh
+# then: source benchmarks/jepsen/ARTIFACTS.txt && pwsh -File benchmarks/jepsen/scripts/qg-gate.ps1 ...
+```
+
+Optional: `actionlint .github/workflows/jepsen-qg.yml` and `act workflow_dispatch -W .github/workflows/jepsen-qg.yml -j build-image`.
+
 ## Relation to internal chaos
 
 | Contour | Where | What |

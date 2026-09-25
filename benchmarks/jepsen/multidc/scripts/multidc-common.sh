@@ -2,6 +2,15 @@
 # Shared Multi-DC runner. Args: MODE (async|sync-voters)
 # Scaffold by default; MULTIDC_FULL=1 enables Docker+lein register+append.
 set -euo pipefail
+
+# Prefer mvn.cmd on Windows/Git Bash (Unix mvn + Windows JDK breaks classworlds classpath).
+run_mvn() {
+  if command -v mvn.cmd >/dev/null 2>&1; then
+    mvn.cmd "$@"
+  else
+    mvn "$@"
+  fi
+}
 MODE="${1:?mode required: async|sync-voters}"
 MULTIDC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 JEPSEN_DIR="$(cd "$MULTIDC_DIR/.." && pwd)"
@@ -93,7 +102,7 @@ else
 fi
 
 echo "Installing grid-sql-client..."
-( cd "$ROOT" && mvn -B -pl grid-sql-client -am install -DskipTests )
+( cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests )
 
 ensure_cluster() {
   if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then

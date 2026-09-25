@@ -2,6 +2,15 @@
 # Full Clojure Jepsen against Compose N=3 (Linux / WSL / CI with lein or Docker control).
 # Runs register (Knossos) then append (Elle list-append); stamps PASS/FAIL for both.
 set -euo pipefail
+
+# Prefer mvn.cmd on Windows/Git Bash (Unix mvn + Windows JDK breaks classworlds classpath).
+run_mvn() {
+  if command -v mvn.cmd >/dev/null 2>&1; then
+    mvn.cmd "$@"
+  else
+    mvn "$@"
+  fi
+}
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 JEPSEN_DIR="$ROOT/benchmarks/jepsen"
 cd "$JEPSEN_DIR"
@@ -92,7 +101,7 @@ ensure_cluster() {
 
 install_sql_client() {
   echo "Installing grid-sql-client to local Maven repo (Jepsen classpath)..."
-  (cd "$ROOT" && mvn -B -pl grid-sql-client -am install -DskipTests)
+  (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
 }
 
 run_workload() {
