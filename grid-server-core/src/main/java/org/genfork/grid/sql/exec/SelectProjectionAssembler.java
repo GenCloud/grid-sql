@@ -140,7 +140,7 @@ public final class SelectProjectionAssembler {
 			if (item instanceof ColumnSelectItem col) {
 				final ColumnDef cdef = requireColumn(columns, col.column());
 				metas.add(SqlResult.ColumnMeta.ofCatalog(
-						cdef.name(), cdef.type(), cdef.nullable(), table, schema));
+						item.label(), cdef.type(), cdef.nullable(), table, schema));
 			} else if (item instanceof FunctionSelectItem fn) {
 				final FunctionDef def = SqlUdfLookup.require(fn.functionName());
 				metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));

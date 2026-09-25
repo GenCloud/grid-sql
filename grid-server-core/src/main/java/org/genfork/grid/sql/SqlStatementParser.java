@@ -578,7 +578,7 @@ public final class SqlStatementParser {
 			fromFunction = new FunctionFrom(
 					fc.ID().getText(),
 					parseFuncArgs(fc),
-					from.alias != null ? from.alias.getText() : null);
+					SqlIdentParseUtil.fromItemAlias(from));
 			table = fromFunction.aliasOrNull() != null ? fromFunction.aliasOrNull() : fromFunction.functionName();
 		} else {
 			fromFunction = null;
@@ -598,7 +598,9 @@ public final class SqlStatementParser {
 		final Map<String, SimplifiedSqlParser.WindowSpecContext> namedWindows = new LinkedHashMap<>();
 		if (query.windowClause() != null) {
 			for (SimplifiedSqlParser.WindowDefContext def : query.windowClause().windowDef()) {
-				namedWindows.put(def.ID().getText().toLowerCase(Locale.ROOT), def.windowSpec());
+				namedWindows.put(
+						SqlIdentParseUtil.identText(def.ident()).toLowerCase(Locale.ROOT),
+						def.windowSpec());
 			}
 		}
 		final SelectListContext sl = query.selectList();
@@ -634,11 +636,12 @@ public final class SqlStatementParser {
 					projection.add(fnItem.label());
 				} else if (itemCtx.columnName() != null) {
 					final ColumnNameContext cn = itemCtx.columnName();
-					final String col = simpleColumn(cn);
-					final String tableQual = cn.ID().size() > 1 ? cn.ID(0).getText() : null;
-					final String alias = itemCtx.alias != null ? itemCtx.alias.getText() : null;
+					final String col = SqlIdentParseUtil.simpleColumn(cn);
+					final String tableQual = SqlIdentParseUtil.tableQualifier(cn);
+					final String alias = itemCtx.alias != null ? SqlIdentParseUtil.identText(itemCtx.alias) : null;
 					selectItems.add(new ColumnSelectItem(col, tableQual, alias));
-					projection.add(alias != null ? alias : (tableQual != null ? tableQual + "." + col : col));
+					// Projection stays on physical column for store.projectBytes; alias is label only.
+					projection.add(tableQual != null ? tableQual + "." + col : col);
 				}
 			}
 		} else {
@@ -648,10 +651,10 @@ public final class SqlStatementParser {
 		if (query.joinClause() != null) {
 			for (SimplifiedSqlParser.JoinClauseContext jc : query.joinClause()) {
 				joins.add(new JoinEdge(
-						jc.tableName().getText(),
-						simpleColumn(jc.columnName(0)),
-						simpleColumn(jc.columnName(1)),
-						joinKindOf(jc)
+						SqlIdentParseUtil.joinTableName(jc),
+						SqlIdentParseUtil.joinTargetAlias(jc.joinTarget()),
+						SqlIdentParseUtil.joinEqs(jc.joinCond()),
+						SqlIdentParseUtil.joinKindOf(jc)
 				));
 			}
 		}
@@ -895,7 +898,7 @@ public final class SqlStatementParser {
 
 	private static CreateViewSql parseCreateView(SimplifiedSqlParser.CreateViewStmtContext ctx) {
 		final String table = ctx.tableName().getText();
-		final String selectSql = SqlParseSupport.textOf(ctx.query());
+		final String selectSql = viewSelectText(ctx.withQuery(), ctx.query());
 		return new CreateViewSql(table, selectSql);
 	}
 
@@ -906,7 +909,24 @@ public final class SqlStatementParser {
 	private static CreateMaterializedViewSql parseCreateMaterializedView(
 			SimplifiedSqlParser.CreateMaterializedViewStmtContext ctx
 	) {
-		return new CreateMaterializedViewSql(ctx.tableName().getText(), SqlParseSupport.textOf(ctx.query()));
+		return new CreateMaterializedViewSql(
+				ctx.tableName().getText(),
+				viewSelectText(ctx.withQuery(), ctx.query()));
+	}
+
+	private static String viewSelectText(
+			SimplifiedSqlParser.WithQueryContext withQuery,
+			SimplifiedSqlParser.QueryContext query
+	) {
+		final String withText = SqlIdentParseUtil.textOfOrNull(withQuery);
+		if (withText != null) {
+			return withText;
+		}
+		final String queryText = SqlIdentParseUtil.textOfOrNull(query);
+		if (queryText == null) {
+			throw new IllegalArgumentException("CREATE VIEW/MV requires AS query or WITH query");
+		}
+		return queryText;
 	}
 
 	private static CreateFunctionSql parseCreateFunction(SimplifiedSqlParser.CreateFunctionStmtContext ctx) {
@@ -1156,8 +1176,10 @@ public final class SqlStatementParser {
 
 	private static UpdateSql parseUpdate(UpdateStmtContext ctx) {
 		final String table = ctx.targetTable.getText();
-		final String whereSql = SqlParseSupport.textOf(ctx.expression());
-		final PkEq pk = extractPkEq(ctx.expression());
+		final String whereSql = ctx.expression() == null
+				? SqlIdentParseUtil.fullTableWhereSql()
+				: SqlParseSupport.textOf(ctx.expression());
+		final PkEq pk = ctx.expression() == null ? null : extractPkEq(ctx.expression());
 		final String pkCol = pk == null ? null : pk.column();
 		final Object pkVal = pk == null ? null : pk.value();
 		final List<UpdatePlan.FieldAssign> rmw = new ArrayList<>();
@@ -1177,7 +1199,8 @@ public final class SqlStatementParser {
 			if (!rmw.isEmpty()) {
 				throw new IllegalArgumentException("UPDATE FROM supports literal SET only");
 			}
-			if (!(ctx.expression() instanceof SimplifiedSqlParser.PredicateExpressionContext predicateExpression)
+			if (ctx.expression() == null
+					|| !(ctx.expression() instanceof SimplifiedSqlParser.PredicateExpressionContext predicateExpression)
 					|| !(predicateExpression.predicate() instanceof SimplifiedSqlParser.ColumnComparisonContext comparison)) {
 				throw new IllegalArgumentException("UPDATE FROM requires one column equality");
 			}
@@ -1219,12 +1242,9 @@ public final class SqlStatementParser {
 	private record PkEq(String column, Object value) {
 	}
 
-	/** Unqualified column id ({@code t.col} тЖТ {@code col}). */
+	/** Unqualified column id ({@code t.col} → {@code col}). */
 	private static String simpleColumn(ColumnNameContext ctx) {
-		if (ctx == null || ctx.ID() == null || ctx.ID().isEmpty()) {
-			throw new IllegalArgumentException("missing column name");
-		}
-		return ctx.ID(ctx.ID().size() - 1).getText();
+		return SqlIdentParseUtil.simpleColumn(ctx);
 	}
 
 	private static PkEq extractPkEq(org.genfork.grid.antlr.SimplifiedSqlParser.ExpressionContext expr) {
@@ -1419,19 +1439,6 @@ public final class SqlStatementParser {
 			);
 		}
 		return new AlterTableSql(table, null, ctx.columnName().getText());
-	}
-
-	private static JoinKind joinKindOf(SimplifiedSqlParser.JoinClauseContext jc) {
-		if (jc.FULL() != null) {
-			return JoinKind.FULL;
-		}
-		if (jc.RIGHT() != null) {
-			return JoinKind.RIGHT;
-		}
-		if (jc.LEFT() != null) {
-			return JoinKind.LEFT;
-		}
-		return JoinKind.INNER;
 	}
 
 }

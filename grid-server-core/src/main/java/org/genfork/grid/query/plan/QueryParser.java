@@ -29,6 +29,7 @@ import org.antlr.v4.runtime.atn.PredictionMode;
 import org.antlr.v4.runtime.misc.ParseCancellationException;
 import org.antlr.v4.runtime.tree.TerminalNode;
 
+import org.genfork.grid.sql.SqlIdentParseUtil;
 import org.genfork.grid.antlr.SimplifiedSqlBaseVisitor;
 import org.genfork.grid.antlr.SimplifiedSqlLexer;
 import org.genfork.grid.antlr.SimplifiedSqlParser;
@@ -164,7 +165,7 @@ public class QueryParser {
 							sumColumn = simpleColumn(agg.columnName());
 							max = true;
 						}
-					} else if (item.columnName() != null && item.columnName().ID() != null) {
+					} else if (item.columnName() != null && item.columnName().ident() != null) {
 						cols.add(simpleColumn(item.columnName()));
 					}
 				}
@@ -180,8 +181,9 @@ public class QueryParser {
 			if (from.tableName() != null) {
 				tableName = from.tableName().getText();
 			} else if (from.functionCall() != null) {
-				tableName = from.alias != null
-						? from.alias.getText()
+				final String alias = SqlIdentParseUtil.fromItemAlias(from);
+				tableName = alias != null
+						? alias
 						: from.functionCall().ID().getText();
 			}
 		}
@@ -190,12 +192,11 @@ public class QueryParser {
 		if (query.joinClause() != null && !query.joinClause().isEmpty()) {
 			final ArrayList<JoinSpec> acc = new ArrayList<>(query.joinClause().size());
 			for (JoinClauseContext jc : query.joinClause()) {
-				final boolean leftOuter = jc.LEFT() != null;
 				acc.add(new JoinSpec(
-						jc.tableName().getText(),
-						simpleColumn(jc.columnName(0)),
-						simpleColumn(jc.columnName(1)),
-						leftOuter
+						SqlIdentParseUtil.joinTableName(jc),
+						SqlIdentParseUtil.joinTargetAlias(jc.joinTarget()),
+						SqlIdentParseUtil.joinEqs(jc.joinCond()),
+						SqlIdentParseUtil.joinKindOf(jc)
 				));
 			}
 			joins = List.copyOf(acc);
@@ -527,10 +528,11 @@ public class QueryParser {
 
 	/** Unqualified column id ({@code t.col} → {@code col}). */
 	private static String simpleColumn(ColumnNameContext ctx) {
-		if (ctx == null || ctx.ID() == null || ctx.ID().isEmpty()) {
+		try {
+			return SqlIdentParseUtil.simpleColumn(ctx);
+		} catch (IllegalArgumentException e) {
 			return null;
 		}
-		return ctx.ID().get(ctx.ID().size() - 1).getText();
 	}
 
 	/** Strip outer SQL quotes from an ANTLR {@code STRING} token (no regexp). */

@@ -96,7 +96,7 @@ mvn -pl grid-sql-client -am package -DskipTests
 
 Формат URL тот же, что у `grid://`, только с префиксом `jdbc:`: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. Path после хостов — **default schema** (не отдельный database catalog). Параметр `?hosts=` не поддерживается — несколько хостов пишутся через запятую в authority.
 
-Драйвер снимает префикс `jdbc:` и разбирает URL тем же парсером, что reactive-клиент. Точка входа — **`SyncConnectionFactory.fromUrl` / `shared`** (те же product URL semantics, что `ConnectionFactory.fromUrl`): при `readEndpoints` + `readPreference=REPLICA` autocommit SELECT/EXPLAIN уходят в read pool. Наследуются опции `grid://`: `maxTxContexts`, `readEndpoints`, `readPreference`, `fetchWindow`, кольцо хостов для HA. Подробности URL: [подключение клиентов](../getting-started/connect-clients.md).
+Драйвер снимает префикс `jdbc:` и разбирает URL тем же парсером, что и реактивный клиент. Точка входа — **`SyncConnectionFactory.fromUrl` / `shared`** (те же правила URL продукта, что у `ConnectionFactory.fromUrl`): при `readEndpoints` + `readPreference=REPLICA` autocommit SELECT/EXPLAIN уходят в пул чтения. Наследуются опции `grid://`: `maxTxContexts`, `readEndpoints`, `readPreference`, `fetchWindow`, кольцо хостов для HA. Подробности URL: [подключение клиентов](../getting-started/connect-clients.md).
 
 Пример replica URL:
 

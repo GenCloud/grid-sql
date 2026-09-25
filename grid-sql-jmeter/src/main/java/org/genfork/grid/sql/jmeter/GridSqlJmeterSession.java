@@ -228,7 +228,7 @@ public final class GridSqlJmeterSession {
 		}
 		final GridSqlUri uri = GridSqlUri.parse(url);
 		final String user = paramUser == null || paramUser.isBlank() ? uri.user() : paramUser.trim();
-		final String password = paramPassword == null ? uri.password() : paramPassword;
+		final String password = paramPassword == null || paramPassword.isEmpty() ? uri.password() : paramPassword;
 		final Duration opTimeout = Duration.ofMillis(Math.max(1, opTimeoutMs));
 		final ConnectionOptions options = ConnectionOptions.builder()
 				.maxTxContexts(uri.maxTxContexts())

@@ -43,7 +43,7 @@ The old "WAL on top of the map" path and the double-write of compact snapshots h
 |--------|----------|
 | `grid-commons` | JDK-only shared code: `SqlType`, `SqlResult`, `SqlFrame`, `ServerMeta`, encode buffers. No Reactor, no Netty |
 | `grid-sql-antlr` | The `SimplifiedSql.g4` grammar, the generated parser and the client-side route classifier |
-| `grid-sql-client` | The SQL SPI (`ConnectionFactory`, `TxContext`), the wire frames, the remote Netty transport, the CLI, and the JDBC tooling driver |
+| `grid-sql-client` | The SQL SPI (`ConnectionFactory`, `TxContext`), the wire frames, the remote Netty transport, the CLI, and the JDBC client |
 | `grid-server-core` | Store, indexes, `SqlEngine`, transactions, replication, the Netty SQL server, Spring Boot auto-configuration |
 | `grid-sql-server-starter` | The runnable server artefact (SQL over TCP) |
 

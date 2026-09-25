@@ -6,13 +6,13 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-09-24-jepsen-smoke |
-| date | 2026-09-24T14:33:46.4872316+03:00 |
-| git | eec3953 |
+| stamp | 2026-09-24-dialect-full-jepsen |
+| date | 2026-09-24T23:59:05.3080929+03:00 |
+| git | a12685a |
 | host | DESKTOP-4IC511D |
-| mode | `smoke` |
-| outcome | `HARNESS_READY` |
-| notes | compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows) |
+| mode | `full-jepsen` |
+| outcome | `PASS` |
+| notes | register=PASS; append=PASS |
 
 ## History
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
@@ -461,3 +461,23 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - full-jepsen: not-run
 - command: run-jepsen-smoke.ps1
 - notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-09-24-jepsen-smoke
+- mode: smoke
+- outcome: HARNESS_READY
+- git: a12685a
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-09-24-dialect-full-jepsen
+- mode: full-jepsen
+- outcome: PASS
+- git: a12685a
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS

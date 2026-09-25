@@ -85,6 +85,9 @@ public final class SqlParseSupport {
 
 	/** Exact input text covered by a parser rule context. */
 	public static String textOf(ParserRuleContext ctx) {
+		if (ctx == null || ctx.getStart() == null || ctx.getStop() == null) {
+			throw new IllegalArgumentException("missing parse context text");
+		}
 		final int a = ctx.getStart().getStartIndex();
 		final int b = ctx.getStop().getStopIndex();
 		return ctx.getStart().getInputStream().getText(Interval.of(a, b));
@@ -144,14 +147,17 @@ public final class SqlParseSupport {
 			return unquote(v.STRING().getText());
 		}
 		if (v.FLOAT() != null) {
-			return Double.valueOf(v.FLOAT().getText());
+			return Double.valueOf(v.getText());
 		}
-		final String t = v.INT().getText();
-		try {
-			return Integer.valueOf(t);
-		} catch (NumberFormatException e) {
-			return Long.valueOf(t);
+		if (v.INT() != null) {
+			final String t = v.getText();
+			try {
+				return Integer.valueOf(t);
+			} catch (NumberFormatException e) {
+				return Long.valueOf(t);
+			}
 		}
+		throw new IllegalArgumentException("unsupported literal: " + v.getText());
 	}
 
 	/** Cast a decoded literal to a SQL type token. */
@@ -233,7 +239,7 @@ public final class SqlParseSupport {
 			}
 		}
 		if (hasElse) {
-			return literal(values.get(values.size() - 1));
+			return literal(values.getLast());
 		}
 		return null;
 	}

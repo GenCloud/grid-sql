@@ -75,7 +75,7 @@ Several requests live concurrently on one TCP socket. The client's `SqlClientInb
 
 Two consequences follow:
 
-- `maxTxContexts` is a soft cap on logical sessions over a socket; it has nothing to do with the number of TCP connections.
+- `maxTxContexts` on the client is a soft cap on logical sessions over a socket (default **256**); the server hard-caps at **8** per TCP. It is not a TCP connection pool size.
 - Parallel queries on one connection are normal: each has its own `requestId` and its own portal.
 
 `BATCH_EXEC` follows the same scheme: N statements per RTT, results arriving in order on one `requestId`, and the active statement inside the batch uses the same `FETCH` / `CANCEL` path.

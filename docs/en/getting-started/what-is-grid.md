@@ -43,7 +43,7 @@ Details: [write path](../understand/write-path-staging.md), [architecture overvi
 
 ## Client
 
-Applications depend on `grid-sql-client` and connect over `grid://` (reactive) or `jdbc:grid://` (JDBC) — one protocol, two APIs. A single TCP connection carries many logical transactions, bounded by `maxTxContexts`. Details: [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling.md).
+Applications depend on `grid-sql-client` and connect over `grid://` (reactive) or `jdbc:grid://` (JDBC) — one protocol, two APIs. A single TCP connection carries many logical transactions: client URL default `maxTxContexts` **256**, server channel hard-cap **8** (Boot does not raise it from YAML) — open another `Connection` when exhausted. Details: [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling.md).
 
 ## Boundaries
 

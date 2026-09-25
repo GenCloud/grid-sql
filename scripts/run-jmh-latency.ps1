@@ -29,7 +29,8 @@ if ($env:JMH_INCLUDE_LAX -eq "1") {
 $Fingerprint = Join-Path $Results "RESULTS.md"
 $Os = [System.Environment]::OSVersion.VersionString
 $Cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
-$Java = (& java -version 2>&1 | Out-String).Trim()
+$Java = (& cmd /c "java -version 2>&1" | Out-String).Trim()
+
 $IterNote = if ($env:JMH_FAST -eq "1") { "warmup 1x1s, measure 1x1s (JMH_FAST)" } else { "warmup 2x1s, measure 3x1s" }
 
 $md = @"

@@ -86,7 +86,7 @@ The practical consequence: the index trails the data rather than leading it. Poi
 
 ## Long-term storage
 
-Once a segment is sealed, secondary indexes live in fixed-page files (`.sbpt`, or `.sbm` for bitmaps). The in-memory index remains a working-set accelerator and may be evicted entirely — no data is lost by that, the query simply goes to the sealed file.
+Once a segment is sealed, secondary indexes live in fixed-page files (`.sbpt`, or `.sbm` for bitmaps). The in-memory index remains a working-set accelerator and may be evicted entirely — no data is lost by that, the query simply goes to the sealed file. Under `hydrate-mode: LAZY`, the first miss after restart pays sealed I/O; under `FULL`, trees are warmer at the cost of longer start.
 
 The `index-ckpt` checkpoint stores a key watermark, not a full tree dump.
 

@@ -161,7 +161,7 @@ sequenceDiagram
     X-->>V: OPLOG_PUSH to voters
     X-->>L: async learners only
   end
-  Note over X: "TxEnvelopeCoordinator - без отправки грязного mid-unit"
+  Note over X: "TxEnvelopeCoordinator - без отправки грязной середины TX unit"
 ```
 
 `CrossDcPublisher` собирает операции в пачки (`batch-max-ops`, `batch-max-wait-ms`), буферизует открытые транзакции до `TX_COMMIT` или `TX_ABORT` и придерживает многошардовые транзакции, пока не зафиксируются все шарды. Наружу уходят только целые транзакции — незавершённые изменения через WAN не отправляются. Транспорт всегда Netty: [сеть репликации](../../understand/replication-network.md).

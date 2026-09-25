@@ -36,6 +36,14 @@ Connection arguments come in either form:
 
 Defaults are host `127.0.0.1` and SQL port **15432**; a local replica serves reads on **15433** when the replica profile is up. Ports **5615** / **5616** carry replication, not SQL — pointing the CLI there yields a bad frame.
 
+HA write URL (multi-host authority) is the same as for apps:
+
+```
+grid://user:pass@127.0.0.1:15432,127.0.0.1:15433/public
+```
+
+Wait for Actuator readiness UP before expecting connects to succeed (`/health/readiness` on **7777** primary / **7778** replica or capacity). After a role change, open a new CLI session or reconnect — the interactive shell does not call `rediscoverWriter()` for you.
+
 ## Common errors
 
 Statement errors print to **stderr** and the interactive session continues (`quit` / `exit` / EOF ends the process). A failed connect aborts `main` with an exception (non-zero process status from the JVM). There is no per-statement process exit code for SQL failures.

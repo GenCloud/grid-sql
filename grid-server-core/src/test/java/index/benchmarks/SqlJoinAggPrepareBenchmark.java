@@ -60,6 +60,9 @@ public class SqlJoinAggPrepareBenchmark extends AbstractLatencyBenchmark {
 	private String joinPkSql;
 	private String joinHashSql;
 	private String leftJoinSql;
+	private String joinMultiEqSql;
+	private String viewWithSql;
+	private String namedOverSql;
 	private String aggSql;
 	private String joinVarcharSql;
 	private String adhocSelect;
@@ -73,16 +76,28 @@ public class SqlJoinAggPrepareBenchmark extends AbstractLatencyBenchmark {
 		engine.execute("CREATE TABLE jp_h (id INT PRIMARY KEY, bucket INT)");
 		engine.execute("CREATE TABLE jp_vs (id INT PRIMARY KEY, label VARCHAR)");
 		engine.execute("CREATE TABLE jp_vt (id INT PRIMARY KEY, label VARCHAR)");
+		engine.execute("CREATE TABLE jp_m (id INT PRIMARY KEY, sid INT, v INT)");
+		engine.execute("CREATE TABLE jp_n (id INT PRIMARY KEY, sid INT, w INT)");
+		engine.execute("CREATE INDEX jp_n_eq ON jp_n (id, sid)");
+		engine.execute("CREATE TABLE jp_scores (id INT PRIMARY KEY, pts INT)");
 		for (int i = 0; i < ROW_COUNT; i++) {
 			engine.execute("INSERT INTO jp_a VALUES (" + i + ", " + (i % 50) + ", " + (i % 100) + ")");
 			engine.execute("INSERT INTO jp_b VALUES (" + i + ", " + (i % 50) + ")");
 			engine.execute("INSERT INTO jp_h VALUES (" + i + ", " + (i % 32) + ")");
 			engine.execute("INSERT INTO jp_vs VALUES (" + i + ", 'L" + (i % 50) + "')");
 			engine.execute("INSERT INTO jp_vt VALUES (" + i + ", 'L" + (i % 50) + "')");
+			engine.execute("INSERT INTO jp_m VALUES (" + i + ", " + (i % 10) + ", " + i + ")");
+			engine.execute("INSERT INTO jp_n VALUES (" + i + ", " + (i % 10) + ", " + (i * 2) + ")");
+			engine.execute("INSERT INTO jp_scores VALUES (" + i + ", " + (i % 100) + ")");
 		}
+		engine.execute(
+				"CREATE VIEW jp_v AS WITH cte AS (SELECT id, score FROM jp_a WHERE score > 10) SELECT id FROM cte");
 		joinPkSql = "SELECT * FROM jp_a JOIN jp_b ON id = id WHERE score > 10 LIMIT 50";
 		joinHashSql = "SELECT * FROM jp_a JOIN jp_b ON k = k WHERE score > 50 LIMIT 50";
 		leftJoinSql = "SELECT * FROM jp_a LEFT OUTER JOIN jp_b ON id = id LIMIT 50";
+		joinMultiEqSql = "SELECT * FROM jp_m m JOIN jp_n n ON m.id = n.id AND m.sid = n.sid LIMIT 50";
+		viewWithSql = "SELECT id FROM jp_v LIMIT 50";
+		namedOverSql = "SELECT id, RANK() OVER (w) AS rnk FROM jp_scores WINDOW w AS (ORDER BY pts DESC) LIMIT 50";
 		aggSql = "SELECT COUNT(*) FROM jp_h GROUP BY bucket";
 		joinVarcharSql = "SELECT * FROM jp_vs JOIN jp_vt ON label = label LIMIT 50";
 		adhocSelect = "SELECT score FROM jp_a WHERE id = 42";
@@ -92,6 +107,9 @@ public class SqlJoinAggPrepareBenchmark extends AbstractLatencyBenchmark {
 		engine.execute(joinPkSql);
 		engine.execute(joinHashSql);
 		engine.execute(leftJoinSql);
+		engine.execute(joinMultiEqSql);
+		engine.execute(viewWithSql);
+		engine.execute(namedOverSql);
 		engine.execute(aggSql);
 		engine.execute(joinVarcharSql);
 		engine.execute(preparedSession, executePrepared);
@@ -117,6 +135,21 @@ public class SqlJoinAggPrepareBenchmark extends AbstractLatencyBenchmark {
 	@Benchmark
 	public void leftOuterJoin(Blackhole bh) {
 		bh.consume(engine.execute(leftJoinSql).rows().size());
+	}
+
+	@Benchmark
+	public void joinMultiEqAnd(Blackhole bh) {
+		bh.consume(engine.execute(joinMultiEqSql).rows().size());
+	}
+
+	@Benchmark
+	public void viewAsWithSelect(Blackhole bh) {
+		bh.consume(engine.execute(viewWithSql).rows().size());
+	}
+
+	@Benchmark
+	public void namedWindowOverParen(Blackhole bh) {
+		bh.consume(engine.execute(namedOverSql).rows().size());
 	}
 
 	@Benchmark

@@ -135,7 +135,7 @@ cteDef
     ;
 
 createViewStmt
-    : CREATE VIEW tableName AS query
+    : CREATE VIEW tableName AS (withQuery | query)
     ;
 
 /** SPI bind: class + method (no string eval / scripting). */
@@ -174,7 +174,7 @@ dropViewStmt
     ;
 
 createMaterializedViewStmt
-    : CREATE MATERIALIZED VIEW tableName AS query
+    : CREATE MATERIALIZED VIEW tableName AS (withQuery | query)
     ;
 
 refreshMaterializedViewStmt
@@ -223,7 +223,7 @@ windowClause
     ;
 
 windowDef
-    : ID AS '(' windowSpec ')'
+    : ident AS '(' windowSpec ')'
     ;
 
 windowSpec
@@ -236,8 +236,10 @@ partitionByList
     ;
 
 fromItem
-    : tableName
-    | functionCall (AS alias=ID)?
+    : tableName AS aliasIdent=ident
+    | tableName aliasId=ID
+    | tableName
+    | functionCall (AS alias=ident)?
     ;
 
 explainStmt
@@ -358,7 +360,7 @@ deleteStmt
 updateStmt
     : UPDATE targetTable=tableName SET updateAssign (',' updateAssign)*
       (FROM sourceTable=tableName)?
-      WHERE expression returningClause?
+      (WHERE expression)? returningClause?
     ;
 
 updateAssign
@@ -463,7 +465,22 @@ indexName
     ;
 
 joinClause
-    : (LEFT (OUTER)? | RIGHT (OUTER)? | FULL (OUTER)? | INNER)? JOIN tableName ON columnName '=' columnName
+    : joinHead joinTarget ON joinCond
+    ;
+
+joinHead
+    : (LEFT (OUTER)? | RIGHT (OUTER)? | FULL (OUTER)? | INNER)? JOIN
+    ;
+
+joinTarget
+    : tableName AS aliasIdent=ident
+    | tableName aliasId=ID
+    | tableName
+    ;
+
+/** One or more equality predicates joined by AND (composite join key). */
+joinCond
+    : columnName '=' columnName (AND columnName '=' columnName)*
     ;
 
 selectList
@@ -472,10 +489,10 @@ selectList
     ;
 
 selectItem
-    : columnName (AS alias=ID)?
-    | aggregateExpr
-    | windowExpr
-    | functionCall (AS alias=ID)?
+    : columnName (AS alias=ident)?
+    | aggregateExpr (AS alias=ident)?
+    | windowExpr (AS alias=ident)?
+    | functionCall (AS alias=ident)?
     ;
 
 functionCall
@@ -501,20 +518,55 @@ windowExpr
     | (SUM | MIN | MAX | AVG) '(' columnName ')' overClause
     ;
 
+/**
+ * Named window: {@code OVER w}, {@code OVER (w)}; inline: {@code OVER (ORDER BY …)}.
+ * Named form with parens is listed before empty-capable {@link #windowSpec}.
+ */
 overClause
-    : OVER ('(' windowSpec ')' | windowName=ID)
+    : OVER '(' windowName=ident ')'
+    | OVER '(' windowSpec ')'
+    | OVER windowName=ident
     ;
 
 columnList
     : '*' | columnName (',' columnName)*
     ;
 
+/**
+ * Unquoted identifier: plain {@link #ID} or any lexer keyword (keyword-as-identifier).
+ * Bare table aliases without AS stay {@link #ID} only so WHERE/JOIN are not swallowed.
+ */
 columnName
-    : ID ('.' ID)?
+    : ident ('.' ident)?
     ;
 
 tableName
-    : ID ('.' ID)?
+    : ident ('.' ident)?
+    ;
+
+ident
+    : ID
+    | keywordAsIdent
+    ;
+
+/** All lexer keywords usable as unquoted column / alias / window / table name parts. */
+keywordAsIdent
+    : SELECT | EXPLAIN | ANALYZE | INSERT | UPSERT | INTO | VALUES | DELETE | UPDATE | SET
+    | REMOTE_DIRTY | MERGE | CONFLICT | DO | NOTHING | MATCHED | CREATE | DROP | ALTER | ADD
+    | COLUMN | SCHEMA | TABLE | VIEW | MATERIALIZED | REFRESH | FUNCTION | TRIGGER | RETURNS
+    | CLASS | METHOD | BEFORE | AFTER | EACH | WITH | RECURSIVE | UNION | INTERSECT | EXCEPT
+    | ALL | INDEX | UNIQUE | BITMAP | PRIMARY | KEY | IF | EXISTS | NOT | NULL | FROM | FOR
+    | SKIP_KW | LOCKED | RETURNING | WHERE | GROUP | HAVING | ORDER | BY | LIMIT | OFFSET
+    | DISTINCT | COUNT | SUM | AVG | MIN | MAX | CONCAT | CAST | UUID_TYPE | DATE_TYPE
+    | TIME_TYPE | TIMESTAMP_TYPE | TIMESTAMPTZ_TYPE | CASE | WHEN | THEN | ELSE | END
+    | OVER | WINDOW | PARTITION | ROW_NUMBER | ROW | RANK | DENSE_RANK | LAG | LEAD
+    | JOIN | INNER | LEFT | RIGHT | FULL | OUTER | ON | RESTRICT | CASCADE | AUTHORIZATION
+    | FOREIGN | REFERENCES | CONSTRAINT | CHECK | SEQUENCE | SERIAL | BIGSERIAL | GENERATED
+    | DEFAULT | IDENTITY | INCREMENT | START | RECLAIM | NEXTVAL | CURRVAL | AND | OR
+    | BETWEEN | IN | LIKE | IS | TRUE | FALSE | ASC | DESC | BEGIN | COMMIT | ROLLBACK
+    | SAVEPOINT | RELEASE | TRANSACTION | WORK | OLD | NEW | STATEMENT | PREPARE | EXECUTE
+    | DEALLOCATE | AS | USING | PIN | UNPIN | TTL | QOS | USER | PASSWORD | ROLE | GRANT
+    | REVOKE | TO | DDL
     ;
 
 createSchemaStmt
@@ -577,8 +629,8 @@ operator
     ;
 
 value
-    : INT
-    | FLOAT
+    : '-'? INT
+    | '-'? FLOAT
     | STRING
     | NULL
     | TRUE

@@ -515,6 +515,24 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitJoinClause(SimplifiedSqlParser.JoinClauseContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#joinHead}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitJoinHead(SimplifiedSqlParser.JoinHeadContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#joinTarget}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitJoinTarget(SimplifiedSqlParser.JoinTargetContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#joinCond}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitJoinCond(SimplifiedSqlParser.JoinCondContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#selectList}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -574,6 +592,18 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitTableName(SimplifiedSqlParser.TableNameContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#ident}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitIdent(SimplifiedSqlParser.IdentContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#keywordAsIdent}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitKeywordAsIdent(SimplifiedSqlParser.KeywordAsIdentContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#createSchemaStmt}.
 	 * @param ctx the parse tree

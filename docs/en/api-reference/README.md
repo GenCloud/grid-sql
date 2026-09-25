@@ -44,7 +44,7 @@ URL form: `grid://user:pass@host:15432[,host:15433]/schema?...`.
 
 | URL option | Meaning |
 |------------|---------|
-| `maxTxContexts` | Cap on parallel TX / sessions on one TCP |
+| `maxTxContexts` | Client soft cap on parallel TX / sessions on one TCP (default **256**); server hard-cap **8** |
 | `readEndpoints` / `readPreference` / `staleReadPolicy` | SELECT/EXPLAIN routing; stale = `FAIL_CLOSED` |
 | `retryMode` / `maxRetries` / `retryDelayMs` | Connect retry (`OFF` / `FIXED` / `EXPONENTIAL`); not a substitute for `rediscoverWriter()` |
 | `minConnections` / `maxConnections` | Warm-up and TCP pool ceiling on the factory |
@@ -56,7 +56,7 @@ HA helpers on `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()
 
 - Autocommit: `connection.createStatement(sql).executeUpdate()`
 - TX: `connection.begin()` → statements on `TxContext` → `commit()` / `rollback()`
-- Parallel TX = N `begin()` on one `Connection` (cap `maxTxContexts`)
+- Parallel TX = N `begin()` on one `Connection` (client `maxTxContexts`; server stops at **8**)
 
 See also: [java-client](../develop/java-client.md), [transactions](../develop/transactions.md).
 
@@ -70,6 +70,8 @@ See also: [java-client](../develop/java-client.md), [transactions](../develop/tr
 | `TableStore` | Sharded store + indexes façade |
 
 Apps should **not** embed `SqlEngine` remotely — talk `grid://` to a starter/node. Boot wiring: [spring-boot](../develop/spring-boot.md).
+
+TCP listen session cap is **8** open contexts per channel (Boot does not raise it from `grid.sql.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC client
 

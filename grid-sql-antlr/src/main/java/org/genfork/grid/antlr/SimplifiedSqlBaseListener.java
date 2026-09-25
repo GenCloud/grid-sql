@@ -1025,6 +1025,42 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterJoinHead(SimplifiedSqlParser.JoinHeadContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitJoinHead(SimplifiedSqlParser.JoinHeadContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterJoinTarget(SimplifiedSqlParser.JoinTargetContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitJoinTarget(SimplifiedSqlParser.JoinTargetContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterJoinCond(SimplifiedSqlParser.JoinCondContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitJoinCond(SimplifiedSqlParser.JoinCondContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterSelectList(SimplifiedSqlParser.SelectListContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1140,6 +1176,30 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitTableName(SimplifiedSqlParser.TableNameContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterIdent(SimplifiedSqlParser.IdentContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitIdent(SimplifiedSqlParser.IdentContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterKeywordAsIdent(SimplifiedSqlParser.KeywordAsIdentContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitKeywordAsIdent(SimplifiedSqlParser.KeywordAsIdentContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

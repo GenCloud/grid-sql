@@ -105,5 +105,3 @@ management:
 
 server:
   port: 7777
-    user: "grid"
-    password: "grid"

@@ -91,8 +91,44 @@ public final class SelectAst {
 		FULL
 	}
 
-	/** One JOIN edge in a SELECT (INNER / LEFT / RIGHT / FULL OUTER). */
-	public record JoinEdge(String table, String leftCol, String rightCol, JoinKind kind) {
+	/** One equality in a JOIN ON clause. */
+	public record JoinEq(String leftCol, String rightCol) {
+	}
+
+	/**
+	 * One JOIN edge in a SELECT (INNER / LEFT / RIGHT / FULL OUTER).
+	 * <p>
+	 * {@code eqs} is never empty; single-equality joins use a one-element list.
+	 *
+	 * @param table      right-side table (resolved name)
+	 * @param tableAlias optional join-side alias ({@code null} when absent)
+	 * @param eqs        ON equalities left-to-right
+	 * @param kind       join kind
+	 */
+	public record JoinEdge(String table, String tableAlias, List<JoinEq> eqs, JoinKind kind) {
+		public JoinEdge {
+			if (eqs == null || eqs.isEmpty()) {
+				throw new IllegalArgumentException("JoinEdge requires at least one equality");
+			}
+			eqs = List.copyOf(eqs);
+		}
+
+		/** Convenience for single-eq call sites / render. */
+		public JoinEdge(String table, String leftCol, String rightCol, JoinKind kind) {
+			this(table, null, List.of(new JoinEq(leftCol, rightCol)), kind);
+		}
+
+		public String leftCol() {
+			return eqs.getFirst().leftCol();
+		}
+
+		public String rightCol() {
+			return eqs.getFirst().rightCol();
+		}
+
+		public boolean multiEq() {
+			return eqs.size() > 1;
+		}
 	}
 
 	/**

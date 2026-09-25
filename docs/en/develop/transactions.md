@@ -66,7 +66,7 @@ Several `connection.begin()` calls on one connection give several independent tr
 | Client `maxTxContexts` | URL / `ConnectionOptions` | **256** | Soft limit on concurrent logical sessions the client will open on one TCP |
 | Server channel | SQL TCP listen (`SqlServer`) | **8** | Hard limit per accepted channel; Boot does **not** forward `grid.sql.max-tx-contexts` |
 
-If the server answers `maxTxContexts=8 exhausted`, open another `Connection` (or raise the server listen default in the config that actually binds the listener). Details: [SQL server](../configure-and-operate/configuration/sql-server.md).
+If the server answers `maxTxContexts=8 exhausted`, open another `Connection` — Boot does not raise the listen cap from `grid.sql.max-tx-contexts`. Details: [SQL server](../configure-and-operate/configuration/sql-server.md).
 
 This is not a JDBC pool: do not open N connections to get N transactions. Isolation between them rests on record locks, `TX_*` markers in the journal and prepare handles, not on separate TCP channels.
 

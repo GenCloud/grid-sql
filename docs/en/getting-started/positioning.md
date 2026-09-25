@@ -54,7 +54,7 @@ Shard placement and PIN are levers on top of that same replication path: [overla
 
 ## A client without protocol surprises
 
-Applications use `grid://` with `ConnectionFactory`, or JDBC with `jdbc:grid://`: one product protocol, many logical sessions on one socket (`maxTxContexts`), result streaming, and PREPARE. One driver stack for apps — not a second protocol beside Grid.
+Applications use `grid://` with `ConnectionFactory`, or JDBC with `jdbc:grid://`: one product protocol, many logical sessions on one socket (`maxTxContexts` — client default **256**, server hard-cap **8**), result streaming, and PREPARE. One driver stack for apps — not a second protocol beside Grid.
 
 See [Java client](../develop/java-client.md), [connect clients](connect-clients.md), [features](features.md).
 

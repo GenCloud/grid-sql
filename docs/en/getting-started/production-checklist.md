@@ -72,7 +72,7 @@ Full reference: [monitoring](../configure-and-operate/monitoring.md), [failures]
 | Check | Action | Why |
 |-------|--------|-----|
 | One `ConnectionFactory` per process, disposed on shutdown | `factory.dispose()` | One TCP connection carries many transactions; a socket pool adds nothing |
-| Concurrency budget set | `maxTxContexts` | Soft cap on concurrent transactions over one socket |
+| Concurrency budget set | `maxTxContexts` | Client URL default **256**; server hard-cap **8** per TCP (open another `Connection` when exhausted) |
 | Writer changes handled through the protocol | `rediscoverWriter()`, `PROMOTE_NOTIFY` | Rotating to the next host in the URL after a reject risks landing on a non-writer or a stale epoch |
 | Timeouts and retries set explicitly | `connectTimeoutMs`, `execTimeoutMs`, `retryMode` / `maxRetries` | Defaults leave `execTimeoutMs` off and retries disabled |
 | Replica read semantics accepted where enabled | `readEndpoints`, `readPreference` | Reading your own writes through a replica is not guaranteed; stale reads abort |
