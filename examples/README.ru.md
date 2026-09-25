@@ -1,6 +1,6 @@
 # Examples
 
-Runnable-кейсы **`grid-sql-client`** — **reactive** (`ConnectionFactory` / `grid://`) и **JDBC tooling** (`GridDriver` / `jdbc:grid://`) — плюс локальные HA compose-лабы.
+Runnable-кейсы **`grid-sql-client`** — **реактивный** (`ConnectionFactory` / `grid://`) и **JDBC-клиент** (`GridDriver` / `jdbc:grid://`) — плюс локальные HA compose-лабы (не GitHub Actions).
 
 EN: [README.md](README.md)
 
@@ -15,11 +15,11 @@ mvn -pl examples/examples-jdbc-dml -am package -DskipTests
 mvn -pl examples/examples-jdbc-dml exec:java
 ```
 
-## Reactive (`grid://`)
+## Реактивный (`grid://`)
 
 Модули `examples-warmup` … `examples-ha-url` / `examples-dml` и т.д. — см. [README.md](README.md).
 
-**Важно:** в одном UPDATE v1 нельзя смешивать RMW и literal SET — в `examples-dml` они разделены.
+В одном UPDATE v1 нельзя смешивать RMW и literal SET — в `examples-dml` они разделены.
 
 ## JDBC (`jdbc:grid://`)
 
@@ -28,8 +28,8 @@ mvn -pl examples/examples-jdbc-dml exec:java
 | `examples-jdbc-connect` | DriverManager, isValid, metadata |
 | `examples-jdbc-dml` | Statement / PreparedStatement / ResultSet |
 | `examples-jdbc-tx` | setAutoCommit / commit / rollback |
-| `examples-jdbc-savepoints` | savepoint / rollback / release |
-| `examples-jdbc-batch` | batch Statement + PreparedStatement |
+| `examples-jdbc-savepoints` | setSavepoint / rollback / release |
+| `examples-jdbc-batch` | Statement + PreparedStatement batch |
 | `examples-jdbc-session` | setSchema / fetchSize / URL options |
 
-Доки: [JDBC-клиент](../docs/ru/develop/jdbc-tooling.md), [Java-клиент](../docs/ru/develop/java-client.md).
+jOOQ: `examples-jooq` — [jOOQ DSL](../docs/ru/develop/jooq.md). Compose: [`compose/`](compose/) — только локальный стенд.

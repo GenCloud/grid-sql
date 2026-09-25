@@ -189,11 +189,11 @@ grid:
 
 Multi-DC topologies: [cluster-multidc-highload.md](cluster-multidc-highload.md).
 
-## Replica read pool (off by default)
+### Replica read channels (off by default)
 
 Full methodology: [replica-reads.md](replica-reads.md).
 
-Writes and open TX stay on the pinned proposer URL. Autocommit reads use a second pool:
+Writes and open TX stay on the pinned proposer URL. Autocommit reads use replica channels:
 
 ```
 grid://u:p@n1:15432,n2:15433/public?readEndpoints=n2:15433&readPreference=REPLICA&maxReadConnections=2

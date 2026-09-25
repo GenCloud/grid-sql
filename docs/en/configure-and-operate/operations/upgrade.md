@@ -90,3 +90,13 @@ After each node comes back:
 | Two processes on one `dataDir` | Stop the extra process immediately; this is an incident, not an upgrade ([failures](failures.md)) |
 
 After a full rolling restart: every node on the target version; one writer; smoke write/read on the application path.
+
+### Post-upgrade smoke
+
+| Check | Expect |
+|-------|--------|
+| Actuator readiness UP on every node | SQL listening; with replication — ORCHID synced |
+| Exactly one `writerEligible: true` | Client meta matches (`PROMOTE_NOTIFY` / AUTH) |
+| One application write + read | Path OK — not `/replication/compare` as writer discovery |
+| Replicas before read traffic | `applyLagStale` false (or within policy) |
+| Users / AUTH (if enabled) | `privileges.meta` present on **every** SQL node apps may hit |

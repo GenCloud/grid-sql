@@ -71,11 +71,11 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 
 Приложения **не** встраивают удалённый `SqlEngine` — говорят по `grid://` со starter/node. Boot: [Spring Boot](../develop/spring-boot.md).
 
-Потолок открытых сессий на TCP-канале слушателя — **8** (Boot не поднимает его из `grid.sql.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
+Потолок открытых сессий на TCP-канале слушателя — **8** (Boot не поднимает его из `grid.sql.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` (на каждом узле; репликация не доставляет) — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC-клиент
 
-JDBC в `grid-sql-client` (`jdbc:grid://`, пакет `org.genfork.grid.jdbc`) — стабильный sync API наравне с reactive: [JDBC-клиент](../develop/jdbc-tooling.md).
+JDBC в `grid-sql-client` (`jdbc:grid://`, пакет `org.genfork.grid.jdbc`) — стабильный синхронный API наравне с реактивным: [JDBC-клиент](../develop/jdbc-tooling.md).
 
 ## Порты
 

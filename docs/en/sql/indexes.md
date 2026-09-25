@@ -60,6 +60,25 @@ SELECT * FROM orders WHERE status = 'new';                         -- index does
 
 Put the column you always filter on first.
 
+### Worked example
+
+```sql
+CREATE TABLE orders (
+  id BIGINT PRIMARY KEY,
+  customer_id BIGINT NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  created_at TIMESTAMP NOT NULL
+);
+CREATE INDEX idx_orders_cust_status ON orders (customer_id, status);
+
+-- Uses the composite prefix:
+SELECT id FROM orders WHERE customer_id = 42 AND status = 'NEW' LIMIT 50;
+-- Does not use idx_orders_cust_status (leading column missing):
+SELECT id FROM orders WHERE status = 'NEW' LIMIT 50;
+```
+
+Check the plan with `EXPLAIN` — [EXPLAIN and AQE](explain-and-aqe.md).
+
 ## Primary key
 
 There is no need to index the primary key separately. It determines the shard, and equality on the full primary key becomes a point read — no scan and no secondary index lookup.

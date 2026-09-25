@@ -38,7 +38,7 @@ pwsh ./scripts/run-tlc-orchid.ps1
 
 Uses the cached `tla2tools.jar` under `.tools/`. Both specs are required: `OrchidLog.tla` and `OrchidLogMultiDc.tla`. Details: [ORCHID TLA+](orchid-tla.md).
 
-The performance gate chain (QG, Jepsen, Multi-DC, JMH, load — calm host, one at a time):
+The performance gate chain (QG, Jepsen, Multi-DC, JMH, load) runs on a **calm host, one at a time** — not as default GitHub Actions. Unit CI is `.github/workflows/ci.yml`; Jepsen/QG/Multi-DC matrix is `jepsen-qg.yml` (see root [README](../../README.md) § CI). Local driver:
 
 ```bash
 ./scripts/run-perf-gate.sh

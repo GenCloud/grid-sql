@@ -95,6 +95,20 @@ Results arrive in `SqlResult` windows. Each column carries metadata: a name and 
 
 An important internal detail: values become objects **only at the boundary** of the result. Inside the server a row is a binary blob, fields are read by cursor at offsets, and filter, join and index keys stay as bytes. That is why adding a column does not force a data rewrite, and why selecting two columns from a wide table does not decode the whole row.
 
+### Worked example
+
+```sql
+CREATE TABLE t (
+  id BIGINT PRIMARY KEY,
+  payload VARCHAR(256),
+  flag BOOLEAN
+);
+INSERT INTO t (id, payload, flag) VALUES (1, 'hello', TRUE);
+SELECT id, flag FROM t WHERE id = 1;
+```
+
+The client receives `Long` / `Boolean` (or JDBC equivalents). The server never materializes a domain POJO for the filter or the projection.
+
 The JDBC client on top of the same types is described in [JDBC client](../develop/jdbc-tooling.md).
 
 ## Next

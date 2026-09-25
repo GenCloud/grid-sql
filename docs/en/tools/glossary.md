@@ -18,6 +18,8 @@ Short definitions for the terms used across the operations and architecture page
 | Ownership cutover | Shard ownership change after catch-up (`CUTOVER_DONE`); see [placement](../understand/overlay-and-swarm.md) |
 | `grid://` | SQL URL of the reactive client |
 | `jdbc:grid://` | SQL URL of the JDBC client (same protocol) |
+| `SyncConnectionFactory` | Sync façade without `java.sql.*`: same `grid://`, wait via `SyncAwait` |
+| `readEndpoints` | SQL hosts for autocommit SELECT/EXPLAIN when `readPreference=REPLICA` |
 | `maxTxContexts` | Cap on logical sessions on one TCP. **Client** URL default **256**; **server** channel hard-cap **8** (Boot does not raise it from YAML) — open another `Connection` when exhausted |
 | `writerEligible` | Wire metadata: the node may accept writes |
 | `regionEpoch` | Epoch counter of the Active site under region fencing |

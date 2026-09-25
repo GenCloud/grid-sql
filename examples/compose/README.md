@@ -2,9 +2,9 @@
 
 Fault-tolerant Grid SQL clusters for local / lab use.
 
-**Product image:** `jamoa-grid-sql:local` built from **`grid-sql-server-starter`** (not the Jepsen chaos image).
+**Product image:** `jamoa-grid-sql:local` built from **`grid-sql-server-starter`** (not the Jepsen chaos image `jamoa-grid-jepsen:local`).
 
-Knobs are aligned with living Jepsen / HA Load / Multidc gates (ORCHID `0.85` / `MAJORITY` / `max-propose-in-flight: 64`, durability+fsync, `validate-group-membership: false`).
+Knobs match the lab reference profiles used by Jepsen / HA Load / Multidc (ORCHID `0.85` / `MAJORITY` / `max-propose-in-flight: 64`, durability+fsync, `validate-group-membership: false`). Compose is a **local stand**, not GitHub Actions.
 
 RU: [README.ru.md](README.ru.md) · Docs: [docs/en/configure-and-operate/operations/deploy-compose.md](../../docs/en/configure-and-operate/operations/deploy-compose.md)
 
@@ -19,8 +19,8 @@ powershell -File .\examples\scripts\build-sql-image.ps1
 
 | Path | Topology | Config source of truth | When to use |
 |------|----------|------------------------|-------------|
-| `1dc-n2/` | Primary + replica (N=2) | `application-primary/replica.yml` (HA Load) | JMeter Load / living WRITE·READ floors |
-| `1dc-n3/` | Same-DC N=3 ORCHID | Jepsen topology + HA Load swarm/autocutover | Sticky promote, everyday HA |
+| `1dc-n2/` | Primary + replica (N=2) | `application-primary/replica.yml` (HA Load) | JMeter Load / WRITE·READ lab |
+| `1dc-n3/` | Same-DC N=3 ORCHID | Jepsen-shaped topology + HA Load swarm/autocutover | Sticky promote, everyday HA |
 | `multidc-async/` | 3+2+w1 ASYNC_SHIP | Jepsen multidc `async/` + witness | Cross-DC RPO / ship lag |
 | `multidc-sync/` | 3+2+w1 SYNC_VOTERS | Jepsen multidc `sync-voters/` + witness | Cross-DC commit cost |
 

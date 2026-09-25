@@ -38,7 +38,7 @@ pwsh ./scripts/run-tlc-orchid.ps1
 
 Используется кэш `tla2tools.jar` в `.tools/`. Нужны обе спецификации: `OrchidLog.tla` и `OrchidLogMultiDc.tla`. Подробности: [ORCHID TLA+](orchid-tla.md).
 
-Цепочка perf-гейта (QG, Jepsen, несколько площадок, JMH, нагрузка — спокойный хост, по одной проверке):
+Цепочка perf-гейта (QG, Jepsen, несколько площадок, JMH, нагрузка) — на **спокойном хосте, по одной проверке**, не как default GitHub Actions. Unit CI — `.github/workflows/ci.yml`; матрица Jepsen/QG/Multi-DC — `jepsen-qg.yml` (см. корневой [README](../../README.md) § CI). Локальный драйвер:
 
 ```bash
 ./scripts/run-perf-gate.sh

@@ -1,6 +1,6 @@
 # Examples
 
-Runnable **`grid-sql-client`** cases — **reactive** (`ConnectionFactory` / `grid://`) and **JDBC tooling** (`GridDriver` / `jdbc:grid://`) — plus local HA compose labs.
+Runnable **`grid-sql-client`** cases — **reactive** (`ConnectionFactory` / `grid://`) and **JDBC client** (`GridDriver` / `jdbc:grid://`) — plus local HA compose labs (not GitHub Actions).
 
 RU: [README.ru.md](README.ru.md)
 
@@ -39,7 +39,7 @@ mvn -pl examples/examples-jdbc-dml exec:java
 
 ## JDBC modules (`jdbc:grid://`)
 
-Sync tooling API in the same artifact (`org.genfork.grid.jdbc.GridDriver`). Prefer reactive for capacity / JMeter.
+Sync JDBC API in the same artifact (`org.genfork.grid.jdbc.GridDriver`). Prefer reactive for capacity / JMeter.
 
 | Module | Focus | Run |
 |--------|--------|-----|
@@ -50,8 +50,8 @@ Sync tooling API in the same artifact (`org.genfork.grid.jdbc.GridDriver`). Pref
 | `examples-jdbc-batch` | Statement + PreparedStatement batch | `mvn -pl examples/examples-jdbc-batch exec:java` |
 | `examples-jdbc-session` | setSchema / fetchSize / URL options | `mvn -pl examples/examples-jdbc-session exec:java` |
 
-Shared: `examples-common` (`ExampleSupport.run` / `runJdbc`). Docs: [JDBC client](../docs/en/develop/jdbc-tooling.md), [Java client](../docs/en/develop/java-client.md).
+Shared: `examples-common` (`ExampleSupport.run` / `runJdbc`). Docs: [JDBC client](../docs/en/develop/jdbc-tooling.md), [Java client](../docs/en/develop/java-client.md). jOOQ: `examples-jooq` — [jOOQ DSL](../docs/en/develop/jooq.md).
 
 ## Compose labs
 
-See [`compose/`](compose/) — image via [`scripts/build-sql-image.ps1`](scripts/build-sql-image.ps1).
+See [`compose/`](compose/) — image via [`scripts/build-sql-image.ps1`](scripts/build-sql-image.ps1). Local stands only — not GitHub Actions (see root README § CI).

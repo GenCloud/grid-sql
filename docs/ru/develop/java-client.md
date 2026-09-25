@@ -1,18 +1,18 @@
 # Java-клиент
 
-Приложения работают с Grid через модуль **`grid-sql-client`**. Библиотека открывает TCP к SQL-порту узла на собственном протоколе (кадры с длиной в начале, little-endian) и даёт **два** равноправных API: reactive (`ConnectionFactory` / Reactor) и синхронный JDBC (`jdbc:grid://`).
+Приложения работают с Grid через модуль **`grid-sql-client`**. Библиотека открывает TCP к SQL-порту узла на собственном протоколе (кадры с длиной в начале, little-endian) и даёт **два** равноправных API: реактивный (`ConnectionFactory` / Reactor) и синхронный JDBC (`jdbc:grid://`).
 
 Цепочка типов простая:
 
 | Тип | Что это |
 |-----|---------|
-| `ConnectionFactory` | Точка входа reactive. Держит Netty event loop group и пул TCP-сокетов |
+| `ConnectionFactory` | Точка входа реактивного API. Держит Netty event loop group и пул TCP-сокетов |
 | `Connection` | Транспорт: один сокет, поверх которого мультиплексируются логические сессии |
 | `TxContext` | Независимая транзакция на этом транспорте |
 | `Statement` | Один SQL-запрос: `bind(...)`, `execute()`, `executeUpdate()`, `fetchOne()` |
 | `Result` / `Row` | Результат: либо набор строк, либо счётчик изменённых строк |
 
-JDBC-клиент (`org.genfork.grid.jdbc`) — стабильный sync-вход в том же модуле: [JDBC-клиент](jdbc-tooling.md).
+JDBC-клиент (`org.genfork.grid.jdbc`) — стабильный синхронный вход в том же модуле: [JDBC-клиент](jdbc-tooling.md).
 
 ## Зависимость
 
@@ -70,7 +70,7 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<опции>
 | `readEndpoints` | — | Список реплик для чтения; включает маршрутизацию |
 | `readPreference` | `PRIMARY` | `PRIMARY` / `REPLICA`; `REPLICA` требует `readEndpoints` |
 | `staleReadPolicy` | `FAIL_CLOSED` | При отставании реплики выше порога сервера — отказ чтения (в v1 единственное значение); см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md) |
-| `maxReadConnections` | `1` | Сокеты в пуле чтения |
+| `maxReadConnections` | `1` | Сокеты фабрики чтения к репликам |
 | `warmup` | `false` | Если `true`, явный `warmup()` прогревает `minConnections` (не блокирует `obtain`) |
 
 Несколько хостов в authority — это **не** балансировка записи, а список кандидатов: клиент закрепляется на узле, который может писать (`writerEligible`) и меняет его только по `ServerMeta` / `PROMOTE_NOTIFY`. Подробнее — [повышение роли узла](../configure-and-operate/operations/ha-promote.md).
@@ -202,11 +202,11 @@ grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:1
 
 Результат приходит окнами: клиент просит `fetchWindow` строк, сервер отдаёт ровно столько и ждёт следующего FETCH. Окно задаётся на URL или на конкретном запросе — `statement.fetchWindow(256)`. См. [потоковую выдачу](wire-streaming.md).
 
-## JDBC-клиент и Sync без JDBC
+## JDBC-клиент и синхронный доступ без JDBC
 
-Пакет `org.genfork.grid.jdbc` и URL `jdbc:grid://` — стабильный синхронный API на том же протоколе, что и reactive. Sync-фасад: `JdbcSync` → `SyncAwait` на `SyncExecExchange` / `SyncBatchExchange`. Reactive SPI — `ReactiveExecExchange` / `ReactiveBatchExchange`. Толстый jar для IDE: `mvn -pl grid-sql-client -am package -DskipTests` → `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`.
+Пакет `org.genfork.grid.jdbc` и URL `jdbc:grid://` — стабильный синхронный API на том же протоколе, что и реактивный. Синхронный фасад: `JdbcSync` → `SyncAwait` на `SyncExecExchange` / `SyncBatchExchange`. Реактивный обмен: `ReactiveExecExchange` / `ReactiveBatchExchange`. Толстый jar для IDE: `mvn -pl grid-sql-client -am package -DskipTests` → `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`.
 
-Для **синхронного приложения без JDBC** используйте `SyncConnectionFactory.fromUrl(gridUrl)` → `open()` → `SyncConnection` (те же опции URL; park/close как у фабрики). Подробности: [JDBC-клиент](jdbc-tooling.md) (§ Sync без JDBC). Замеры ёмкости — только JMeter на `grid://`, не через JDBC.
+Для **синхронного приложения без JDBC** используйте `SyncConnectionFactory.fromUrl(gridUrl)` → `open()` → `SyncConnection` (те же опции URL; `close` возвращает канал в пул простоя). Подробности: [JDBC-клиент](jdbc-tooling.md) (§ синхронный доступ без JDBC). Замеры ёмкости — только JMeter на `grid://`, не через JDBC.
 
 ## Примеры для запуска
 

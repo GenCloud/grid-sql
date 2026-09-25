@@ -1,6 +1,6 @@
 # jOOQ DSL (grid-jooq)
 
-Optional **jOOQ** module for building Simplified SQL and executing it over Grid JDBC tooling.
+Optional **jOOQ** module for building Simplified SQL and executing it over the Grid JDBC client.
 It is **not** a second query engine: the server still parses text via ANTLR `SimplifiedSql`.
 
 ## When yes / when no
@@ -14,17 +14,17 @@ It is **not** a second query engine: the server still parses text via ANTLR `Sim
 | Capacity / p95 load runs | No — JMeter on `grid://` |
 | Full foreign SQL dialect “as is” | No — Simplified SQL only |
 
-## Multiplex DataSource (canon)
+## Multiplex DataSource (recommended path)
 
 ```text
 Apps / jOOQ / DBeaver
   └─ GridDataSource  ≡  GridDriver   (same Sync* API)
        └─ SyncConnectionFactory.shared (interned per URL target)
-            └─ RemoteConnectionFactory TCP floor ≥ MIN_TCP_CHANNELS (10)
-                 └─ Connection.close = park only; DataSource.close = retain release
+            └─ RemoteConnectionFactory: at least MIN_TCP_CHANNELS (10) TCP channels
+                 └─ Connection.close → park idle channel; DataSource.close → release retain
 ```
 
-TCP caps / idle / `maxTxContexts` live **only** in Sync*/`RemoteConnectionFactory`. There is **no** JDBC-level pool registry. Do **not** replace this with Hikari `maximumPoolSize=N`.
+TCP caps / idle / `maxTxContexts` live **only** in `SyncConnectionFactory` / `RemoteConnectionFactory` (client default **256**; server channel hard-cap **8**, Boot does not raise from YAML). There is **no** JDBC-level pool registry. Do **not** replace this with Hikari `maximumPoolSize=N`.
 
 `grid-jooq` consumes only `javax.sql` / `java.sql` + `GridSQL` / `GridDSL` — no Sync*/Remote* imports.
 

@@ -96,7 +96,7 @@ For a Custom Driver, take `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`
 
 The URL format is the same as `grid://`, just with a `jdbc:` prefix: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. The path after the hosts is the **default schema** (not a separate database catalog). The `?hosts=` parameter is not supported — multiple hosts go comma-separated in the authority.
 
-The driver strips `jdbc:` and parses with the same URL parser as the reactive client. Entry is **`SyncConnectionFactory.fromUrl` / `shared`** (same product URL semantics as `ConnectionFactory.fromUrl`): when `readEndpoints` + `readPreference=REPLICA` are present, autocommit SELECT/EXPLAIN route to the read pool. Inherited `grid://` options: `maxTxContexts`, `readEndpoints`, `readPreference`, `fetchWindow`, HA host ring. URL details: [connect clients](../getting-started/connect-clients.md).
+The driver strips `jdbc:` and parses with the same URL parser as the reactive client. Entry is **`SyncConnectionFactory.fromUrl` / `shared`** (same URL rules as `ConnectionFactory.fromUrl`): when `readEndpoints` + `readPreference=REPLICA` are present, autocommit SELECT/EXPLAIN route to replica channels. Inherited `grid://` options: `maxTxContexts` (client default **256**; server channel hard-cap **8**, Boot does not raise from YAML), `readEndpoints`, `readPreference`, `fetchWindow`, HA host ring. URL details: [connect clients](../getting-started/connect-clients.md).
 
 Example replica URL:
 

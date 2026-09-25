@@ -1,41 +1,48 @@
 # Architecture overview
 
-Grid is a distributed SQL database: the schema is ordinary SQL DDL, hot rows live in memory as binary blobs, and — when durability is enabled — every change reaches the mutation journal (OpLog) and the sealed map files before any reader can see it. Writes between nodes are agreed by the ORCHID protocol.
+The client sends SQL. A row must either appear consistently for everyone or for no one. With durability on, the path is: ORCHID admission → confirmation in the journal (OpLog) → in-memory map and indexes → ship to peers when needed. Until the disk confirms, other sessions do not see the row as committed. Better a client error than “already in memory, not yet on disk”.
 
-The layers below are the map of the system: who owns which decision, what is a contract and what is an implementation detail, and where the details live.
+Below is how that path is built. Layer details live behind the table links.
 
 ## The path of one request
+
+Human chain first, then names on the diagram:
+
+1. Client (`grid://` or `jdbc:grid://`) → SQL parse and table catalog.
+2. Write queue → ORCHID (phase + checksum) → journal on disk.
+3. Only after journal confirmation — in-memory map and indexes.
+4. The journal ships to peers; they apply it locally.
 
 ```mermaid
 flowchart TB
   API["Client: ConnectionFactory, grid://"] --> Engine["Engine: ANTLR SQL, TableCatalog, TableStore"]
-  Engine --> Stage["Write queue: GridEntriesProcessor"]
-  Stage -->|"agreement before visibility"| Orchid["ORCHID: phases + digest quorum"]
-  Orchid --> OpLog["OpLog: mutation journal on disk"]
-  OpLog --> Map["In-memory map: GridScalableMap"]
-  Map --> Idx["Indexes: BPTree, bitmap"]
-  OpLog --> Ship["Ship to peers: NettyReplicationTransport"]
-  Ship --> Apply["Apply on peer: ReplicaApplier"]
+  Engine --> Stage["Write queue"]
+  Stage -->|"agreement before visibility"| Orchid["ORCHID: phases + checksum"]
+  Orchid --> OpLog["OpLog: journal on disk"]
+  OpLog --> Map["In-memory map"]
+  Map --> Idx["Indexes"]
+  OpLog --> Ship["Ship to peers"]
+  Ship --> Apply["Apply on peer"]
   Apply --> Map2["Peer map"]
 ```
 
-*Figure 1. A write passes agreement and the journal before any reader can see it.*
+*Figure 1. Agreement and the journal before any reader sees the row.*
 
-The key property of this ordering: **on failure we do not proceed**. If ORCHID did not admit the write or the OpLog did not confirm persistence, the row never appears in the map — instead of a partially applied commit the client gets a rejection. There is no intermediate "visible in memory, not yet on disk" state to reason about, and no background task that could later make a rejected write appear.
+If ORCHID did not admit the write or the journal did not confirm persistence, the row never appears in the map. There is no background task that later “catches up” a rejected write.
 
-## Layers
+## What a node is made of
 
 | Layer | Role | More |
 |-------|------|------|
-| Client | `grid-sql-client`: reactive (`grid://`, `ConnectionFactory` / `TxContext`) or JDBC (`jdbc:grid://`) | [Java client](../develop/java-client.md), [JDBC client](../develop/jdbc-tooling.md) |
-| Engine | SQL parsing through ANTLR, the table catalog, SELECT planning, transaction commit | [SQL fundamentals](../sql/fundamentals.md), [support matrix](../sql/support-matrix.md) |
-| Write | The asynchronous `GridEntriesProcessor` queue, then agreement and the journal | [the write path](write-path-staging.md) |
-| Storage | In memory, `GridScalableMap` holds the working set; on disk there are sealed `.gmap` files, `.sbpt` / `.sbm` indexes and the OpLog | [storage](storage-sealed-gmap.md) |
-| Agreement | ORCHID: phase synchronization (after Yoshiki Kuramoto) and digest quorum. There are no terms and no leader elections as in Raft | [ORCHID](orchid-consensus.md) |
-| Replication | Between nodes it is always Netty. Between data centres there are `ASYNC_SHIP` and `SYNC_VOTERS_ACROSS_DC` modes | [replication network](replication-network.md), [replication state](replication-state.md) |
-| Placement | `AdaptiveReplicaSwarm` can move shard ownership; `PIN` temporarily forbids moves for selected keys | [shard placement](overlay-and-swarm.md) |
+| Client | `grid-sql-client`: reactive (`grid://`) or JDBC (`jdbc:grid://`) | [Java client](../develop/java-client.md), [JDBC client](../develop/jdbc-tooling.md) |
+| Engine | ANTLR SQL, catalog, SELECT planning, TX commit | [SQL fundamentals](../sql/fundamentals.md), [support matrix](../sql/support-matrix.md) |
+| Write | Queue, then agreement and journal | [write path](write-path-staging.md) |
+| Storage | Hot set in RAM; sealed files and OpLog on disk | [storage](storage-sealed-gmap.md) |
+| Agreement | ORCHID: phases and checksum; no Raft-style leader election | [ORCHID](orchid-consensus.md) |
+| Replication | Netty between nodes; `ASYNC_SHIP` / `SYNC_VOTERS_ACROSS_DC` across sites | [replication network](replication-network.md) |
+| Placement | Shard-move hints; `PIN` temporarily forbids moves | [shard placement](overlay-and-swarm.md) |
 
-The old "WAL on top of the map" path and the double-write of compact snapshots have been removed. With durability enabled, the source of truth is the OpLog plus sealed files, and the in-memory map is an accelerator.
+With durability on, truth is OpLog plus sealed files; the in-memory map is an accelerator.
 
 ## Modules
 
@@ -134,11 +141,4 @@ Run results and reference thresholds: [capacity and SLO](../performance/capacity
 | "PIN = row lock" | PIN is about shard migration, not SQL locking |
 | "Fan-out = distributed SQL" | Fan-out parallelizes shard-local keys on one node |
 
-## Related
-
-- [Storage: sealed map files](storage-sealed-gmap.md)
-- [The write path](write-path-staging.md)
-- [ORCHID consensus](orchid-consensus.md)
-- [Visibility and concurrency](concurrency-and-visibility.md)
-- [Replication network](replication-network.md)
-- [Shard placement](overlay-and-swarm.md)
+Next: [write path](write-path-staging.md), [ORCHID](orchid-consensus.md), [storage](storage-sealed-gmap.md).

@@ -230,7 +230,7 @@ DROP ROLE readers;
 
 Набор привилегий: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`. Цель — схема или таблица. Роли хранят права; `GRANT ROLE … TO user` даёт членство (проверяется при проверке полномочий).
 
-`REVOKE … FROM user` снимает права у пользователя. Отдельной команды `REVOKE ROLE` нет: чтобы убрать членство, удалите роль (`DROP ROLE`). Каталог на диске: `{grid.sql.data-dir}/catalog/privileges.meta`. Оператору: [безопасность](../configure-and-operate/operations/security.md).
+`REVOKE … FROM user` снимает права у пользователя. Отдельной команды `REVOKE ROLE` нет: чтобы убрать членство, удалите роль (`DROP ROLE`). Каталог на диске: `{grid.sql.data-dir}/catalog/privileges.meta` — **на каждом узле**, репликация файл не доставляет; тот же DDL (или копия файла в процедуре узла) на каждом SQL-слушателе, куда ходят приложения. Оператору: [безопасность](../configure-and-operate/operations/security.md).
 
 ## Что отклоняется
 

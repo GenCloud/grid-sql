@@ -18,4 +18,4 @@ RU: [README.ru.md](README.ru.md)
 
 ## Gate alignment
 
-ORCHID/digest-quorum/max-propose-in-flight: 64, ha.replica-reads-enabled, alidate-group-membership: false match Jepsen + HA Load references. Swarm / placement / autocutover are **on** (HA Load proven). Use `1dc-n2` for LAZY hydrate + N=2 Load floors.
+ORCHID / digest-quorum / `max-propose-in-flight: 64`, `ha.replica-reads-enabled`, `validate-group-membership: false` match Jepsen + HA Load lab references. Swarm / placement / autocutover are **on**. Use `1dc-n2` for LAZY hydrate + N=2 Load lab.

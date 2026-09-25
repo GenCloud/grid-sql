@@ -128,7 +128,7 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 |-------------|--------|
 | `ConnectionFactory.fromUrl` + ANTLR авто-маршрут | готово (рекомендуется) |
 | `createReadStatement` / `executeRead` | готово (явный API) |
-| `RemoteConnectionFactory.createReadFactory` | готово (пул чтения) |
+| `RemoteConnectionFactory.createReadFactory` | готово (каналы к репликам) |
 | `staleReadPolicy` | v1 только отказ при stale |
 | N `readEndpoints` + ротация на `applyLagStale` | готово (`ReplicaReadEndpointsRotateIT`) |
 

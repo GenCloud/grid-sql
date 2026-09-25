@@ -55,7 +55,7 @@ grid://<пользователь>:<пароль>@<хост>:<порт>[,<хос�
 
 На **сервере** по умолчанию канал принимает не больше **8** открытых сессий на TCP. Spring Boot **не** прокидывает `grid.sql.max-tx-contexts` в слушатель — если клиент просит больше восьми на одном сокете, откройте дополнительные `Connection` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md), [транзакции](../develop/transactions.md)).
 
-Полный список (включая HA): [Java-клиент](../develop/java-client.md). JDBC и Sync без JDBC: [JDBC-клиент](../develop/jdbc-tooling.md). Смена writer: [повышение роли](../configure-and-operate/operations/ha-promote.md).
+Полный список (включая HA): [Java-клиент](../develop/java-client.md). JDBC и синхронный доступ без JDBC: [JDBC-клиент](../develop/jdbc-tooling.md). Смена writer: [повышение роли](../configure-and-operate/operations/ha-promote.md).
 
 ### Одно соединение, много транзакций
 

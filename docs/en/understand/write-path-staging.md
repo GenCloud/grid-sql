@@ -1,71 +1,70 @@
 # The write path
 
-A write in Grid does not land in the map directly. Several layers sit between the client and a visible row, and each solves its own problem: asynchronous flushing, agreement between nodes, the on-disk journal, atomic transaction application.
+The client said `UPSERT`. When do other sessions see the row? Not as soon as the SQL thread returns: agreement and the on-disk journal come first, then the in-memory map. Better a client error than “already in the map, not yet on disk”.
 
-Two orderings on this path are contracts rather than implementation details, and the rest of the page is mostly about them.
+Two orderings on this path are contracts. The rest of the page is the mechanics around them.
 
-## Overall ordering
+## Journal first, visibility second
 
 ```
 INSERT / UPDATE / DELETE
         │
    SqlEngine → TableStore
         │
-   write queue (GridEntriesProcessor)
+   write queue
         │
    ┌────┴──────────────────────────────┐
    │ is durability enabled?            │
    └────┬──────────────────────────┬───┘
         │ yes                      │ no
         ▼                          ▼
-  MutationRecorder            put into the map
-   ORCHID → OpLog → confirmation
+  ORCHID → OpLog → confirmation    put into the map
         │
         ▼
    put into the map  ──►  index queue
         │
         ▼
-   ship to peers over Netty
+   ship to peers
 ```
 
 *Figure 1. Without durability the path is short; with durability, agreement and the journal come first.*
 
-**Contract one: agreement and journal first, visibility second.** On failure we do not proceed. If ORCHID refused admission or the journal did not confirm the write, the row never appears in the map and the client gets an error. There is no intermediate "in the map but not on disk" state.
+**Contract one: agreement and journal before visibility.** If ORCHID refused or the journal did not confirm, the row never appears in the map. There is no “in the map but not on disk” state.
 
-**Contract two: the map first, the index queue second.** A change becomes visible in `GridScalableMap` and is only then handed to the index worker. Do not reorder that without a dedicated task — readers that resolve a key through an index and then fetch the row rely on the row being there already.
+**Contract two: the map before the index queue.** A reader that resolves a key through an index and then fetches the row relies on the row already being there. Do not reorder that without a dedicated task.
 
-## Inside the write queue
+## What the write queue does
 
-The staged pipeline is short but worth spelling out, because queue depth is one of the few write-path numbers an operator can act on:
+Queue depth is one of the few write-path numbers an operator can act on:
 
-1. `GridEntriesProcessor.add` accepts the change and places it into staging for its shard. The calling SQL thread is released here — it does not wait for disk.
-2. `GridEntriesWorker` drains staging. With durability enabled, this is where `MutationRecorder` runs the ORCHID → OpLog → confirmation chain.
-3. The confirmed change is put into the map, which is the moment the row becomes visible to other sessions.
-4. `GridIndexWorker` picks the change up and updates secondary indexes.
+1. The change lands in shard staging. The SQL thread is free here — it does not wait for disk.
+2. With durability on, the drain runs ORCHID → OpLog → confirmation.
+3. The confirmed change is put into the map — that is when other sessions see the row.
+4. A separate worker updates secondary indexes.
 
-Reads consult staging before the map, so a session never fails to see a change that its own commit has already accepted. Entries sitting in staging are also protected from working-set eviction: eviction must never be able to drop a change that has not reached the journal.
+Reads consult staging before the map, so a session never loses a commit it already accepted. Staging entries are not working-set-evicted: eviction must never drop a change that has not reached the journal.
 
-When queue depth grows and stays high, the bottleneck is downstream — ORCHID admission or journal fsync — not the queue itself. Adding client threads at that point raises latency without raising throughput.
+When queue depth grows and stays high, the bottleneck is downstream — ORCHID admission or journal fsync. Adding client threads then raises latency without raising throughput.
 
 ## Three write-buffering layers
 
 | Layer | Where it lives | What it does |
 |-------|----------------|--------------|
-| Write queue | `GridEntriesProcessor` and `GridEntriesWorker` | Asynchronously flushes changes into the map. With durability enabled, `MutationRecorder` first runs the ORCHID → OpLog → confirmation chain |
-| Apply-time buffering | `ReplicaApplier`, per `(domain, shard)` pair | Buffers `UPSERT` and `DELETE` between `TX_BEGIN` and `TX_COMMIT`, flushes on commit, discards on rollback and on an unclosed transaction |
-| Cross-DC envelope | `TxEnvelopeCoordinator` | Holds a multi-shard transaction until every shard has committed |
+| Write queue | Local drain into the map | Accepts changes asynchronously. With durability on, ORCHID → OpLog → confirmation runs before put |
+| Apply-time buffering | The node applying someone else's journal | Buffers `UPSERT`/`DELETE` between `TX_BEGIN` and `TX_COMMIT`; flushes on commit, discards on rollback |
+| Cross-site envelope | Several shards of one TX | Holds the transaction until every shard has committed |
 
-The difference is fundamental. The first layer is about local write throughput. The second is about making sure a reader on a replica never sees half a transaction. The third is about a remote data centre receiving a transaction in full.
+The first layer is local write throughput. The second keeps a replica reader from seeing half a transaction. The third delivers a full transaction to a remote site.
 
 Do not confuse the **write queue** with the **apply buffer on a peer**:
 
-| | Write queue (`GridEntriesProcessor`) | Apply buffer (`ReplicaApplier`) |
-|--|--------------------------------------|----------------------------------|
+| | Write queue | Apply buffer |
+|--|-------------|--------------|
 | Where | The node that accepts the client write | The peer that applies someone else's journal |
 | When the row is visible | After ORCHID → OpLog → put into the map (with durability) | After `TX_COMMIT` on the whole buffered block |
 | On failure | The client gets an error; the map does not change | The block is discarded; there is no partial visibility |
 
-The queue is about accepting a write here quickly and safely. The apply buffer is about showing a whole transaction on a replica.
+The queue is “accept a write here quickly and safely”. The apply buffer is “show a whole transaction on a replica”.
 
 ## Transactions
 
@@ -87,7 +86,7 @@ Visibility rules, lock scope and what `PREPARE` does to a session: [visibility a
 
 `MultiShardCommitBarrier` collects the participating `table#shard` streams and waits until a single contiguous block lands in the journal: `TX_BEGIN` → operations → `TX_COMMIT`. If one stream fails midway, the already opened ones are rolled back together.
 
-This is a **local commit-flush barrier on the proposer**, not distributed two-phase commit over foreign resource managers and not a separate arbiter service.
+This is a **local commit-flush barrier on the writer**, not distributed two-phase commit over foreign resource managers and not a separate arbiter service.
 
 The practical consequence for schema design: keep a transaction inside one logical key set. The more shards in one commit unit, the longer the barrier holds and the more expensive a rollback becomes.
 
@@ -124,6 +123,4 @@ It is not a "faster durable mode". Numbers measured with durability off — or w
 - Lock waits that scale with concurrency point at hot keys rather than at the write path: [visibility and concurrency](concurrency-and-visibility.md).
 - Metrics and health: [monitoring](../configure-and-operate/monitoring.md).
 
-## Related
-
-[storage](storage-sealed-gmap.md), [architecture overview](architecture-overview.md), [durability](../configure-and-operate/configuration/durability.md), [DML](../sql/dml.md), [failures](../configure-and-operate/operations/failures.md).
+Next: [storage](storage-sealed-gmap.md), [ORCHID](orchid-consensus.md), [durability](../configure-and-operate/configuration/durability.md).
