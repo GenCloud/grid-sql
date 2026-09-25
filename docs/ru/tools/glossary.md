@@ -35,6 +35,7 @@
 | Изоляция площадок | Режим `grid.replication.region.enabled`: роли Active / Hold / Witness и `regionEpoch` вместо фиксированной главной площадки |
 | Подтягивание реплики | Когда отстающий узел догоняет журнал (SparseCatchUp, HomologousRepair), а не ставится с нуля |
 | Готовность (readiness) | Проба Actuator: SQL слушает и, при включённой репликации, ORCHID синхронизирован; иначе трафик слать нельзя |
+| Разлёт | Fan-out SELECT/JOIN на удалённые SQL-пиры (`grid.sql.distributed-peers`); не путать с Dist FOR UPDATE из `peers` репликации |
 
 ## Не путать
 

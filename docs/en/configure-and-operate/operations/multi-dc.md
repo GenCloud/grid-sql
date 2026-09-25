@@ -33,6 +33,8 @@ Mode is set in `grid.replication.cross-dc.mode`.
 | `ASYNC_SHIP` | Transaction commits locally; the journal ships to the backup site asynchronously | Backup lag: some recent writes may not arrive |
 | `SYNC_VOTERS_ACROSS_DC` | Commit waits for remote voter ACKs (cap: `remote-ack-timeout-ms`) | Every write pays a WAN round trip |
 
+**Claim and RPO (on this page).** Role claim: Active silent past `claim-timeout-ms` → Hold confirmation quorum → `regionEpoch` +1 → new Active. Client calls `rediscoverWriter()` (never the next URL host). RPO: under `ASYNC_SHIP`, Hold may miss fresh commits within ship lag (`rpoEstimateMs` / apply lag); under `SYNC_VOTERS_ACROSS_DC`, quorum-passed commits are already on Hold, but every write pays WAN. Drill cadence and failback steps: [Active site loss](#active-site-loss) below; load recipes: [multi-site under load](cluster-multidc-highload.md).
+
 ```mermaid
 flowchart LR
   subgraph asyncM [ASYNC_SHIP]

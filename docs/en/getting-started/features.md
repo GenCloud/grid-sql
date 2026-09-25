@@ -40,7 +40,7 @@ See [storage](../understand/storage-sealed-gmap.md), [durability](../configure-a
 
 - One TCP connection carries several independent transactions.
 - Changes stay private to their transaction until COMMIT.
-- Per-key record locks; `FOR UPDATE` and `SKIP LOCKED` on the writer node, and on peers when Dist FOR UPDATE agents are configured.
+- Per-key record locks; `FOR UPDATE` and `SKIP LOCKED` on the writer node, and on peers when Dist FOR UPDATE agents are wired from **replication `peers`** (not `grid.sql.distributed-peers` — that knob is read-only SELECT/JOIN fan-out). See [replica reads](../configure-and-operate/operations/replica-reads.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
 - DDL inside an open transaction is rejected.
 
 ## Privileges (RBAC)

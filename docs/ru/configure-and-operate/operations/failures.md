@@ -22,7 +22,7 @@
 | `readiness` DOWN при старте с репликацией | Дождаться ORCHID sync; не слать нагрузку. Смотреть `orchidSynced`, `reason`, `orchid_r` | [мониторинг](../monitoring.md), [ORCHID](../../understand/orchid-consensus.md) |
 | Запись отклонена (`OrchidNotSyncedException` / нет допуска) | Проверить peers, сеть, порог `R`, диск/`fsync`. Не отключать fsync ради TPS | [репликация](../configuration/replication.md) |
 | Диск полный / OpLog не пишет | Освободить место; проверить `op-log` и archive. Сбой archive отменяет truncate — это защита | [долговременное хранение](../configuration/durability.md), [PITR](pitr.md) |
-| Клиент пишет на «старый» writer после failover | Ждать `PROMOTE_NOTIFY` или вызвать `rediscoverWriter()`. Не крутить round-robin хостов | [повышение роли](ha-promote.md) |
+| Клиент пишет на «старый» writer после переключения | Ждать `PROMOTE_NOTIFY` или вызвать `rediscoverWriter()`. Не крутить round-robin хостов | [повышение роли](ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | Один Active; Hold/Witness не в URL записи. Переподключить через rediscover | [несколько ЦОД](multi-dc.md) |
 | Падение Active-ЦОД (`ASYNC_SHIP`) | Возможен RPO на Hold в пределах отставания. Новый Active через claim; клиент — rediscover | [несколько ЦОД](multi-dc.md) |
 | Падение Active-ЦОД (`SYNC_VOTERS`) | Свежие коммиты с кворумом уже на voters. Тот же claim + rediscover; цена — WAN на каждую запись | [несколько ЦОД](multi-dc.md) |
@@ -83,7 +83,7 @@
 |----------|-----------|
 | Два процесса пишут в один `dataDir` или два Active | Немедленно: остановить лишнее, разобрать epoch, не «лечить» URL |
 | `repair_issued` растёт часами без `repair_applied` | Диск/сеть пиров; при сомнении в журнале — учебное восстановление PITR на копии |
-| После failover клиенты продолжают писать на старый host | Баг приложения (нет rediscover) — чинить клиент, не сервер |
+| После переключения клиенты продолжают писать на старый host | Баг приложения (нет rediscover) — чинить клиент, не сервер |
 | Нужен откат «на час назад», а archive выключен | Данных в archive нет — только peers/sealed; планировать archive заранее |
 
 ## Чего не делать

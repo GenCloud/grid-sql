@@ -50,7 +50,7 @@ Inside an open transaction, `savepoint` / `rollbackTo` / `release` affect only t
 |---------|------|
 | `Connection` / TCP | Transport. One socket carries many logical sessions. |
 | `TxContext` | Independent transaction plus PREPARE handle. |
-| `maxTxContexts` | Soft cap on concurrent logical sessions on that TCP. |
+| `maxTxContexts` | Client soft cap on concurrent logical sessions on that TCP (default **256**); server hard-cap **8** — open another `Connection` when exhausted. |
 
 Parallel application work = several `begin()` / `TxContext`s on one connection, not a new socket per parallel worker. One `ConnectionFactory` (or DataSource) per process; `dispose()` on shutdown. The **server** channel default is **8** and Boot does not raise it from YAML — beyond that open another `Connection` ([SQL server](../configure-and-operate/configuration/sql-server.md)).
 
@@ -62,7 +62,15 @@ Parallel application work = several `begin()` / `TxContext`s on one connection, 
 
 ## Replica reads
 
-A replica may serve reads but does **not** guarantee read-your-writes relative to a just-completed writer commit. If `applyLagStale`, catch up first — do not “fix” it in the client ([replica reads](../configure-and-operate/operations/replica-reads.md)).
+A replica may serve reads but does **not** guarantee read-your-writes relative to a just-completed writer commit. After `COMMIT` succeeds on the writer, a replica may still return the previous row until it applies that OpLog unit — that gap is apply lag, not a client bug.
+
+| Need | Where to read |
+|------|----------------|
+| See your own write immediately | Writer pin (default for open TX / DML; or `PRIMARY` preference) |
+| Scale read-only SELECT/EXPLAIN | Replica endpoints when `applyLagStale` is false |
+| Replica reports `applyLagStale` | Catch up first — do not “fix” lag in the client |
+
+Details and routing: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 ## Model boundaries
 

@@ -11,3 +11,4 @@ docker-staging/*.jar
 .last-*/
 scripts/run-workload-multidc-*.sh
 scripts/run-workload-chaos-*.sh
+ARTIFACTS.txt

@@ -24,18 +24,57 @@ curl -s http://127.0.0.1:7777/health/readiness
 
 Пока узел не синхронизировался по ORCHID, readiness остаётся DOWN. Трафик на него не пойдёт: узел не объявляет себя готовым в расчёте на то, что синхронизация подтянется позже.
 
-### Если растёт p99 записи
+### Метрики Micrometer
 
-Сначала разделите стадии горячего пути. Метрики собирает `ReplicationMetrics` (часто видны в деталях health / Micrometer):
+Согласие и репликация:
 
-| Метрика | Стадия | Если растёт |
-|---------|--------|-------------|
-| `orchidWaitP50Ns` / `orchidWaitP99Ns` | Ожидание ORCHID (фаза + digest) | Сеть пиров, порог `R`, нагрузка на digest |
-| `oplogFsyncP50Ns` / `oplogFsyncP99Ns` | Групповой `force` OpLog при `fsync: true` | Диск, размер сегмента, конкуренция `force` |
+| Метрика | Назначение |
+|---------|------------|
+| `grid.replication.orchid_r` | Параметр порядка фазы; должен держаться выше `orchid.order-threshold` |
+| `grid.replication.orchid_wait_p99_ns` | Ожидание фазы и кворума digest |
+| `grid.replication.oplog_fsync_p99_ns` | Задержка группового `force` журнала |
+| `grid.replication.repair_issued` / `repair_applied` | Ремонт пропусков; issued без applied — подтягивание застряло |
+| `grid.replication.rpo_estimate_ms` | Оценка отставания между площадками |
+| `grid.replication.oplog_push_sent` / `oplog_push_recv` | Объём доставки журнала |
+| `grid.replication.apply_ack_sent` / `apply_ack_recv` | Подтверждения apply |
+| `grid.replication.connect_failures` | Отказы connect к пирам — первый сигнал сети |
+| `grid.replication.ship_backpressure` | Доставка упирается в `flow.max-inflight-ops` |
+| `grid.replication.swarm_hint` | Последняя подсказка размещения (порядковый номер) |
+| `grid.replication.overlay_pinned_keys` | Живые PIN размещения — [overlay PIN](configuration/overlay-pin.md) |
 
-Рост только ORCHID — сеть или порог `R`. Рост только fsync — диск. Обе сразу — хост перегружен, такие цифры в пороги не годятся. Разбор стадий: [критический путь ORCHID](../performance/perf-bio-consensus.md).
+Хранение и чтение:
 
-Как читать отставание реплики: поле `applyLagStale` в readiness и порог `ha.max-stale-lag` — при `true` не лечить чтением с реплики, сначала подтягивание.
+| Метрика | Назначение |
+|---------|------------|
+| `grid.replication.map_hit_rate` | Попадания в рабочий набор |
+| `grid.replication.sealed_misses`, `grid.sealed.miss` | Чтения из sealed-файлов |
+| `grid.sealed.window_remap` | Перекладки mmap-окон на крупных payload |
+| `grid.sealed.index_hit` / `index_miss` | Эффективность sealed вторичных индексов |
+
+SQL и блокировки:
+
+| Метрика | Назначение |
+|---------|------------|
+| `grid.sql.executions` | Частота операторов |
+| `grid.sql.tx_commits` / `tx_rollbacks` | Исходы транзакций |
+| `grid.sql.session_opens` | Открытие логических сессий |
+| `grid.sql.lock.wait_acquires`, `wait_timeouts`, `wait_cancels`, `wait_nanos` | Конкуренция за блокировки записей |
+| `grid.sql.cancel.requests` / `cancel.active` | Отмены клиента |
+| `grid.sql.distributed.fan_in_calls` / `fan_in_sources` / `fan_in_rows` | Fan-in распределённого чтения |
+
+### Если растёт задержка записи
+
+Задержка записи делится на стадию согласия и стадию диска. Смотрите обе до смены конфигурации:
+
+| Наблюдение | Смысл | Дальше |
+|------------|--------|--------|
+| Растёт `orchid_wait_p99_ns`, fsync ровный | Сеть пиров, порог фазы или нагрузка digest | `connect_failures`, RTT пиров, `orchid_r` |
+| Растёт `oplog_fsync_p99_ns`, ожидание согласия ровное | Диск или ротация сегмента | Задержка устройства, `op-log.segment-size`, конкурирующий I/O |
+| Обе растут | Перегруз хоста | Замер для сравнения недействителен; снизить конкуренцию и повторить |
+| Растёт `ship_backpressure` | Доставка не успевает за commit | Скорость apply на пирах и `flow.max-inflight-ops` |
+| Падает `map_hit_rate`, растут промахи sealed | Рабочий набор мал для трафика | Поднять `working-set-max-entries`, если хватает heap — [долговременное хранение](configuration/durability.md) |
+
+Разбор стадий: [критический путь ORCHID](../performance/perf-bio-consensus.md). Как читать отставание реплики: `applyLagStale` в readiness и порог `ha.max-stale-lag` — при `true` не лечить чтением с реплики, сначала подтягивание.
 
 ### Что видно в деталях пробы
 
@@ -55,17 +94,6 @@ curl -s http://127.0.0.1:7777/health/readiness
 | `swarmHint` | Имя подсказки размещения или `n/a` (`AdaptiveReplicaSwarm`) |
 
 В Micrometer метрика `grid.replication.swarm_hint` — **порядковый номер** (`-1`, если нет); в деталях readiness — **имя** подсказки. Не сравнивайте их как одно и то же.
-
-### Метрики Micrometer
-
-| Метрика | Что означает |
-|---------|--------------|
-| `grid.replication.orchid_r` | Параметр порядка `R`: насколько узлы сошлись по фазе |
-| `grid.replication.repair_issued` и `repair_applied` | Счётчики запрошенных и применённых восстановлений |
-| `grid.replication.rpo_estimate_ms` | Оценка отставания удалённого ЦОД в миллисекундах |
-| `grid.replication.swarm_hint` | Порядковый номер последней подсказки по размещению (`-1`, если подсказки нет) |
-
-Для дежурства: `orchid_r` не должен проваливаться ниже порога допуска; `rpo_estimate_ms` не должен расти без причины; `repair_issued` без `repair_applied` — сигнал проблем с подтягиванием.
 
 ### Ориентиры дежурства
 

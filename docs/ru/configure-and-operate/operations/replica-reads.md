@@ -26,15 +26,18 @@ flowchart TB
 
 ### FOR UPDATE и блокировки на пирах
 
-`FOR UPDATE` / `SKIP LOCKED` выполняются только на **пишущем** узле. Ключи блокируются локально; при включённой репликации агенты на пирах берутся из списка **`peers` репликации** (`SqlServerRuntime` → `createNettyDistForUpdatePeerLockAgents()`). Ошибка Netty на пире — отказ при ошибке. В autocommit аренда блокировки на пире снимается после оператора; в открытой TX — на COMMIT/ROLLBACK. Это не XA.
+`FOR UPDATE` / `SKIP LOCKED` выполняются только на **пишущем** узле (не на реплике только для чтения). Индексные ключи в сериализованных байтах блокируются локально (`LockAwareKeyCursor`). При включённой репликации и непустом списке пиров Boot ставит Netty-агенты из **`peers` репликации** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`); пиры берут те же блокировки через `DistForUpdateCoordinator`. Ошибка Netty на пире — отказ при ошибке. В autocommit аренда блокировки на пире снимается после оператора; в открытой TX — до COMMIT/ROLLBACK. Prepare/commit-dec — облегчённый обмен голосами по блокировкам в кадрах продукта, не XA. Поддерживаются multi-table и INNER JOIN.
 
-Без репликации или при пустом списке peers блокировки только локальные. Отдельного YAML-ключа со списком DistForUpdate endpoints нет.
+Без репликации или при пустом списке peers блокировки только локальные. Отдельного YAML-ключа со списком DistForUpdate endpoints нет. Не путать с `grid.sql.distributed-peers` (разлёт только чтения SELECT/JOIN) — [SQL-сервер](../configuration/sql-server.md).
 
 ### Авто-маршрут (v2)
 
-Если в URL есть `readEndpoints`, `ConnectionFactory.fromUrl` возвращает маршрутизирующее соединение. Классификация SQL — через общий ANTLR `SqlRouteClassifier`: READ → реплика с наименьшим числом незавершённых запросов; WRITE / TX / DDL / PREPARE / FOR UPDATE → пишущий. Поддерживается несколько `readEndpoints`. Собирать две фабрики вручную не нужно.
+Если в URL есть `readEndpoints`, `ConnectionFactory.fromUrl` возвращает маршрутизирующее соединение. Классификация SQL — через общий ANTLR `SqlRouteClassifier`:
 
-Серверный допуск (`SqlStatementTag`) отклоняет недопустимые операции на сессиях `READ_REPLICA`.
+- **READ** (обычный SELECT / EXPLAIN без блокировок) → реплика с наименьшим числом незавершённых запросов
+- **WRITE** / TX / DDL / PREPARE / `FOR UPDATE` → пишущий
+
+Поддерживается несколько `readEndpoints`. Собирать две фабрики вручную не нужно. Серверный допуск (`SqlStatementTag`) отклоняет недопустимые операции на сессиях `READ_REPLICA`.
 
 ## Конфиг сервера
 
@@ -100,12 +103,13 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 
 | Условие | Поведение |
 |---------|-----------|
-| `applyLagStale` | `REPLICA_READ_STALE` → смена адреса |
+| `applyLagStale` | `REPLICA_READ_STALE` → смена адреса на следующем `obtain()` / границе оператора |
 | `replicaReadsEnabled=false` | `REPLICA_READ_DISABLED` |
-| Узел только подтягивания / Witness | отказ |
-| DML / BEGIN на `READ_REPLICA` | `READ_REPLICA_DML_DENIED` |
+| Узел только подтягивания / learner | отказ клиентского SQL |
+| Witness | отказ чтения с реплики |
+| DML / BEGIN на `READ_REPLICA` | `READ_REPLICA_DML_DENIED` (после тега ANTLR) |
 
-В v1 нет политики `ALLOW_STALE`. После своей записи читайте с пишущего узла или смиритесь с возможным отставанием на реплике.
+В v1 нет политики `ALLOW_STALE` (только отказ при stale). После своей записи читайте с пишущего узла или смиритесь с возможным отставанием на реплике.
 
 ## Плюсы и риски
 
@@ -116,6 +120,7 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 | Явный read API доступен | Приложение может ошибочно звать `executeRead` для записи |
 | Jepsen остаётся PRIMARY-only | URL с `readEndpoints` в Elle отклоняется |
 | Hold может отдавать чтение при нормальном отставании | Witness никогда не отдаёт |
+| На Windows seal снимает mmap `.sbpt` перед REPLACE | Seal всё равно конкурирует с IO под нагрузкой |
 
 ## Поверхности API
 

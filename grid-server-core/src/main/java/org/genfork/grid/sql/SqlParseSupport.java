@@ -17,14 +17,22 @@ package org.genfork.grid.sql;
 
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.misc.Interval;
 import org.genfork.grid.antlr.SimplifiedSqlParser;
+import org.genfork.grid.antlr.SimplifiedSqlParser.CoalesceArgContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.CoalesceExprContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.ValueContext;
 import org.genfork.grid.catalog.SqlTypeCoercion;
+import org.genfork.grid.sql.SqlBuiltinExpr.ClockExpr;
+import org.genfork.grid.sql.SqlBuiltinExpr.ClockKind;
+import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
+import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
+import org.genfork.grid.sql.SqlBuiltinExpr.ExcludedRef;
 import org.genfork.grid.sql.ast.DmlAst.SequenceCallExpr;
 
 /**
@@ -85,12 +93,15 @@ public final class SqlParseSupport {
 
 	/** Exact input text covered by a parser rule context. */
 	public static String textOf(ParserRuleContext ctx) {
+		if (ctx == null || ctx.getStart() == null || ctx.getStop() == null) {
+			throw new IllegalArgumentException("missing parse context text");
+		}
 		final int a = ctx.getStart().getStartIndex();
 		final int b = ctx.getStop().getStopIndex();
 		return ctx.getStart().getInputStream().getText(Interval.of(a, b));
 	}
 
-	/** Decode a grammar {@code value} into a Java literal / bind / sequence call. */
+	/** Decode a grammar {@code value} into a Java literal / bind / sequence call / builtin marker. */
 	public static Object literal(ValueContext v) {
 		if (v.oldNewRef() != null) {
 			if (!triggerParseActive()) {
@@ -99,6 +110,21 @@ public final class SqlParseSupport {
 			final SimplifiedSqlParser.OldNewRefContext ref = v.oldNewRef();
 			final boolean oldRow = ref.OLD() != null;
 			return new SqlTriggerRowRef(oldRow, ref.ID().getText());
+		}
+		if (v.excludedRef() != null) {
+			return new ExcludedRef(v.excludedRef().ID().getText());
+		}
+		if (v.coalesceExpr() != null) {
+			return coalesceExpr(v.coalesceExpr());
+		}
+		if (v.NOW() != null) {
+			return new ClockExpr(ClockKind.NOW);
+		}
+		if (v.CURRENT_TIMESTAMP() != null) {
+			return new ClockExpr(ClockKind.CURRENT_TIMESTAMP);
+		}
+		if (v.CURRENT_DATE() != null) {
+			return new ClockExpr(ClockKind.CURRENT_DATE);
 		}
 		if (v.PARAM() != null) {
 			final int[] counter = PREPARE_BIND_COUNTER.get();
@@ -144,14 +170,30 @@ public final class SqlParseSupport {
 			return unquote(v.STRING().getText());
 		}
 		if (v.FLOAT() != null) {
-			return Double.valueOf(v.FLOAT().getText());
+			return Double.valueOf(v.getText());
 		}
-		final String t = v.INT().getText();
-		try {
-			return Integer.valueOf(t);
-		} catch (NumberFormatException e) {
-			return Long.valueOf(t);
+		if (v.INT() != null) {
+			final String t = v.getText();
+			try {
+				return Integer.valueOf(t);
+			} catch (NumberFormatException e) {
+				return Long.valueOf(t);
+			}
 		}
+		throw new IllegalArgumentException("unsupported literal: " + v.getText());
+	}
+
+	/** Build {@link CoalesceExpr} from grammar. */
+	public static CoalesceExpr coalesceExpr(CoalesceExprContext ctx) {
+		final List<Object> args = new ArrayList<>();
+		for (CoalesceArgContext arg : ctx.coalesceArg()) {
+			if (arg.columnName() != null) {
+				args.add(new ColumnRef(SqlIdentParseUtil.simpleColumn(arg.columnName())));
+			} else {
+				args.add(literal(arg.value()));
+			}
+		}
+		return new CoalesceExpr(args);
 	}
 
 	/** Cast a decoded literal to a SQL type token. */
@@ -233,7 +275,7 @@ public final class SqlParseSupport {
 			}
 		}
 		if (hasElse) {
-			return literal(values.get(values.size() - 1));
+			return literal(values.getLast());
 		}
 		return null;
 	}

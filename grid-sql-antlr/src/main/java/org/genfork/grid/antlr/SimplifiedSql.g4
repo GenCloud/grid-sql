@@ -21,6 +21,7 @@ executable
     | insertStmt
     | mergeStmt
     | deleteStmt
+    | truncateStmt
     | updateStmt
     | analyzeStmt
     | createTableStmt
@@ -135,7 +136,7 @@ cteDef
     ;
 
 createViewStmt
-    : CREATE VIEW tableName AS query
+    : CREATE VIEW tableName AS (withQuery | query)
     ;
 
 /** SPI bind: class + method (no string eval / scripting). */
@@ -174,7 +175,7 @@ dropViewStmt
     ;
 
 createMaterializedViewStmt
-    : CREATE MATERIALIZED VIEW tableName AS query
+    : CREATE MATERIALIZED VIEW tableName AS (withQuery | query)
     ;
 
 refreshMaterializedViewStmt
@@ -223,7 +224,7 @@ windowClause
     ;
 
 windowDef
-    : ID AS '(' windowSpec ')'
+    : ident AS '(' windowSpec ')'
     ;
 
 windowSpec
@@ -236,8 +237,10 @@ partitionByList
     ;
 
 fromItem
-    : tableName
-    | functionCall (AS alias=ID)?
+    : tableName AS aliasIdent=ident
+    | tableName aliasId=ID
+    | tableName
+    | functionCall (AS alias=ident)?
     ;
 
 explainStmt
@@ -250,6 +253,7 @@ explainBody
     | insertStmt
     | mergeStmt
     | deleteStmt
+    | truncateStmt
     | updateStmt
     | analyzeStmt
     | createTableStmt
@@ -355,10 +359,15 @@ deleteStmt
     : DELETE FROM tableName WHERE expression
     ;
 
+/** Unconditional clear (fail-closed OpLog/DELETE path). */
+truncateStmt
+    : TRUNCATE TABLE tableName
+    ;
+
 updateStmt
     : UPDATE targetTable=tableName SET updateAssign (',' updateAssign)*
       (FROM sourceTable=tableName)?
-      WHERE expression returningClause?
+      (WHERE expression)? returningClause?
     ;
 
 updateAssign
@@ -386,9 +395,18 @@ tableElement
     ;
 
 columnDef
-    : columnName serialType (PRIMARY KEY)?
-    | columnName typeName (NOT NULL)? identityClause? (PRIMARY KEY)?
-    | columnName typeName (NOT NULL)? (PRIMARY KEY)? identityClause?
+    : columnName serialType (PRIMARY KEY)? columnDefault?
+    | columnName typeName (NOT NULL)? identityClause? (PRIMARY KEY)? columnDefault?
+    | columnName typeName (NOT NULL)? (PRIMARY KEY)? identityClause? columnDefault?
+    ;
+
+/** Literal or clock builtin for INSERT omit-col materialization. */
+columnDefault
+    : DEFAULT defaultValue
+    ;
+
+defaultValue
+    : value
     ;
 
 identityClause
@@ -451,11 +469,11 @@ dropTableStmt
     ;
 
 createIndexStmt
-    : CREATE (UNIQUE | BITMAP)? INDEX indexName ON tableName '(' columnName (',' columnName)* ')'
+    : CREATE (UNIQUE | BITMAP)? INDEX (IF NOT EXISTS)? indexName ON tableName '(' columnName (',' columnName)* ')'
     ;
 
 dropIndexStmt
-    : DROP INDEX indexName (ON tableName)?
+    : DROP INDEX (IF EXISTS)? indexName (ON tableName)?
     ;
 
 indexName
@@ -463,7 +481,22 @@ indexName
     ;
 
 joinClause
-    : (LEFT (OUTER)? | RIGHT (OUTER)? | FULL (OUTER)? | INNER)? JOIN tableName ON columnName '=' columnName
+    : joinHead joinTarget ON joinCond
+    ;
+
+joinHead
+    : (LEFT (OUTER)? | RIGHT (OUTER)? | FULL (OUTER)? | INNER)? JOIN
+    ;
+
+joinTarget
+    : tableName AS aliasIdent=ident
+    | tableName aliasId=ID
+    | tableName
+    ;
+
+/** One or more equality predicates joined by AND (composite join key). */
+joinCond
+    : columnName '=' columnName (AND columnName '=' columnName)*
     ;
 
 selectList
@@ -472,10 +505,14 @@ selectList
     ;
 
 selectItem
-    : columnName (AS alias=ID)?
-    | aggregateExpr
-    | windowExpr
-    | functionCall (AS alias=ID)?
+    : columnName (AS alias=ident)?
+    | aggregateExpr (AS alias=ident)?
+    | windowExpr (AS alias=ident)?
+    | functionCall (AS alias=ident)?
+    | coalesceExpr (AS alias=ident)?
+    | NOW '(' ')' (AS alias=ident)?
+    | CURRENT_TIMESTAMP (AS alias=ident)?
+    | CURRENT_DATE (AS alias=ident)?
     ;
 
 functionCall
@@ -501,20 +538,55 @@ windowExpr
     | (SUM | MIN | MAX | AVG) '(' columnName ')' overClause
     ;
 
+/**
+ * Named window: {@code OVER w}, {@code OVER (w)}; inline: {@code OVER (ORDER BY …)}.
+ * Named form with parens is listed before empty-capable {@link #windowSpec}.
+ */
 overClause
-    : OVER ('(' windowSpec ')' | windowName=ID)
+    : OVER '(' windowName=ident ')'
+    | OVER '(' windowSpec ')'
+    | OVER windowName=ident
     ;
 
 columnList
     : '*' | columnName (',' columnName)*
     ;
 
+/**
+ * Unquoted identifier: plain {@link #ID} or any lexer keyword (keyword-as-identifier).
+ * Bare table aliases without AS stay {@link #ID} only so WHERE/JOIN are not swallowed.
+ */
 columnName
-    : ID ('.' ID)?
+    : ident ('.' ident)?
     ;
 
 tableName
-    : ID ('.' ID)?
+    : ident ('.' ident)?
+    ;
+
+ident
+    : ID
+    | keywordAsIdent
+    ;
+
+/** All lexer keywords usable as unquoted column / alias / window / table name parts. */
+keywordAsIdent
+    : SELECT | EXPLAIN | ANALYZE | INSERT | UPSERT | INTO | VALUES | DELETE | UPDATE | SET
+    | REMOTE_DIRTY | MERGE | CONFLICT | DO | NOTHING | MATCHED | CREATE | DROP | ALTER | ADD
+    | COLUMN | SCHEMA | TABLE | VIEW | MATERIALIZED | REFRESH | FUNCTION | TRIGGER | RETURNS
+    | CLASS | METHOD | BEFORE | AFTER | EACH | WITH | RECURSIVE | UNION | INTERSECT | EXCEPT
+    | ALL | INDEX | UNIQUE | BITMAP | PRIMARY | KEY | IF | EXISTS | NOT | NULL | FROM | FOR
+    | SKIP_KW | LOCKED | RETURNING | WHERE | GROUP | HAVING | ORDER | BY | LIMIT | OFFSET
+    | DISTINCT | COUNT | SUM | AVG | MIN | MAX | CONCAT | CAST | UUID_TYPE | DATE_TYPE
+    | TIME_TYPE | TIMESTAMP_TYPE | TIMESTAMPTZ_TYPE | CASE | WHEN | THEN | ELSE | END
+    | OVER | WINDOW | PARTITION | ROW_NUMBER | ROW | RANK | DENSE_RANK | LAG | LEAD
+    | JOIN | INNER | LEFT | RIGHT | FULL | OUTER | ON | RESTRICT | CASCADE | AUTHORIZATION
+    | FOREIGN | REFERENCES | CONSTRAINT | CHECK | SEQUENCE | SERIAL | BIGSERIAL | GENERATED
+    | DEFAULT | IDENTITY | INCREMENT | START | RECLAIM | NEXTVAL | CURRVAL | AND | OR
+    | BETWEEN | IN | LIKE | IS | TRUE | FALSE | ASC | DESC | BEGIN | COMMIT | ROLLBACK
+    | SAVEPOINT | RELEASE | TRANSACTION | WORK | OLD | NEW | STATEMENT | PREPARE | EXECUTE
+    | DEALLOCATE | AS | USING | PIN | UNPIN | TTL | QOS | USER | PASSWORD | ROLE | GRANT
+    | REVOKE | TO | DDL
     ;
 
 createSchemaStmt
@@ -534,9 +606,14 @@ setRemoteDirtyStmt
     ;
 
 alterTableStmt
-    : ALTER TABLE tableName ADD COLUMN columnDef
+    : ALTER TABLE tableName ADD COLUMN (IF NOT EXISTS)? columnDef
     | ALTER TABLE tableName ADD (CONSTRAINT constraintName)? CHECK '(' expression ')'
+    | ALTER TABLE tableName ADD (CONSTRAINT constraintName)? PRIMARY KEY '(' columnName (',' columnName)* ')'
+    | ALTER TABLE tableName ADD (CONSTRAINT constraintName)? FOREIGN KEY '(' columnName (',' columnName)* ')'
+      REFERENCES tableName '(' columnName (',' columnName)* ')'
+      (ON DELETE referentialAction)? (ON UPDATE referentialAction)?
     | ALTER TABLE tableName DROP COLUMN columnName
+    | ALTER TABLE tableName DROP CONSTRAINT constraintName
     ;
 
 expression
@@ -577,15 +654,20 @@ operator
     ;
 
 value
-    : INT
-    | FLOAT
+    : '-'? INT
+    | '-'? FLOAT
     | STRING
     | NULL
     | TRUE
     | FALSE
     | PARAM
     | oldNewRef
+    | excludedRef
     | CAST '(' value AS typeName ')'
+    | coalesceExpr
+    | NOW '(' ')'
+    | CURRENT_TIMESTAMP
+    | CURRENT_DATE
     | UUID_TYPE STRING
     | DATE_TYPE STRING
     | TIME_TYPE STRING
@@ -593,6 +675,21 @@ value
     | TIMESTAMPTZ_TYPE STRING
     | caseExpr
     | sequenceCall
+    ;
+
+/** First non-null among args (column or value). */
+coalesceExpr
+    : COALESCE '(' coalesceArg (',' coalesceArg)+ ')'
+    ;
+
+coalesceArg
+    : columnName
+    | value
+    ;
+
+/** ON CONFLICT DO UPDATE proposed-row column. */
+excludedRef
+    : EXCLUDED '.' ID
     ;
 
 /** Trigger body/WHEN only: OLD.col / NEW.col (parsed via parseTriggerBody). */
@@ -628,6 +725,7 @@ UPSERT: 'UPSERT';
 INTO: 'INTO';
 VALUES: 'VALUES';
 DELETE: 'DELETE';
+TRUNCATE: 'TRUNCATE';
 UPDATE: 'UPDATE';
 SET: 'SET';
 REMOTE_DIRTY: 'REMOTE_DIRTY';
@@ -636,6 +734,7 @@ CONFLICT: 'CONFLICT';
 DO: 'DO';
 NOTHING: 'NOTHING';
 MATCHED: 'MATCHED';
+EXCLUDED: 'EXCLUDED';
 CREATE: 'CREATE';
 DROP: 'DROP';
 ALTER: 'ALTER';
@@ -689,6 +788,10 @@ MIN: 'MIN';
 MAX: 'MAX';
 CONCAT: 'CONCAT';
 CAST: 'CAST';
+COALESCE: 'COALESCE';
+NOW: 'NOW';
+CURRENT_TIMESTAMP: 'CURRENT_TIMESTAMP';
+CURRENT_DATE: 'CURRENT_DATE';
 UUID_TYPE: 'UUID';
 DATE_TYPE: 'DATE';
 TIME_TYPE: 'TIME';
@@ -778,4 +881,6 @@ INT: [0-9]+;
 FLOAT: [0-9]+ '.' [0-9]* | '.' [0-9]+;
 STRING: '\'' ('\'\'' | ~'\'')* '\'';
 
+LINE_COMMENT: '--' ~[\r\n]* -> skip;
+BLOCK_COMMENT: '/*' .*? '*/' -> skip;
 WS: [ \t\r\n]+ -> skip;

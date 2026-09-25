@@ -28,7 +28,7 @@ Catch-up-only nodes and Witness never serve client SQL.
 
 `FOR UPDATE` / `SKIP LOCKED` always run on the **writer** (never a read replica). Indexed wire keys are locked locally via `LockAwareKeyCursor`. When replication is on and the coordinator has peers, product Boot wiring installs Netty `DistForUpdatePeerLockAgent`s from **replication `peers`** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`), so peers take the same locks through `DistForUpdateCoordinator` (fail-closed on Netty errors). Autocommit releases statement peer leases in `finally`; open-TX leases stay until COMMIT/ROLLBACK. Prepare/commit-dec is product 2PC-lite for peer row locks — not XA. Multi-table / INNER JOIN `FOR UPDATE` is supported.
 
-With replication off or an empty peer list, locks stay **local** on the writer only. There is no separate operational YAML key to list DistForUpdate endpoints.
+With replication off or an empty peer list, locks stay **local** on the writer only. There is no separate operational YAML key to list DistForUpdate endpoints. Do not confuse this with `grid.sql.distributed-peers` (read-only SELECT/JOIN fan-out) — [SQL server](../configuration/sql-server.md).
 
 ### v2 auto-route (recommended)
 

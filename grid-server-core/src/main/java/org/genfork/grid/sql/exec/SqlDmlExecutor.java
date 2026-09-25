@@ -32,9 +32,16 @@ import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.catalog.TriggerEvent;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.serial.LogicalFieldCursor;
+import org.genfork.grid.serial.RowEncoder;
+import org.genfork.grid.sql.SqlBuiltinEvalUtil;
+import org.genfork.grid.sql.SqlBuiltinExpr.ClockExpr;
+import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
+import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
+import org.genfork.grid.sql.SqlBuiltinExpr.ExcludedRef;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlSession;
+import org.genfork.grid.sql.SqlStatementParser;
 import org.genfork.grid.sql.ast.DmlAst.AnalyzeSql;
 import org.genfork.grid.sql.ast.DmlAst.ConflictAction;
 import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
@@ -42,6 +49,7 @@ import org.genfork.grid.sql.ast.DmlAst.InsertSql;
 import org.genfork.grid.sql.ast.DmlAst.MergeSql;
 import org.genfork.grid.sql.ast.DmlAst.OnConflict;
 import org.genfork.grid.sql.ast.DmlAst.SequenceCallExpr;
+import org.genfork.grid.sql.ast.DmlAst.TruncateSql;
 import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
 import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.tx.KeyWrapper;
@@ -91,6 +99,7 @@ public final class SqlDmlExecutor {
 				named.put(colNames.get(i), resolveInsertValue(session, lits.get(i)));
 			}
 			fillIdentityDefaults(session, store.schema(), named);
+			fillColumnDefaults(session, store.schema(), named);
 			final Object[] row = store.rowFromNamed(named);
 			assertFkParents(session, table, row);
 			final long rowAffected = applyInsertRow(session, table, store, row, conflict);
@@ -122,6 +131,18 @@ public final class SqlDmlExecutor {
 			}
 			return Long.valueOf(session.currval(seq));
 		}
+		if (raw instanceof ClockExpr || raw instanceof CoalesceExpr || raw instanceof ColumnRef
+				|| raw instanceof ExcludedRef) {
+			return SqlBuiltinEvalUtil.resolve(
+					raw,
+					name -> {
+						throw new IllegalArgumentException(
+								"column ref not valid in INSERT VALUES: " + name);
+					},
+					null,
+					session.timezone(),
+					null);
+		}
 		return raw;
 	}
 
@@ -143,6 +164,29 @@ public final class SqlDmlExecutor {
 			} else {
 				named.put(col.name(), Long.valueOf(v));
 			}
+		}
+	}
+
+	private void fillColumnDefaults(SqlSession session, TableSchema schema, Map<String, Object> named) {
+		for (ColumnDef col : schema.columns()) {
+			if (col.defaultExprOrNull() == null) {
+				continue;
+			}
+			if (SqlMergeMatchOps.sourceNamedContains(named, col.name())) {
+				continue;
+			}
+			final Object parsed = SqlStatementParser.parseValue(
+					col.defaultExprOrNull(),
+					session.timezone());
+			named.put(col.name(), SqlBuiltinEvalUtil.resolve(
+					parsed,
+					name -> {
+						throw new IllegalArgumentException(
+								"DEFAULT column ref not supported: " + name);
+					},
+					null,
+					session.timezone(),
+					col.type()));
 		}
 	}
 
@@ -320,7 +364,8 @@ public final class SqlDmlExecutor {
 			if (s.matchedSetsOrNull() == null || s.matchedSetsOrNull().isEmpty()) {
 				return 0L;
 			}
-			return applyConflictUpdate(session, table, store, conflictKey, existing, s.matchedSetsOrNull());
+			return applyConflictUpdate(
+					session, table, store, conflictKey, existing, null, s.matchedSetsOrNull());
 		}
 		if (s.insertValuesOrNull() == null) {
 			return 0L;
@@ -642,7 +687,8 @@ public final class SqlDmlExecutor {
 				}
 				return affected;
 			}
-			return applyConflictUpdate(session, table, store, conflictKey, existing, conflict.updateSets());
+			return applyConflictUpdate(
+					session, table, store, conflictKey, existing, row, conflict.updateSets());
 		}
 		// Miss: insert new row (STRICT unique still enforced; conflict target has no match).
 		final TableStore.EncodedRow encoded = store.encodeUpsert(row, false);
@@ -668,12 +714,15 @@ public final class SqlDmlExecutor {
 			TableStore store,
 			byte[] key,
 			byte[] existing,
+			Object[] proposedRowOrNull,
 			Map<String, Object> sets
 	) {
 		if (sets == null || sets.isEmpty()) {
 			throw new IllegalArgumentException("DO UPDATE / WHEN MATCHED requires SET assignments");
 		}
-		final TableStore.EncodedRow encoded = store.encodeSetLiterals(key, existing, sets);
+		final Map<String, Object> resolved =
+				resolveConflictSets(session, store, existing, proposedRowOrNull, sets);
+		final TableStore.EncodedRow encoded = store.encodeSetLiterals(key, existing, resolved);
 		SqlTriggerFireOps.fireBeforeRow(
 				session, engine, table, TriggerEvent.UPDATE, existing, encoded.valueBytes());
 		final long affected;
@@ -681,12 +730,78 @@ public final class SqlDmlExecutor {
 			SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
 			affected = 1L;
 		} else {
-			affected = store.updateSetLiteralsByKey(key, sets);
+			affected = store.updateSetLiteralsByKey(key, resolved);
 		}
 		if (affected > 0L) {
 			SqlTriggerFireOps.fireAfterRow(
 					session, engine, table, TriggerEvent.UPDATE, existing, encoded.valueBytes());
 		}
 		return affected;
+	}
+
+	/**
+	 * Resolve EXCLUDED / COALESCE / clock markers. EXCLUDED reads the proposed INSERT {@code Object[]}
+	 * (SPI edge); ColumnRef reads the existing row after decode.
+	 */
+	private Map<String, Object> resolveConflictSets(
+			SqlSession session,
+			TableStore store,
+			byte[] existing,
+			Object[] proposedRowOrNull,
+			Map<String, Object> sets
+	) {
+		final TableSchema schema = store.schema();
+		final Object[] existingValues = existing != null && LogicalFieldCursor.canOpen(schema, existing)
+				? RowEncoder.decode(schema, existing)
+				: null;
+		final Map<String, Object> out = new LinkedHashMap<>();
+		for (Map.Entry<String, Object> e : sets.entrySet()) {
+			final ColumnDef col = schema.requireColumn(e.getKey());
+			out.put(e.getKey(), SqlBuiltinEvalUtil.resolve(
+					e.getValue(),
+					name -> {
+						if (existingValues == null) {
+							return null;
+						}
+						return existingValues[schema.requireColumn(name).ordinal()];
+					},
+					name -> {
+						if (proposedRowOrNull == null) {
+							throw new IllegalArgumentException(
+									"EXCLUDED only valid in ON CONFLICT DO UPDATE");
+						}
+						return proposedRowOrNull[schema.requireColumn(name).ordinal()];
+					},
+					session.timezone(),
+					col.type()));
+		}
+		return out;
+	}
+
+	public SqlResult truncate(SqlSession session, TruncateSql s) {
+		final String table = tables.resolveTable(session, s.table());
+		final TableStore store = tables.requireStore(table);
+		SqlTriggerFireOps.fireBeforeStatement(session, engine, table, TriggerEvent.DELETE);
+		final List<byte[]> keys = new ArrayList<>();
+		store.forEachPrimaryKey(keys::add);
+		long affected = 0L;
+		for (byte[] key : keys) {
+			final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
+			SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
+			final Object pkObj = SerialUtil.readPrimitives(
+					key, 0, store.schema().pkColumn().javaType());
+			enforceParentDelete(session, table, pkObj, key);
+			if (session.inTransaction()) {
+				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.DELETE,
+						new TableStore.EncodedRow(key, null, store.shardOf(key)));
+			} else {
+				store.deleteByKeyBytes(key);
+			}
+			SqlTriggerFireOps.fireAfterRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
+			affected++;
+		}
+		final SqlResult result = SqlResult.affected(SqlStatementTag.TRUNCATE, affected);
+		SqlTriggerFireOps.fireAfterStatement(session, engine, table, TriggerEvent.DELETE);
+		return result;
 	}
 }

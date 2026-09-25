@@ -26,6 +26,12 @@ On each node:
 
 During a rolling upgrade the ring may briefly run **two binary versions**. That is expected for a rolling restart on a compatible data layout. Do **not** leave a mixed ring as a permanent state: finish every node, then verify.
 
+| Combination | Allowed briefly? | Notes |
+|-------------|------------------|-------|
+| Same major sealed/OpLog layout, two jar versions | Yes, during rolling only | Finish every node; then one version |
+| Incompatible `dataDir` layout across nodes | No | Take PITR base first; migrate one layout family at a time |
+| Two processes / two binaries on one `dataDir` | Never | Incident — stop the extra process |
+
 After each node comes back:
 
 1. Actuator readiness UP; with replication — ORCHID synced (`orchidSynced` / `orchid_r` above admission).

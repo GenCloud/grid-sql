@@ -15,10 +15,13 @@
  */
 package org.genfork.grid.query.plan;
 
+import org.genfork.grid.sql.ast.SelectAst.JoinEq;
 import org.genfork.grid.sql.ast.SelectAst.JoinKind;
 
+import java.util.List;
+
 /**
- * JOIN … ON leftCol = rightCol (INNER / LEFT / RIGHT / FULL OUTER).
+ * JOIN … ON leftCol = rightCol [AND …] (INNER / LEFT / RIGHT / FULL OUTER).
  *
  * @author: GenCloud
  * @date: 2025/09
@@ -26,16 +29,36 @@ import org.genfork.grid.sql.ast.SelectAst.JoinKind;
  */
 public record JoinSpec(
 		String rightTable,
-		String leftColumn,
-		String rightColumn,
+		String rightAlias,
+		List<JoinEq> eqs,
 		JoinKind kind
 ) {
+	public JoinSpec {
+		if (eqs == null || eqs.isEmpty()) {
+			throw new IllegalArgumentException("JoinSpec requires at least one equality");
+		}
+		eqs = List.copyOf(eqs);
+	}
+
 	public JoinSpec(String rightTable, String leftColumn, String rightColumn) {
-		this(rightTable, leftColumn, rightColumn, JoinKind.INNER);
+		this(rightTable, null, List.of(new JoinEq(leftColumn, rightColumn)), JoinKind.INNER);
+	}
+
+	public JoinSpec(String rightTable, String leftColumn, String rightColumn, JoinKind kind) {
+		this(rightTable, null, List.of(new JoinEq(leftColumn, rightColumn)), kind);
 	}
 
 	public JoinSpec(String rightTable, String leftColumn, String rightColumn, boolean leftOuter) {
-		this(rightTable, leftColumn, rightColumn, leftOuter ? JoinKind.LEFT : JoinKind.INNER);
+		this(rightTable, null, List.of(new JoinEq(leftColumn, rightColumn)),
+				leftOuter ? JoinKind.LEFT : JoinKind.INNER);
+	}
+
+	public String leftColumn() {
+		return eqs.getFirst().leftCol();
+	}
+
+	public String rightColumn() {
+		return eqs.getFirst().rightCol();
 	}
 
 	public boolean leftOuter() {

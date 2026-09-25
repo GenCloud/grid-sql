@@ -59,7 +59,7 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<options>
 |--------|---------|---------|
 | `minConnections` | `1` | TCP sockets opened on warmup / first `obtain` (clamped to `maxConnections`) |
 | `maxConnections` | `1` | Upper bound of TCP sockets in the factory pool |
-| `maxTxContexts` | `256` | Soft cap on concurrent logical sessions over one socket (`0` — unlimited) |
+| `maxTxContexts` | `256` | Client soft cap on concurrent logical sessions over one socket (`0` — unlimited on the client). Server channel hard-cap is **8**; Boot does not apply YAML to the listener — [SQL server](../configure-and-operate/configuration/sql-server.md) |
 | `connectTimeoutMs` | `5000` | Connection establishment timeout |
 | `execTimeoutMs` | `0` (off) | Statement execution timeout |
 | `readTimeoutMs` / `writeTimeoutMs` | `0` (off) | Channel timeouts |
@@ -186,7 +186,7 @@ Mono<Void> parallel = Mono.zip(
 ).then();
 ```
 
-This is a fundamentally different model from a JDBC connection pool: you do not need `maxTxContexts` sockets, you need one socket and `maxTxContexts` logical sessions. The cap is soft — it bounds `SESSION_OPEN`, not the number of application threads.
+This is a fundamentally different model from a JDBC connection pool: you do not need `maxTxContexts` sockets, you need one socket and several logical sessions. The **client** cap bounds `SESSION_OPEN` requests; the **server** still rejects beyond **8** open sessions on that TCP — open another `Connection` rather than raising only the client value.
 
 ## Replica reads
 

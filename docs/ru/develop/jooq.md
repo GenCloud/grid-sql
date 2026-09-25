@@ -1,6 +1,6 @@
 # jOOQ DSL (grid-jooq)
 
-Опциональный модуль **jOOQ** для сборки Simplified SQL и исполнения через JDBC tooling Grid.
+Опциональный модуль **jOOQ** для сборки Simplified SQL и исполнения через JDBC-клиент Grid.
 Это **не** второй движок запросов: сервер по-прежнему парсит текст через ANTLR `SimplifiedSql`.
 
 ## Когда да / когда нет
@@ -14,13 +14,13 @@
 | Замер ёмкости / p95 | Нет — JMeter на `grid://` |
 | Полный чужой SQL-диалект «как есть» | Нет — только Simplified SQL |
 
-## DataSource с мультиплексом (канон)
+## DataSource с мультиплексом (рекомендуемый путь)
 
 ```text
 Приложения / jOOQ / DBeaver
   └─ GridDataSource  ≡  GridDriver   (один Sync* API)
        └─ SyncConnectionFactory.shared (intern на URL target)
-            └─ RemoteConnectionFactory TCP floor ≥ MIN_TCP_CHANNELS (10)
+            └─ RemoteConnectionFactory: минимум TCP-каналов ≥ MIN_TCP_CHANNELS (10)
                  └─ Connection.close = park; DataSource.close = release retain
 ```
 
@@ -46,7 +46,7 @@
   Предпочитайте `UPSERT` или plain `ON CONFLICT` — jOOQ `onConflict` при DEFAULT может выдать `ON DUPLICATE KEY` (SimplifiedSql отклонит).
 - `GridDSL` — render-only, `Connection`, `DataSource` (предпочтительно `GridDataSource`), `ConnectionProvider`, URL `jdbc:grid://`.
 - `GridConnectionProvider` — sync acquire/release для jOOQ.
-- JDBC edge (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` только маппит исключения.
+- Граница JDBC (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` только маппит исключения.
 
 ## Codegen у потребителя
 

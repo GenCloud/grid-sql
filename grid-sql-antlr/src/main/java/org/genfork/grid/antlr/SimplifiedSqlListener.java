@@ -628,6 +628,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitDeleteStmt(SimplifiedSqlParser.DeleteStmtContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#truncateStmt}.
+	 * @param ctx the parse tree
+	 */
+	void enterTruncateStmt(SimplifiedSqlParser.TruncateStmtContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#truncateStmt}.
+	 * @param ctx the parse tree
+	 */
+	void exitTruncateStmt(SimplifiedSqlParser.TruncateStmtContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#updateStmt}.
 	 * @param ctx the parse tree
 	 */
@@ -687,6 +697,26 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitColumnDef(SimplifiedSqlParser.ColumnDefContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#columnDefault}.
+	 * @param ctx the parse tree
+	 */
+	void enterColumnDefault(SimplifiedSqlParser.ColumnDefaultContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#columnDefault}.
+	 * @param ctx the parse tree
+	 */
+	void exitColumnDefault(SimplifiedSqlParser.ColumnDefaultContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#defaultValue}.
+	 * @param ctx the parse tree
+	 */
+	void enterDefaultValue(SimplifiedSqlParser.DefaultValueContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#defaultValue}.
+	 * @param ctx the parse tree
+	 */
+	void exitDefaultValue(SimplifiedSqlParser.DefaultValueContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#identityClause}.
 	 * @param ctx the parse tree
@@ -848,6 +878,36 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitJoinClause(SimplifiedSqlParser.JoinClauseContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#joinHead}.
+	 * @param ctx the parse tree
+	 */
+	void enterJoinHead(SimplifiedSqlParser.JoinHeadContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#joinHead}.
+	 * @param ctx the parse tree
+	 */
+	void exitJoinHead(SimplifiedSqlParser.JoinHeadContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#joinTarget}.
+	 * @param ctx the parse tree
+	 */
+	void enterJoinTarget(SimplifiedSqlParser.JoinTargetContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#joinTarget}.
+	 * @param ctx the parse tree
+	 */
+	void exitJoinTarget(SimplifiedSqlParser.JoinTargetContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#joinCond}.
+	 * @param ctx the parse tree
+	 */
+	void enterJoinCond(SimplifiedSqlParser.JoinCondContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#joinCond}.
+	 * @param ctx the parse tree
+	 */
+	void exitJoinCond(SimplifiedSqlParser.JoinCondContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#selectList}.
 	 * @param ctx the parse tree
 	 */
@@ -947,6 +1007,26 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitTableName(SimplifiedSqlParser.TableNameContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#ident}.
+	 * @param ctx the parse tree
+	 */
+	void enterIdent(SimplifiedSqlParser.IdentContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#ident}.
+	 * @param ctx the parse tree
+	 */
+	void exitIdent(SimplifiedSqlParser.IdentContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#keywordAsIdent}.
+	 * @param ctx the parse tree
+	 */
+	void enterKeywordAsIdent(SimplifiedSqlParser.KeywordAsIdentContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#keywordAsIdent}.
+	 * @param ctx the parse tree
+	 */
+	void exitKeywordAsIdent(SimplifiedSqlParser.KeywordAsIdentContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#createSchemaStmt}.
 	 * @param ctx the parse tree
@@ -1253,6 +1333,36 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitValue(SimplifiedSqlParser.ValueContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#coalesceExpr}.
+	 * @param ctx the parse tree
+	 */
+	void enterCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#coalesceExpr}.
+	 * @param ctx the parse tree
+	 */
+	void exitCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#coalesceArg}.
+	 * @param ctx the parse tree
+	 */
+	void enterCoalesceArg(SimplifiedSqlParser.CoalesceArgContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#coalesceArg}.
+	 * @param ctx the parse tree
+	 */
+	void exitCoalesceArg(SimplifiedSqlParser.CoalesceArgContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#excludedRef}.
+	 * @param ctx the parse tree
+	 */
+	void enterExcludedRef(SimplifiedSqlParser.ExcludedRefContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#excludedRef}.
+	 * @param ctx the parse tree
+	 */
+	void exitExcludedRef(SimplifiedSqlParser.ExcludedRefContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#oldNewRef}.
 	 * @param ctx the parse tree

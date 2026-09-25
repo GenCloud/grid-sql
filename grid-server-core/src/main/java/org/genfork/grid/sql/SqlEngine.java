@@ -54,6 +54,7 @@ import org.genfork.grid.sql.ast.AdminAst.CreateUserSql;
 import org.genfork.grid.sql.ast.DdlAst.CreateViewSql;
 import org.genfork.grid.sql.ast.TxAst.DeallocateSql;
 import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
+import org.genfork.grid.sql.ast.DmlAst.TruncateSql;
 import org.genfork.grid.sql.ast.DdlAst.DropFunctionSql;
 import org.genfork.grid.sql.ast.DdlAst.DropTriggerSql;
 import org.genfork.grid.sql.ast.DdlAst.DropIndexSql;
@@ -429,6 +430,8 @@ public final class SqlEngine {
 			}
 		} else if (stmt instanceof DeleteSql value) {
 			ensureTablePrivilege(session, value.table(), SqlPrivilege.DELETE);
+		} else if (stmt instanceof TruncateSql value) {
+			ensureTablePrivilege(session, value.table(), SqlPrivilege.DELETE);
 		} else if (stmt instanceof MergeSql value) {
 			ensureTablePrivilege(session, value.targetTable(), SqlPrivilege.UPDATE);
 		} else if (!(stmt instanceof BeginSql) && !(stmt instanceof CommitSql)
@@ -640,6 +643,7 @@ public final class SqlEngine {
 			case MergeSql s -> SqlAutocommit.runInUnit(session, txCommitter, () -> dml.merge(session, s));
 			case AnalyzeSql s -> dml.analyze(session, s);
 			case DeleteSql s -> SqlAutocommit.runInUnit(session, txCommitter, () -> dml.delete(session, s));
+			case TruncateSql s -> SqlAutocommit.runInUnit(session, txCommitter, () -> dml.truncate(session, s));
 			case UpdateSql s -> SqlAutocommit.runInUnit(session, txCommitter, () -> dml.update(session, s));
 			case SelectSql s -> {
 				if (SqlUdfMutatingOps.selectHasMutatingUdf(s, catalog)) {

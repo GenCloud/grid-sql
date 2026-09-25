@@ -44,7 +44,7 @@ URL: `grid://user:pass@host:15432[,host:15433]/schema?...`.
 
 | Опция URL | Смысл |
 |-----------|--------|
-| `maxTxContexts` | Потолок параллельных TX / сессий на одном TCP |
+| `maxTxContexts` | Мягкий потолок клиента на параллельные TX / сессии на одном TCP (по умолчанию **256**); на сервере жёсткий потолок **8** |
 | `readEndpoints` / `readPreference` / `staleReadPolicy` | Маршрутизация SELECT/EXPLAIN; stale = `FAIL_CLOSED` |
 | `retryMode` / `maxRetries` / `retryDelayMs` | Повтор connect (`OFF` / `FIXED` / `EXPONENTIAL`); не замена `rediscoverWriter()` |
 | `minConnections` / `maxConnections` | Прогрев и потолок TCP в пуле фабрики |
@@ -56,7 +56,7 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 
 - Автокоммит: `connection.createStatement(sql).executeUpdate()`
 - TX: `connection.begin()` → операторы на `TxContext` → `commit()` / `rollback()`
-- Параллельные TX = N `begin()` на одном `Connection` (потолок `maxTxContexts`)
+- Параллельные TX = N `begin()` на одном `Connection` (клиентский `maxTxContexts`; сервер останавливается на **8**)
 
 Подробнее: [Java-клиент](../develop/java-client.md), [транзакции](../develop/transactions.md).
 
@@ -70,6 +70,8 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 | `TableStore` | Шардированный store + индексы |
 
 Приложения **не** встраивают удалённый `SqlEngine` — говорят по `grid://` со starter/node. Boot: [Spring Boot](../develop/spring-boot.md).
+
+Потолок открытых сессий на TCP-канале слушателя — **8** (Boot не поднимает его из `grid.sql.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC-клиент
 

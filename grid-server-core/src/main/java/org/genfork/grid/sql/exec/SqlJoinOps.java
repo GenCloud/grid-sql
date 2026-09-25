@@ -60,6 +60,9 @@ public final class SqlJoinOps {
 	/** Wire EQ arity for single-column right index probe. */
 	private static final int LOOKUP_EQ_WIRE_ARITY = 1;
 
+	/** Same separator as {@link SqlWireAggOps} composite GROUP BY keys. */
+	private static final byte COMPOSITE_FIELD_SEP = 0x1F;
+
 	private SqlJoinOps() {
 	}
 
@@ -102,20 +105,33 @@ public final class SqlJoinOps {
 			int rightOrd,
 			JoinKind kind
 	) {
+		return joinStep(leftRows, leftSideSchemas, right, rightBlobs,
+				new int[]{leftOrd}, new int[]{rightOrd}, kind);
+	}
+
+	static List<JoinBlobRow> joinStep(
+			List<JoinBlobRow> leftRows,
+			List<TableSchema> leftSideSchemas,
+			TableStore right,
+			List<byte[]> rightBlobs,
+			int[] leftOrds,
+			int[] rightOrds,
+			JoinKind kind
+	) {
 		final boolean leftOuter = kind == JoinKind.LEFT || kind == JoinKind.FULL;
 		final boolean rightOuter = kind == JoinKind.RIGHT || kind == JoinKind.FULL;
-		final ColumnDef rightPk = right.schema().pkColumn();
-		final boolean rightOnPk = rightPk != null
-				&& right.schema().columns().get(rightOrd).name().equalsIgnoreCase(rightPk.name());
-		// Prefer provided build blobs (distributed fan-in / local snapshot); store probe only
-		// when callers intentionally omit blobs (null).
-		if (rightOnPk && !rightOuter && rightBlobs == null) {
-			return joinProbeRightPkStore(leftRows, leftSideSchemas, right, leftOrd, leftOuter);
+		if (leftOrds.length == LOOKUP_EQ_WIRE_ARITY && rightOrds.length == LOOKUP_EQ_WIRE_ARITY) {
+			final ColumnDef rightPk = right.schema().pkColumn();
+			final boolean rightOnPk = rightPk != null
+					&& right.schema().columns().get(rightOrds[0]).name().equalsIgnoreCase(rightPk.name());
+			if (rightOnPk && !rightOuter && rightBlobs == null) {
+				return joinProbeRightPkStore(leftRows, leftSideSchemas, right, leftOrds[0], leftOuter);
+			}
 		}
 
 		final List<byte[]> build = rightBlobs == null ? List.of() : rightBlobs;
 		return joinHash(leftRows, leftSideSchemas, build, right.schema(),
-				leftOrd, rightOrd, leftOuter, rightOuter);
+				leftOrds, rightOrds, leftOuter, rightOuter);
 	}
 
 	static String explainJoinLabel(JoinKind kind) {
@@ -224,20 +240,40 @@ public final class SqlJoinOps {
 			int leftOrd,
 			String rightCol
 	) {
-		final Set<WireSpan> distinctKeys = new LinkedHashSet<>();
-		for (JoinBlobRow lr : leftRows) {
-			distinctKeys.add(wireKeyFromJoined(lr, leftSideSchemas, leftOrd));
+		return joinProbeRightIndexStore(
+				leftRows, leftSideSchemas, right, new int[]{leftOrd}, List.of(rightCol));
+	}
+
+	/**
+	 * Probe right covering EQ index from left wire keys (single or composite column list).
+	 */
+	static List<JoinBlobRow> joinProbeRightIndexStore(
+			List<JoinBlobRow> leftRows,
+			List<TableSchema> leftSideSchemas,
+			TableStore right,
+			int[] leftOrds,
+			List<String> rightCols
+	) {
+		if (leftOrds == null || rightCols == null || leftOrds.length != rightCols.size() || leftOrds.length == 0) {
+			throw new IllegalArgumentException("join index probe column arity mismatch");
 		}
-		final List<String> eqCols = List.of(rightCol);
-		final byte[][] wireSlot = new byte[LOOKUP_EQ_WIRE_ARITY][];
+		final byte[][] wireSlot = new byte[leftOrds.length][];
 		final Map<WireSpan, List<byte[]>> indexMap = new HashMap<>(
-				Math.max(HASH_MAP_MIN_CAPACITY, distinctKeys.size() * 2));
-		for (WireSpan wire : distinctKeys) {
-			if (isNullWire(wire)) {
+				Math.max(HASH_MAP_MIN_CAPACITY, leftRows.size() * 2));
+		for (JoinBlobRow lr : leftRows) {
+			final WireSpan mapKey = wireKeyFromJoined(lr, leftSideSchemas, leftOrds);
+			if (isNullWire(mapKey) || indexMap.containsKey(mapKey)) {
 				continue;
 			}
-			wireSlot[0] = wire.toOwnedBytes();
-			final List<byte[]> matchKeys = right.lookupEqKeys(eqCols, wireSlot);
+			for (int i = 0; i < leftOrds.length; i++) {
+				final WireSpan part = wireKeyFromJoined(lr, leftSideSchemas, leftOrds[i]);
+				if (isNullWire(part)) {
+					wireSlot[i] = null;
+				} else {
+					wireSlot[i] = part.toOwnedBytes();
+				}
+			}
+			final List<byte[]> matchKeys = right.lookupEqKeys(rightCols, wireSlot);
 			if (matchKeys.isEmpty()) {
 				continue;
 			}
@@ -249,12 +285,12 @@ public final class SqlJoinOps {
 				}
 			}
 			if (!blobs.isEmpty()) {
-				indexMap.put(wire, blobs);
+				indexMap.put(mapKey, blobs);
 			}
 		}
 		final List<JoinBlobRow> out = new ArrayList<>(leftRows.size());
 		for (JoinBlobRow lr : leftRows) {
-			final List<byte[]> matches = indexMap.get(wireKeyFromJoined(lr, leftSideSchemas, leftOrd));
+			final List<byte[]> matches = indexMap.get(wireKeyFromJoined(lr, leftSideSchemas, leftOrds));
 			if (matches == null || matches.isEmpty()) {
 				continue;
 			}
@@ -276,11 +312,25 @@ public final class SqlJoinOps {
 			boolean leftOuter,
 			boolean rightOuter
 	) {
+		return joinHash(leftRows, leftSideSchemas, rightBlobs, rightSchema,
+				new int[]{leftOrd}, new int[]{rightOrd}, leftOuter, rightOuter);
+	}
+
+	static List<JoinBlobRow> joinHash(
+			List<JoinBlobRow> leftRows,
+			List<TableSchema> leftSideSchemas,
+			List<byte[]> rightBlobs,
+			TableSchema rightSchema,
+			int[] leftOrds,
+			int[] rightOrds,
+			boolean leftOuter,
+			boolean rightOuter
+	) {
 		final Map<WireSpan, List<byte[]>> hash = new HashMap<>(
 				Math.max(HASH_MAP_MIN_CAPACITY, rightBlobs.size() * 2));
 		for (byte[] row : rightBlobs) {
 			hash.computeIfAbsent(
-					wireKeyFromBlob(row, rightSchema, rightOrd),
+					wireKeyFromBlob(row, rightSchema, rightOrds),
 					_ -> new ArrayList<>(HASH_BUCKET_INITIAL_CAPACITY)).add(row);
 		}
 
@@ -290,7 +340,7 @@ public final class SqlJoinOps {
 				? new HashSet<>(Math.max(HASH_MAP_MIN_CAPACITY, rightBlobs.size() * 2))
 				: null;
 		for (JoinBlobRow lr : leftRows) {
-			final WireSpan joinKey = wireKeyFromJoined(lr, leftSideSchemas, leftOrd);
+			final WireSpan joinKey = wireKeyFromJoined(lr, leftSideSchemas, leftOrds);
 			final List<byte[]> matches = hash.get(joinKey);
 			if (matches == null || matches.isEmpty()) {
 				if (leftOuter) {
@@ -311,7 +361,7 @@ public final class SqlJoinOps {
 		if (rightOuter) {
 			final int leftSideCount = leftSideSchemas.size();
 			for (byte[] rr : rightBlobs) {
-				final WireSpan joinKey = wireKeyFromBlob(rr, rightSchema, rightOrd);
+				final WireSpan joinKey = wireKeyFromBlob(rr, rightSchema, rightOrds);
 				if (matchedRightKeys.contains(joinKey)) {
 					continue;
 				}
@@ -332,6 +382,16 @@ public final class SqlJoinOps {
 		return LogicalFieldCursor.open(schema, blob).indexKeySpan(ordinal);
 	}
 
+	static WireSpan wireKeyFromBlob(byte[] blob, TableSchema schema, int[] ordinals) {
+		if (ordinals == null || ordinals.length == 0) {
+			return WireSpan.nullSpan();
+		}
+		if (ordinals.length == LOOKUP_EQ_WIRE_ARITY) {
+			return wireKeyFromBlob(blob, schema, ordinals[0]);
+		}
+		return SqlWireAggOps.compositeGroupKeyFromBlob(schema, blob, ordinals).asSpan();
+	}
+
 	static WireSpan wireKeyFromJoined(
 			JoinBlobRow row,
 			List<TableSchema> sideSchemas,
@@ -347,6 +407,34 @@ public final class SqlJoinOps {
 			offset += width;
 		}
 		throw new IllegalArgumentException("join ordinal out of range: " + globalOrd);
+	}
+
+	static WireSpan wireKeyFromJoined(
+			JoinBlobRow row,
+			List<TableSchema> sideSchemas,
+			int[] globalOrds
+	) {
+		if (globalOrds == null || globalOrds.length == 0) {
+			return WireSpan.nullSpan();
+		}
+		if (globalOrds.length == LOOKUP_EQ_WIRE_ARITY) {
+			return wireKeyFromJoined(row, sideSchemas, globalOrds[0]);
+		}
+		final byte[][] parts = new byte[globalOrds.length][];
+		int total = 0;
+		for (int i = 0; i < globalOrds.length; i++) {
+			final WireSpan part = wireKeyFromJoined(row, sideSchemas, globalOrds[i]);
+			parts[i] = part.toOwnedBytes();
+			total += parts[i].length + 1;
+		}
+		final byte[] composite = new byte[total];
+		int pos = 0;
+		for (byte[] part : parts) {
+			System.arraycopy(part, 0, composite, pos, part.length);
+			pos += part.length;
+			composite[pos++] = COMPOSITE_FIELD_SEP;
+		}
+		return WireSpan.ofOwned(composite);
 	}
 
 

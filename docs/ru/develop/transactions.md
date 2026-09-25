@@ -66,7 +66,7 @@ tx.executeBatch(List.of(
 | Клиентский `maxTxContexts` | URL / `ConnectionOptions` | **256** | Мягкий предел логических сессий, которые клиент откроет на одном TCP |
 | Серверный канал | SQL TCP listen (`SqlServer`) | **8** | Жёсткий предел на принятый канал; Boot **не** прокидывает `grid.sql.max-tx-contexts` |
 
-Если сервер отвечает `maxTxContexts=8 exhausted`, откройте ещё один `Connection` (или поднимите серверный предел в конфигурации, которая реально поднимает слушатель). Подробнее: [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
+Если сервер отвечает `maxTxContexts=8 exhausted`, откройте ещё один `Connection` — Boot не поднимает потолок слушателя из `grid.sql.max-tx-contexts`. Подробнее: [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
 Это не пул JDBC: не заводите N соединений, чтобы получить N транзакций. Изоляция между ними держится на блокировках записей, маркерах `TX_*` в журнале и дескрипторе PREPARE, а не на отдельных TCP-каналах.
 

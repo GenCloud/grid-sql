@@ -6,15 +6,16 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-09-24-jepsen-smoke |
-| date | 2026-09-24T14:33:46.4872316+03:00 |
-| git | eec3953 |
+| stamp | 2026-09-25-jepsen-full |
+| date | 2026-09-25T14:23:11+03:00 |
+| git | unknown |
 | host | DESKTOP-4IC511D |
-| mode | `smoke` |
-| outcome | `HARNESS_READY` |
-| notes | compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows) |
+| mode | `full-jepsen` |
+| outcome | `PASS` |
+| notes | register=PASS; append=PASS |
 
 ## History
+
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
 
 | Mode | register | append | outcome |
@@ -23,6 +24,10 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 | SYNC_VOTERS_ACROSS_DC | `:valid? true` | `:valid? true` | PASS |
 
 Calm sequential re-run after AQE leftovers. Details: [multidc/RESULTS.md](multidc/RESULTS.md).
+### Full Multi-DC 3+2 (stamp 2026-09-17-multidc-*)
+### Full Multi-DC 3+2 (stamp 2026-09-17-multidc-*)
+### Full Multi-DC 3+2 (stamp 2026-09-17-multidc-*)
+### Full Multi-DC 3+2 (stamp 2026-09-17-multidc-*)
 ### Full Multi-DC 3+2 (stamp 2026-09-17-multidc-*)
 ### Full Multi-DC 3+2 (stamp 2026-09-17-multidc-*)
 ### Full Multi-DC 3+2 (stamp 2026-09-17-multidc-*)
@@ -39,6 +44,10 @@ Details + p50/p95/p99: [multidc/RESULTS.md](multidc/RESULTS.md).
 ### Full Jepsen 1-DC (stamp 2026-09-17-async-pass)
 ### Full Jepsen 1-DC (stamp 2026-09-17-async-pass)
 ### Full Jepsen 1-DC (stamp 2026-09-17-async-pass)
+### Full Jepsen 1-DC (stamp 2026-09-17-async-pass)
+### Full Jepsen 1-DC (stamp 2026-09-17-async-pass)
+### Full Jepsen 1-DC (stamp 2026-09-17-async-pass)
+### Full Jepsen 1-DC (stamp 2026-09-17-async-pass)
 
 | Workload | Result |
 |----------|--------|
@@ -51,6 +60,10 @@ Load planning stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/res
 ### Full Jepsen 1-DC (stamp 2026-09-17-roadmap-p3)
 ### Full Jepsen 1-DC (stamp 2026-09-17-roadmap-p3)
 ### Full Jepsen 1-DC (stamp 2026-09-17-roadmap-p3)
+### Full Jepsen 1-DC (stamp 2026-09-17-roadmap-p3)
+### Full Jepsen 1-DC (stamp 2026-09-17-roadmap-p3)
+### Full Jepsen 1-DC (stamp 2026-09-17-roadmap-p3)
+### Full Jepsen 1-DC (stamp 2026-09-17-roadmap-p3)
 
 | Workload | Result |
 |----------|--------|
@@ -61,12 +74,20 @@ Load planning stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/res
 ### Algorithm gate - nochao 30s (stamp 2026-09-16-unfinished)
 ### Algorithm gate - nochao 30s (stamp 2026-09-16-unfinished)
 ### Algorithm gate - nochao 30s (stamp 2026-09-16-unfinished)
+### Algorithm gate - nochao 30s (stamp 2026-09-16-unfinished)
+### Algorithm gate - nochao 30s (stamp 2026-09-16-unfinished)
+### Algorithm gate - nochao 30s (stamp 2026-09-16-unfinished)
+### Algorithm gate - nochao 30s (stamp 2026-09-16-unfinished)
 
 | Workload | Result |
 |----------|--------|
 | register (Knossos) | `:valid? true` |
 | append (Elle) | `:valid? true` |
 
+### Algorithm gate - nochao 60s (stamp 2026-09-15-orchid-qos-h)
+### Algorithm gate - nochao 60s (stamp 2026-09-15-orchid-qos-h)
+### Algorithm gate - nochao 60s (stamp 2026-09-15-orchid-qos-h)
+### Algorithm gate - nochao 60s (stamp 2026-09-15-orchid-qos-h)
 ### Algorithm gate - nochao 60s (stamp 2026-09-15-orchid-qos-h)
 ### Algorithm gate - nochao 60s (stamp 2026-09-15-orchid-qos-h)
 ### Algorithm gate - nochao 60s (stamp 2026-09-15-orchid-qos-h)
@@ -82,6 +103,10 @@ Load planning stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/res
 ### Chaos contour (consistency PASS, stamp 2026-09-15-txdur)
 ### Chaos contour (consistency PASS, stamp 2026-09-15-txdur)
 ### Chaos contour (consistency PASS, stamp 2026-09-15-txdur)
+### Chaos contour (consistency PASS, stamp 2026-09-15-txdur)
+### Chaos contour (consistency PASS, stamp 2026-09-15-txdur)
+### Chaos contour (consistency PASS, stamp 2026-09-15-txdur)
+### Chaos contour (consistency PASS, stamp 2026-09-15-txdur)
 
 | Workload | Store |
 |----------|--------|
@@ -89,9 +114,14 @@ Load planning stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/res
 | append | `jamoa-orchid-append/20260915T111843.215Z` |
 
 ### Load planning stamps
+### Load planning stamps
 
 TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/results/SUMMARY.md).
 
+### 2026-09-15-gaps-features
+### 2026-09-15-gaps-features
+### 2026-09-15-gaps-features
+### 2026-09-15-gaps-features
 ### 2026-09-15-gaps-features
 ### 2026-09-15-gaps-features
 ### 2026-09-15-gaps-features
@@ -105,6 +135,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-17-post-impl
+### 2026-09-17-post-impl
+### 2026-09-17-post-impl
+### 2026-09-17-post-impl
 ### 2026-09-17-post-impl
 ### 2026-09-17-post-impl
 ### 2026-09-17-post-impl
@@ -122,6 +156,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 ### 2026-09-17-key-probe
 ### 2026-09-17-key-probe
 ### 2026-09-17-key-probe
+### 2026-09-17-key-probe
+### 2026-09-17-key-probe
+### 2026-09-17-key-probe
+### 2026-09-17-key-probe
 - mode: full-jepsen
 - outcome: PASS
 - git: a916ec2
@@ -135,6 +173,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 ### 2026-09-17-rerun-calm
 ### 2026-09-17-rerun-calm
 ### 2026-09-17-rerun-calm
+### 2026-09-17-rerun-calm
+### 2026-09-17-rerun-calm
+### 2026-09-17-rerun-calm
+### 2026-09-17-rerun-calm
 - mode: full-jepsen
 - outcome: PASS
 - git: a916ec2
@@ -148,6 +190,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 ### 2026-09-17-vector-fix
 ### 2026-09-17-vector-fix
 ### 2026-09-17-vector-fix
+### 2026-09-17-vector-fix
+### 2026-09-17-vector-fix
+### 2026-09-17-vector-fix
+### 2026-09-17-vector-fix
 - mode: full-jepsen
 - outcome: PASS
 - git: a916ec2
@@ -157,6 +203,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-18-aqe-residuals
+### 2026-09-18-aqe-residuals
+### 2026-09-18-aqe-residuals
+### 2026-09-18-aqe-residuals
 ### 2026-09-18-aqe-residuals
 ### 2026-09-18-aqe-residuals
 ### 2026-09-18-aqe-residuals
@@ -174,6 +224,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
 - mode: full-jepsen
 - outcome: PASS
 - git: 0cdedb7
@@ -183,6 +237,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
@@ -200,15 +258,6 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
-- mode: full-jepsen
-- outcome: PASS
-- git: 7f31f11
-- compose: up
-- chaos-it: partition+kill
-- full-jepsen: PASS
-- command: run-jepsen.ps1 register+append (time-limit=60)
-- notes: register=PASS; append=PASS
-
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
 ### 2026-09-18-aqe-residuals-multidc-sync
@@ -222,6 +271,27 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+### 2026-09-18-aqe-residuals-multidc-sync
+- mode: full-jepsen
+- outcome: PASS
+- git: 7f31f11
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS
+
+### 2026-09-18-lockfix
+### 2026-09-18-lockfix
+### 2026-09-18-lockfix
+### 2026-09-18-lockfix
 ### 2026-09-18-lockfix
 ### 2026-09-18-lockfix
 ### 2026-09-18-lockfix
@@ -235,6 +305,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-18-residuals-r0
+### 2026-09-18-residuals-r0
+### 2026-09-18-residuals-r0
+### 2026-09-18-residuals-r0
 ### 2026-09-18-residuals-r0
 ### 2026-09-18-residuals-r0
 ### 2026-09-18-residuals-r0
@@ -252,6 +326,10 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 ### 2026-09-18-residuals-r0
 ### 2026-09-18-residuals-r0
 ### 2026-09-18-residuals-r0
+### 2026-09-18-residuals-r0
+### 2026-09-18-residuals-r0
+### 2026-09-18-residuals-r0
+### 2026-09-18-residuals-r0
 - mode: full-jepsen
 - outcome: PASS
 - git: 597b18f
@@ -261,6 +339,8 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=30)
 - notes: register=PASS; append=PASS
 
+### 2026-09-19-jepsen-full
+### 2026-09-19-jepsen-full
 ### 2026-09-19-jepsen-full
 ### 2026-09-19-jepsen-full
 - mode: full-jepsen
@@ -273,6 +353,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=FAIL; append=FAIL
 
 ### 2026-09-19-jepsen-full
+### 2026-09-19-jepsen-full
 - mode: full-jepsen
 - outcome: PASS
 - git: d7c8564
@@ -282,6 +363,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.sh register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-18-residuals-r0
 ### 2026-09-18-residuals-r0
 - mode: full-jepsen
 - outcome: PASS
@@ -293,6 +375,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-19-ooo-fix-jepsen-1dc
+### 2026-09-19-ooo-fix-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
 - git: 99a05aa
@@ -302,6 +385,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-20-jepsen-full
 ### 2026-09-20-jepsen-full
 - mode: full-jepsen
 - outcome: PASS
@@ -313,6 +397,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-20-refactor-query
+### 2026-09-20-refactor-query
 - mode: full-jepsen
 - outcome: PASS
 - git: 0330442
@@ -322,6 +407,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-20-jepsen-full
 ### 2026-09-20-jepsen-full
 - mode: full-jepsen
 - outcome: PASS
@@ -333,6 +419,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-21-jepsen-1dc
+### 2026-09-21-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
 - git: 371dec9
@@ -342,6 +429,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=30)
 - notes: register=PASS; append=PASS
 
+### 2026-09-21-dialect-gates-jepsen-1dc
 ### 2026-09-21-dialect-gates-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
@@ -353,6 +441,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-22-trg-wire-jepsen-1dc
+### 2026-09-22-trg-wire-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
 - git: 18f8b29
@@ -362,6 +451,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=30)
 - notes: register=PASS; append=PASS
 
+### 2026-09-22-v1-gates-jepsen-1dc
 ### 2026-09-22-v1-gates-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
@@ -373,6 +463,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-22-residuals-gates-jepsen-1dc
+### 2026-09-22-residuals-gates-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
 - git: cba172f
@@ -382,6 +473,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-23-lazy-select-hydrate-jepsen-1dc
 ### 2026-09-23-lazy-select-hydrate-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
@@ -393,6 +485,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-23-jooq-dx-jepsen-1dc
+### 2026-09-23-jooq-dx-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
 - git: 34739c1
@@ -402,6 +495,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-23-jdbc-sync-jepsen-1dc
 ### 2026-09-23-jdbc-sync-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
@@ -413,6 +507,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-23-prod-prep-jepsen-1dc
+### 2026-09-23-prod-prep-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
 - git: 8633c43
@@ -422,6 +517,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-23-style-refactor-jepsen-1dc
 ### 2026-09-23-style-refactor-jepsen-1dc
 - mode: full-jepsen
 - outcome: PASS
@@ -433,6 +529,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: register=PASS; append=PASS
 
 ### 2026-09-23-style-refactor-jepsen-1dc-r2
+### 2026-09-23-style-refactor-jepsen-1dc-r2
 - mode: full-jepsen
 - outcome: PASS
 - git: 8633c43
@@ -442,6 +539,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS
 
+### 2026-09-24-jepsen-smoke
 ### 2026-09-24-jepsen-smoke
 - mode: smoke
 - outcome: FAIL
@@ -453,6 +551,7 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
 
 ### 2026-09-24-jepsen-smoke
+### 2026-09-24-jepsen-smoke
 - mode: smoke
 - outcome: HARNESS_READY
 - git: eec3953
@@ -461,3 +560,57 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - full-jepsen: not-run
 - command: run-jepsen-smoke.ps1
 - notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-09-24-jepsen-smoke
+### 2026-09-24-jepsen-smoke
+- mode: smoke
+- outcome: HARNESS_READY
+- git: a12685a
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-09-24-dialect-full-jepsen
+### 2026-09-24-dialect-full-jepsen
+- mode: full-jepsen
+- outcome: PASS
+- git: a12685a
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS
+
+### 2026-09-25-jepsen-smoke
+### 2026-09-25-jepsen-smoke
+- mode: smoke
+- outcome: HARNESS_READY
+- git: 637875d
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-09-25-dialect-builtins-qg
+### 2026-09-25-dialect-builtins-qg
+- mode: full-jepsen
+- outcome: PASS
+- git: 637875d
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS
+
+### 2026-09-25-jepsen-full
+- mode: full-jepsen
+- outcome: PASS
+- git: unknown
+- compose: up
+- chaos-it: not-run
+- full-jepsen: PASS
+- command: run-jepsen.sh register+append (time-limit=30)
+- notes: register=PASS; append=PASS

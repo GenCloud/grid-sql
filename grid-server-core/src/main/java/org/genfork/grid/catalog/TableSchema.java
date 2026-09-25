@@ -94,7 +94,7 @@ public final class TableSchema {
 		}
 		this.tableName = tableName;
 		this.columns = List.copyOf(columns);
-		this.indexes = indexes == null ? List.of() : List.copyOf(indexes);
+		final List<IndexDef> inputIndexes = indexes == null ? List.of() : List.copyOf(indexes);
 		this.foreignKeys = foreignKeys == null ? List.of() : List.copyOf(foreignKeys);
 		this.checks = checks == null ? List.of() : List.copyOf(checks);
 		this.schemaEpoch = schemaEpoch;
@@ -141,7 +141,7 @@ public final class TableSchema {
 			this.fieldMetas[i] = FieldMetaData.ofCatalog(col.name(), col.javaType());
 		}
 
-		final List<IndexDef> effectiveIndexes = new ArrayList<>(this.indexes);
+		final List<IndexDef> effectiveIndexes = new ArrayList<>(inputIndexes);
 		boolean hasPkIndex = false;
 		for (IndexDef idx : effectiveIndexes) {
 			if (columnsEqualIgnoreCaseOrdered(idx.columns(), primaryKeys.stream().map(ColumnDef::name).toList())
@@ -166,7 +166,8 @@ public final class TableSchema {
 			}
 		}
 
-		this.indexHashFields = buildIndexHashFields(effectiveIndexes);
+		this.indexes = List.copyOf(effectiveIndexes);
+		this.indexHashFields = buildIndexHashFields(this.indexes);
 		this.orderIndexFields = buildOrderFields();
 		validateForeignKeys();
 	}
@@ -229,6 +230,30 @@ public final class TableSchema {
 		final List<ColumnDef> next = new ArrayList<>(columns.size() + 1);
 		next.addAll(columns);
 		next.add(new ColumnDef(name, type, nullable, columns.size(), false, false));
+		return new TableSchema(tableName, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
+	}
+
+	/** Immutable copy with trailing column and optional DEFAULT expression. */
+	public TableSchema withColumn(
+			String name,
+			SqlType type,
+			boolean nullable,
+			String defaultExprOrNull,
+			long newEpoch
+	) {
+		if (name == null || name.isBlank()) {
+			throw new IllegalArgumentException("column name required");
+		}
+		if (byName.containsKey(name.toLowerCase(Locale.ROOT))) {
+			throw new IllegalStateException("Column already exists: " + name);
+		}
+		if (type == null) {
+			throw new IllegalArgumentException("type required");
+		}
+		final List<ColumnDef> next = new ArrayList<>(columns.size() + 1);
+		next.addAll(columns);
+		next.add(new ColumnDef(
+				name, type, nullable, columns.size(), false, false, false, null, defaultExprOrNull));
 		return new TableSchema(tableName, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
@@ -315,6 +340,89 @@ public final class TableSchema {
 		next.addAll(foreignKeys);
 		next.add(fk);
 		return new TableSchema(tableName, columns, indexes, next, checks, newEpoch, primaryKeyNames());
+	}
+
+	/** Immutable copy without named FK (and its auto child covering index when present). */
+	public TableSchema withoutForeignKey(String constraintName, long newEpoch) {
+		if (constraintName == null || constraintName.isBlank()) {
+			throw new IllegalArgumentException("constraint name required");
+		}
+		final List<FkDef> nextFks = new ArrayList<>(foreignKeys.size());
+		boolean found = false;
+		String childIndexName = null;
+		for (FkDef existing : foreignKeys) {
+			if (existing.name().equalsIgnoreCase(constraintName)) {
+				found = true;
+				childIndexName = existing.name() + FK_CHILD_INDEX_SUFFIX;
+				continue;
+			}
+			nextFks.add(existing);
+		}
+		if (!found) {
+			throw new IllegalStateException("FOREIGN KEY constraint not found: " + constraintName);
+		}
+		final List<IndexDef> nextIdx = new ArrayList<>(indexes.size());
+		for (IndexDef idx : indexes) {
+			if (childIndexName != null && idx.name().equalsIgnoreCase(childIndexName)) {
+				continue;
+			}
+			nextIdx.add(idx);
+		}
+		return new TableSchema(tableName, columns, nextIdx, nextFks, checks, newEpoch, primaryKeyNames());
+	}
+
+	/** Immutable copy without named CHECK. */
+	public TableSchema withoutCheck(String constraintName, long newEpoch) {
+		if (constraintName == null || constraintName.isBlank()) {
+			throw new IllegalArgumentException("constraint name required");
+		}
+		final List<CheckDef> next = new ArrayList<>(checks.size());
+		boolean found = false;
+		for (CheckDef existing : checks) {
+			if (existing.name().equalsIgnoreCase(constraintName)) {
+				found = true;
+				continue;
+			}
+			next.add(existing);
+		}
+		if (!found) {
+			throw new IllegalStateException("CHECK constraint not found: " + constraintName);
+		}
+		return new TableSchema(tableName, columns, indexes, foreignKeys, next, newEpoch, primaryKeyNames());
+	}
+
+	/**
+	 * Replace PRIMARY KEY column set (new epoch). Existing PK flags cleared; listed columns marked PK.
+	 */
+	public TableSchema withPrimaryKeyColumns(List<String> pkColumns, long newEpoch) {
+		Objects.requireNonNull(pkColumns, "pkColumns");
+		if (pkColumns.isEmpty()) {
+			throw new IllegalArgumentException("PRIMARY KEY requires at least one column");
+		}
+		final List<ColumnDef> next = new ArrayList<>(columns.size());
+		for (ColumnDef col : columns) {
+			boolean pk = false;
+			for (String name : pkColumns) {
+				if (col.name().equalsIgnoreCase(name)) {
+					pk = true;
+					break;
+				}
+			}
+			next.add(new ColumnDef(
+					col.name(),
+					col.type(),
+					pk ? false : col.nullable(),
+					col.ordinal(),
+					pk,
+					col.externalOrder(),
+					col.identity(),
+					col.identitySequence(),
+					col.defaultExprOrNull()));
+		}
+		for (String name : pkColumns) {
+			requireColumn(name);
+		}
+		return new TableSchema(tableName, next, indexes, foreignKeys, checks, newEpoch, List.copyOf(pkColumns));
 	}
 
 	/** Immutable copy with an added CHECK constraint. */
@@ -425,7 +533,8 @@ public final class TableSchema {
 				col.primaryKey(),
 				col.externalOrder(),
 				col.identity(),
-				col.identitySequence()
+				col.identitySequence(),
+				col.defaultExprOrNull()
 		);
 	}
 
@@ -482,6 +591,12 @@ public final class TableSchema {
 			return this;
 		}
 
+		public Builder column(String name, SqlType type, boolean nullable, String defaultExprOrNull) {
+			columns.add(new ColumnDef(
+					name, type, nullable, columns.size(), false, false, false, null, defaultExprOrNull));
+			return this;
+		}
+
 		public Builder column(String name, SqlType type) {
 			return column(name, type, true);
 		}
@@ -501,6 +616,18 @@ public final class TableSchema {
 			return this;
 		}
 
+		public Builder columnDefault(String name, String defaultExprOrNull) {
+			final int idx = indexOf(name);
+			if (idx < 0) {
+				throw new IllegalArgumentException("Unknown column for DEFAULT: " + name);
+			}
+			final ColumnDef old = columns.get(idx);
+			columns.set(idx, new ColumnDef(
+					old.name(), old.type(), old.nullable(), old.ordinal(), old.primaryKey(),
+					old.externalOrder(), old.identity(), old.identitySequence(), defaultExprOrNull));
+			return this;
+		}
+
 		public Builder markPrimaryKey(String name) {
 			final int idx = indexOf(name);
 			if (idx < 0) {
@@ -509,7 +636,7 @@ public final class TableSchema {
 			final ColumnDef old = columns.get(idx);
 			columns.set(idx, new ColumnDef(
 					old.name(), old.type(), false, old.ordinal(), true, old.externalOrder(),
-					old.identity(), old.identitySequence()));
+					old.identity(), old.identitySequence(), old.defaultExprOrNull()));
 			if (!containsIgnoreCase(pkNames, name)) {
 				pkNames.add(name);
 			}
@@ -524,7 +651,7 @@ public final class TableSchema {
 			final ColumnDef old = columns.get(idx);
 			columns.set(idx, new ColumnDef(
 					old.name(), old.type(), old.nullable(), old.ordinal(), old.primaryKey(),
-					old.externalOrder(), true, sequenceName));
+					old.externalOrder(), true, sequenceName, old.defaultExprOrNull()));
 			return this;
 		}
 
@@ -536,7 +663,7 @@ public final class TableSchema {
 			final ColumnDef old = columns.get(idx);
 			columns.set(idx, new ColumnDef(
 					old.name(), old.type(), old.nullable(), old.ordinal(),
-					old.primaryKey(), true, old.identity(), old.identitySequence()));
+					old.primaryKey(), true, old.identity(), old.identitySequence(), old.defaultExprOrNull()));
 			return this;
 		}
 

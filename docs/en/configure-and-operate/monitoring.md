@@ -96,6 +96,13 @@ Write latency splits cleanly into a consensus stage and a disk stage. Read both 
 
 Stage-by-stage breakdown of the write path: [consensus write path](../performance/perf-bio-consensus.md).
 
+### Duty guidance
+
+- Readiness UP is required before traffic; DOWN at start with replication until ORCHID syncs is expected.
+- After promote: `writerEligible: true` on the new Active and client meta match — otherwise write traffic hits the old node.
+- Replica reads: if `applyLagStale: true`, do not “fix” it in the client — catch up first.
+- Rising `rpo_estimate_ms` across sites with no known incident — check the network and `ASYNC` / `SYNC` mode.
+
 ## Alerting
 
 Build alerts on the fields above rather than on invented thresholds.

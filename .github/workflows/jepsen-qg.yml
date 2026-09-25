@@ -1,0 +1,222 @@
+# Jepsen QG lab gate — separate from unit CI (never co-run with Load/JMH/OSS).
+# Matrix: 1dc-chaos, 1dc-nochao(+qg-gate), multidc-async, multidc-sync, witness.
+name: Jepsen QG
+
+on:
+  workflow_dispatch:
+    inputs:
+      time_limit:
+        description: JEPSEN_TIME_LIMIT (seconds)
+        required: false
+        default: "60"
+        type: string
+  schedule:
+    # Nightly UTC
+    - cron: "0 3 * * *"
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: jepsen-qg-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  JEPSEN_TIME_LIMIT: ${{ github.event.inputs.time_limit || '60' }}
+  JEPSEN_REBUILD: "0"
+  MULTIDC_SKIP_REBUILD: "1"
+  MULTIDC_FULL: "1"
+  DOCKER_BUILDKIT: "1"
+  MAVEN_OPTS: >-
+    -Xmx2g
+    -Dfile.encoding=UTF-8
+
+jobs:
+  # Skip expensive work on PRs unless labeled `jepsen` (or manual dispatch).
+  build-image:
+    name: Build Jepsen image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       contains(join(github.event.pull_request.labels.*.name, ','), 'jepsen'))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Package client + Jepsen starter
+        run: >
+          mvn -B -ntp
+          -pl grid-sql-client,grid-sql-jepsen-starter
+          -am package
+          -DskipTests
+
+      - name: Build jamoa-grid-jepsen:local
+        run: bash benchmarks/jepsen/scripts/build-jepsen-image.sh
+
+      - name: Save image artifact
+        run: |
+          docker save jamoa-grid-jepsen:local | gzip -1 > jepsen-image.tar.gz
+          ls -lh jepsen-image.tar.gz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: jamoa-grid-jepsen-image
+          path: jepsen-image.tar.gz
+          retention-days: 3
+          if-no-files-found: error
+
+  matrix:
+    name: Jepsen ${{ matrix.config }}
+    needs: build-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - 1dc-chaos
+          - 1dc-nochao
+          - multidc-async
+          - multidc-sync
+          - witness
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Install PowerShell (qg-gate / witness)
+        if: matrix.config == '1dc-nochao' || matrix.config == 'witness'
+        shell: bash
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -Command '$PSVersionTable.PSVersion'
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https software-properties-common
+          wget -q "https://packages.microsoft.com/config/ubuntu/$(. /etc/os-release && echo $VERSION_ID)/packages-microsoft-prod.deb"
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo apt-get install -y powershell
+          pwsh -NoProfile -Command '$PSVersionTable.PSVersion'
+
+      - name: Download Jepsen image
+        uses: actions/download-artifact@v4
+        with:
+          name: jamoa-grid-jepsen-image
+          path: /tmp/jepsen-ci
+
+      - name: Load image
+        run: |
+          gunzip -c /tmp/jepsen-ci/jepsen-image.tar.gz | docker load
+          docker image inspect jamoa-grid-jepsen:local >/dev/null
+
+      - name: Install grid-sql-client (control classpath)
+        run: mvn -B -ntp -pl grid-sql-client -am install -DskipTests
+
+      - name: Purge Jepsen volumes
+        env:
+          CONFIG: ${{ matrix.config }}
+        run: |
+          case "$CONFIG" in
+            1dc-chaos|1dc-nochao) SCOPE=1dc ;;
+            multidc-async|multidc-sync|witness) SCOPE=multidc ;;
+            *) SCOPE=all ;;
+          esac
+          bash benchmarks/jepsen/scripts/jepsen-purge.sh "$SCOPE"
+
+      - name: Run 1dc-chaos
+        if: matrix.config == '1dc-chaos'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+        run: bash benchmarks/jepsen/scripts/run-jepsen.sh
+
+      - name: Run 1dc-nochao
+        if: matrix.config == '1dc-nochao'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+        run: bash benchmarks/jepsen/scripts/run-jepsen-nochao.sh
+
+      # Ref B p95 living floor = calm host. On GITHUB_ACTIONS qg-gate is CI_ADVISORY (p50 hard, p95 advisory).
+      - name: qg-gate (nochao latency)
+        if: matrix.config == '1dc-nochao'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACTS="benchmarks/jepsen/ARTIFACTS.txt"
+          if [[ ! -f "$ARTIFACTS" ]]; then
+            echo "ERROR: missing $ARTIFACTS after nochao run" >&2
+            exit 1
+          fi
+          # shellcheck disable=SC1090
+          source "$ARTIFACTS"
+          if [[ -z "${REGISTER_HISTORY:-}" || -z "${APPEND_HISTORY:-}" ]]; then
+            echo "ERROR: REGISTER_HISTORY/APPEND_HISTORY not set in ARTIFACTS.txt" >&2
+            cat "$ARTIFACTS" >&2
+            exit 1
+          fi
+          echo "qg-gate register=$REGISTER_HISTORY append=$APPEND_HISTORY"
+          pwsh -NoProfile -File benchmarks/jepsen/scripts/qg-gate.ps1 \
+            -RegisterHistory "$REGISTER_HISTORY" \
+            -AppendHistory "$APPEND_HISTORY"
+
+      - name: Run multidc-async
+        if: matrix.config == 'multidc-async'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+          MULTIDC_FULL: "1"
+          MULTIDC_SKIP_REBUILD: "1"
+        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-async.sh
+
+      - name: Run multidc-sync
+        if: matrix.config == 'multidc-sync'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+          MULTIDC_FULL: "1"
+          MULTIDC_SKIP_REBUILD: "1"
+        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-sync-voters.sh
+
+      - name: Run witness
+        if: matrix.config == 'witness'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+          JEPSEN_TIME_LIMIT: ${{ env.JEPSEN_TIME_LIMIT }}
+        run: >
+          pwsh -NoProfile -File benchmarks/jepsen/witness/scripts/run-witness-chaos.ps1
+          -TimeLimit ${{ env.JEPSEN_TIME_LIMIT }}
+          -SkipRebuild
+
+      - name: Upload RESULTS + histories
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jepsen-${{ matrix.config }}-artifacts
+          path: |
+            benchmarks/jepsen/RESULTS.md
+            benchmarks/jepsen/ARTIFACTS.txt
+            benchmarks/jepsen/clojure/store/**/results.edn
+            benchmarks/jepsen/clojure/store/**/history.edn
+            benchmarks/jepsen/multidc/RESULTS.md
+            benchmarks/jepsen/witness/RESULTS.md
+          if-no-files-found: ignore
+          retention-days: 14

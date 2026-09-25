@@ -119,6 +119,11 @@ public final class SqlDdlExecutor {
 				b.identityColumn(col.name(), type, col.primaryKey() || containsColumn(s.tablePk(), col.name()), seqName);
 			} else if (col.primaryKey()) {
 				b.primaryKey(col.name(), type);
+				if (col.defaultExprOrNull() != null) {
+					b.columnDefault(col.name(), col.defaultExprOrNull());
+				}
+			} else if (col.defaultExprOrNull() != null) {
+				b.column(col.name(), type, !col.notNull(), col.defaultExprOrNull());
 			} else {
 				b.column(col.name(), type, !col.notNull());
 			}
@@ -273,7 +278,7 @@ public final class SqlDdlExecutor {
 			throw new IllegalArgumentException(IndexDef.BITMAP_SINGLE_COLUMN_ONLY);
 		}
 		if (store.schema().findIndex(s.indexName()) != null || store.index().hasNamedIndex(s.indexName())) {
-			if (applyingReplicatedDdl.get()) {
+			if (s.ifNotExists() || applyingReplicatedDdl.get()) {
 				return SqlResult.ddl(SqlStatementTag.CREATE_INDEX);
 			}
 			throw new IllegalStateException("Index already exists: " + s.indexName());
@@ -296,7 +301,7 @@ public final class SqlDdlExecutor {
 		}
 		final TableStore store = tables.requireStore(tables.resolveTable(session, table));
 		if (store.schema().findIndex(s.indexName()) == null && !store.index().hasNamedIndex(s.indexName())) {
-			if (applyingReplicatedDdl.get()) {
+			if (s.ifExists() || applyingReplicatedDdl.get()) {
 				return SqlResult.ddl(SqlStatementTag.DROP_INDEX);
 			}
 			throw new IllegalStateException("Index not found: " + s.indexName());
@@ -360,7 +365,24 @@ public final class SqlDdlExecutor {
 		final TableStore store = tables.requireStore(table);
 		final long epoch = catalog.nextEpoch();
 		final TableSchema next;
-		if (s.addCheck() != null) {
+		if (s.dropConstraintName() != null) {
+			next = dropConstraint(store.schema(), s.dropConstraintName(), epoch);
+		} else if (s.addForeignKey() != null) {
+			final FkSpec fk = s.addForeignKey();
+			final String fkName = fk.nameOrNull() == null || fk.nameOrNull().isBlank()
+					? FkDef.defaultName(table, fk.childColumns())
+					: fk.nameOrNull();
+			next = store.schema().withForeignKey(new FkDef(
+					fkName,
+					table,
+					fk.childColumns(),
+					tables.resolveTable(session, fk.parentTable()),
+					fk.parentColumns(),
+					FkAction.fromToken(fk.onDeleteOrNull()),
+					FkAction.fromToken(fk.onUpdateOrNull())), epoch);
+		} else if (s.addPrimaryKeyColumns() != null) {
+			next = store.schema().withPrimaryKeyColumns(s.addPrimaryKeyColumns(), epoch);
+		} else if (s.addCheck() != null) {
 			final CheckSpec check = s.addCheck();
 			final String checkName = check.nameOrNull() == null || check.nameOrNull().isBlank()
 					? table + CHECK_NAME_INFIX + (store.schema().checks().size() + 1)
@@ -371,13 +393,17 @@ public final class SqlDdlExecutor {
 			if (col.primaryKey()) {
 				throw new IllegalArgumentException("ALTER ADD COLUMN PRIMARY KEY not supported");
 			}
-			if (applyingReplicatedDdl.get() && store.schema().column(col.name()) != null) {
-				return SqlResult.ddl(SqlStatementTag.ALTER_TABLE);
+			if (store.schema().column(col.name()) != null) {
+				if (s.addColumnIfNotExists() || applyingReplicatedDdl.get()) {
+					return SqlResult.ddl(SqlStatementTag.ALTER_TABLE);
+				}
+				throw new IllegalStateException("Column already exists: " + col.name());
 			}
 			next = store.schema().withColumn(
 					col.name(),
 					SqlType.fromToken(col.typeToken()),
 					!col.notNull(),
+					col.defaultExprOrNull(),
 					epoch
 			);
 		} else {
@@ -389,6 +415,21 @@ public final class SqlDdlExecutor {
 		catalog.appendDdl(persist);
 		publishDdl(persist, epoch);
 		return SqlResult.ddl(SqlStatementTag.ALTER_TABLE);
+	}
+
+	private static TableSchema dropConstraint(TableSchema schema, String name, long epoch) {
+		for (FkDef fk : schema.foreignKeys()) {
+			if (fk.name().equalsIgnoreCase(name)) {
+				return schema.withoutForeignKey(name, epoch);
+			}
+		}
+		for (CheckDef check : schema.checks()) {
+			if (check.name().equalsIgnoreCase(name)) {
+				return schema.withoutCheck(name, epoch);
+			}
+		}
+		throw new IllegalStateException(
+				"constraint not found (or PRIMARY KEY cannot be dropped): " + name);
 	}
 
 	public SqlResult createView(SqlSession session, CreateViewSql s) {

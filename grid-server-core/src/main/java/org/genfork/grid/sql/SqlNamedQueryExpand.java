@@ -225,7 +225,11 @@ public final class SqlNamedQueryExpand {
 	}
 
 	private static String inlineNamed(SelectQueryContext outer, CommonTokenStream tokens, String innerSql) {
-		final SimplifiedSqlLexer lexer = new SimplifiedSqlLexer(CharStreams.fromString(innerSql));
+		String flatInner = innerSql;
+		if (startsWithWith(innerSql)) {
+			flatInner = expand(innerSql, Map.of());
+		}
+		final SimplifiedSqlLexer lexer = new SimplifiedSqlLexer(CharStreams.fromString(flatInner));
 		final CommonTokenStream ts = new CommonTokenStream(lexer);
 		final SimplifiedSqlParser p = new SimplifiedSqlParser(ts);
 		final QueryContext innerRoot = p.query();
@@ -233,6 +237,9 @@ public final class SqlNamedQueryExpand {
 			throw new IllegalArgumentException("CTE/VIEW body with set op cannot be inlined further");
 		}
 		final SelectQueryContext inner = innerRoot.selectQuery();
+		if (inner == null) {
+			throw new IllegalArgumentException("CTE/VIEW body is not a SELECT: " + flatInner);
+		}
 		final boolean innerHasJoin = inner.joinClause() != null && !inner.joinClause().isEmpty();
 		final boolean outerHasJoin = outer.joinClause() != null && !outer.joinClause().isEmpty();
 		if (innerHasJoin && outerHasJoin) {
@@ -319,14 +326,26 @@ public final class SqlNamedQueryExpand {
 		return false;
 	}
 
+	private static boolean startsWithWith(String sql) {
+		if (sql == null) {
+			return false;
+		}
+		int i = 0;
+		while (i < sql.length() && Character.isWhitespace(sql.charAt(i))) {
+			i++;
+		}
+		return sql.regionMatches(true, i, "WITH", 0, 4);
+	}
+
 	private static String fromTableName(SelectQueryContext q) {
 		final SimplifiedSqlParser.FromItemContext from = q.fromItem();
 		if (from.tableName() != null) {
 			return from.tableName().getText();
 		}
 		if (from.functionCall() != null) {
-			return from.alias != null
-					? from.alias.getText()
+			final String alias = SqlIdentParseUtil.fromItemAlias(from);
+			return alias != null
+					? alias
 					: from.functionCall().ID().getText();
 		}
 		throw new IllegalArgumentException("SELECT FROM requires table or function");

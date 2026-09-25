@@ -119,6 +119,16 @@ public final class DmlAst {
 	}
 
 	/**
+	 * {@code TRUNCATE TABLE …} — fail-closed delete-all via OpLog / TX stage.
+	 *
+	 * @author: GenCloud
+	 * @date: 2025/11
+	 * @since: 1.0
+	 */
+	public record TruncateSql(String table) implements Stmt {
+	}
+
+	/**
 	 * {@code UPDATE … SET …}.
 	 *
 	 * @author: GenCloud

@@ -89,7 +89,18 @@ public final class SqlSelectSqlRender {
 			for (JoinEdge edge : s.joins()) {
 				sb.append(' ').append(joinKeyword(edge.kind())).append(" JOIN ");
 				sb.append(edge.table());
-				sb.append(" ON ").append(edge.leftCol()).append(" = ").append(edge.rightCol());
+				if (edge.tableAlias() != null && !edge.tableAlias().isBlank()) {
+					sb.append(' ').append(edge.tableAlias());
+				}
+				sb.append(" ON ");
+				boolean firstEq = true;
+				for (org.genfork.grid.sql.ast.SelectAst.JoinEq eq : edge.eqs()) {
+					if (!firstEq) {
+						sb.append(" AND ");
+					}
+					firstEq = false;
+					sb.append(eq.leftCol()).append(" = ").append(eq.rightCol());
+				}
 			}
 		}
 		appendTailFromOriginal(sb, s.sql(), includeForUpdate, includePaging);

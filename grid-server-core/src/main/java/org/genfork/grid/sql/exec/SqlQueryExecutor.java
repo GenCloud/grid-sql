@@ -193,7 +193,10 @@ public final class SqlQueryExecutor {
 		final LockBatch lockBatch = acquireForUpdate(session, table, store, s);
 		final List<byte[]> statementLocks = lockBatch.statementLocks();
 		final List<String> projection = s.projection();
-		final List<SqlResult.ColumnMeta> metas = SqlProjectionOps.columnMetas(store, projection);
+		final List<SelectItem> items = s.selectItems();
+		final List<SqlResult.ColumnMeta> metas = items != null && !items.isEmpty()
+				? SelectProjectionAssembler.metas(store, items, projection)
+				: SqlProjectionOps.columnMetas(store, projection);
 		try {
 			final SqlResult raw;
 			if (s.forUpdate()) {
@@ -901,12 +904,24 @@ public final class SqlQueryExecutor {
 		for (JoinEdge edge : edges) {
 			final String rightName = domains.resolve(session, edge.table());
 			final TableStore right = domains.requireStore(rightName);
-			final ColumnDef leftCol = SqlProjectionOps.requireWorkingColumn(workingCols, edge.leftCol());
-			final ColumnDef rightCol = right.schema().requireColumn(edge.rightCol());
-			final int leftOrd = SqlProjectionOps.indexOfColumn(workingCols, leftCol.name());
-			final int rightOrd = rightCol.ordinal();
-			final boolean leftOnPk = leftCol.primaryKey();
-			final boolean rightOnPk = rightCol.primaryKey();
+			final int eqCount = edge.eqs().size();
+			final int[] leftOrds = new int[eqCount];
+			final int[] rightOrds = new int[eqCount];
+			final List<String> rightColNames = new ArrayList<>(eqCount);
+			boolean leftOnPk = true;
+			boolean rightOnPk = true;
+			for (int ei = 0; ei < eqCount; ei++) {
+				final ColumnDef leftCol = SqlProjectionOps.requireWorkingColumn(
+						workingCols, edge.eqs().get(ei).leftCol());
+				final ColumnDef rightCol = right.schema().requireColumn(edge.eqs().get(ei).rightCol());
+				leftOrds[ei] = SqlProjectionOps.indexOfColumn(workingCols, leftCol.name());
+				rightOrds[ei] = rightCol.ordinal();
+				rightColNames.add(rightCol.name());
+				leftOnPk = leftOnPk && leftCol.primaryKey();
+				rightOnPk = rightOnPk && rightCol.primaryKey();
+			}
+			final int leftOrd = leftOrds[0];
+			final int rightOrd = rightOrds[0];
 
 			if (distFanIn) {
 				if (session.inTransaction()) {
@@ -914,14 +929,14 @@ public final class SqlQueryExecutor {
 					try {
 						working = joinEdgeDistributed(
 								session, working, sideSchemas, left, leftName, right, rightName,
-								leftOrd, rightOrd, leftOnPk, rightOnPk, edge, peers, peerBlobs);
+								leftOrds, rightOrds, leftOnPk, rightOnPk, edge, peers, peerBlobs);
 					} finally {
 						DistTxSnapshot.clear();
 					}
 				} else {
 					working = joinEdgeDistributed(
 							session, working, sideSchemas, left, leftName, right, rightName,
-							leftOrd, rightOrd, leftOnPk, rightOnPk, edge, peers, peerBlobs);
+							leftOrds, rightOrds, leftOnPk, rightOnPk, edge, peers, peerBlobs);
 				}
 				workingCols = SqlJoinOps.concatColumns(workingCols, right.schema().columns());
 				sideSchemas = new ArrayList<>(sideSchemas);
@@ -930,8 +945,10 @@ public final class SqlQueryExecutor {
 				continue;
 			}
 
-			final boolean rightIndexed = right.hasColumnIndex(rightCol.name());
-			if (!whereAppliedOnWire && working == null) {
+			final boolean rightIndexed = eqCount == 1
+					? right.hasColumnIndex(rightColNames.getFirst())
+					: right.hasEqIndex(rightColNames);
+			if (!whereAppliedOnWire && working == null && eqCount == 1) {
 				final FilterCondition remapped = SqlJoinFilterPush.remapJoinColToLeft(
 						joinWhereFilter, edge.leftCol(), edge.rightCol(), left.schema());
 				if (!(remapped instanceof AlwaysTrueCondition)) {
@@ -946,19 +963,19 @@ public final class SqlQueryExecutor {
 					&& whereAppliedOnWire
 					&& (rightOnPk || rightIndexed)) {
 				working = SqlJoinOps.toJoinRows(snapshotBlobs(session, left, leftName, leftPushFilter));
-				if (rightOnPk) {
+				if (rightOnPk && eqCount == 1) {
 					working = SqlJoinOps.joinProbeRightPkStore(
 							working, sideSchemas, right, leftOrd, false, earlyLimit);
 				} else {
 					working = SqlJoinOps.joinProbeRightIndexStore(
-							working, sideSchemas, right, leftOrd, rightCol.name());
+							working, sideSchemas, right, leftOrds, rightColNames);
 				}
 				workingCols = SqlJoinOps.concatColumns(left.schema().columns(), right.schema().columns());
 				sideSchemas = List.of(left.schema(), right.schema());
 				left = right;
 				continue;
 			}
-			if (working == null && leftOnPk && edge.kind() == JoinKind.INNER) {
+			if (working == null && leftOnPk && edge.kind() == JoinKind.INNER && eqCount == 1) {
 				final List<byte[]> rightBlobs = snapshotBlobs(
 						session, right, rightName, AlwaysTrueCondition.getInstance());
 				final FilterCondition leftResidual =
@@ -974,19 +991,19 @@ public final class SqlQueryExecutor {
 			if (working == null) {
 				working = SqlJoinOps.toJoinRows(snapshotBlobs(session, left, leftName, leftPushFilter));
 			}
-			if (rightOnPk && edge.kind() != JoinKind.RIGHT && edge.kind() != JoinKind.FULL) {
+			if (rightOnPk && eqCount == 1 && edge.kind() != JoinKind.RIGHT && edge.kind() != JoinKind.FULL) {
 				working = SqlJoinOps.joinProbeRightPkStore(
 						working, sideSchemas, right, leftOrd,
 						edge.kind() == JoinKind.LEFT || edge.kind() == JoinKind.FULL,
 						earlyLimit);
 			} else if (rightIndexed && edge.kind() == JoinKind.INNER) {
 				working = SqlJoinOps.joinProbeRightIndexStore(
-						working, sideSchemas, right, leftOrd, rightCol.name());
+						working, sideSchemas, right, leftOrds, rightColNames);
 			} else {
 				final List<byte[]> rightBlobs = snapshotBlobs(
 						session, right, rightName, AlwaysTrueCondition.getInstance());
 				working = SqlJoinOps.joinStep(
-						working, sideSchemas, right, rightBlobs, leftOrd, rightOrd, edge.kind());
+						working, sideSchemas, right, rightBlobs, leftOrds, rightOrds, edge.kind());
 			}
 			workingCols = SqlJoinOps.concatColumns(workingCols, right.schema().columns());
 			sideSchemas = new ArrayList<>(sideSchemas);
@@ -1011,26 +1028,28 @@ public final class SqlQueryExecutor {
 			String leftName,
 			TableStore right,
 			String rightName,
-			int leftOrd,
-			int rightOrd,
+			int[] leftOrds,
+			int[] rightOrds,
 			boolean leftOnPk,
 			boolean rightOnPk,
 			JoinEdge edge,
 			List<Function<String, List<byte[]>>> peers,
 			List<BiFunction<String, byte[], byte[]>> peerBlobs
 	) {
+		final int leftOrd = leftOrds[0];
+		final int rightOrd = rightOrds[0];
 		// PK probe right: left/working stays local; fan-in right build blobs (incl. peer fetch).
-		if (rightOnPk && edge.kind() != JoinKind.RIGHT && edge.kind() != JoinKind.FULL) {
+		if (rightOnPk && leftOrds.length == 1 && edge.kind() != JoinKind.RIGHT && edge.kind() != JoinKind.FULL) {
 			final List<SqlJoinOps.JoinBlobRow> probeRows = working != null
 					? working
 					: SqlJoinOps.toJoinRows(snapshotBlobs(session, left, leftName, AlwaysTrueCondition.getInstance()));
 			final List<byte[]> rightBlobs = DistributedKeyFanOut.fanInBuildBlobs(
 					rightName, right, peers, peerBlobs);
 			return SqlJoinOps.joinStep(
-					probeRows, sideSchemas, right, rightBlobs, leftOrd, rightOrd, edge.kind());
+					probeRows, sideSchemas, right, rightBlobs, leftOrds, rightOrds, edge.kind());
 		}
 		// PK probe left local: fan-in right (build of probe input).
-		if (working == null && leftOnPk && edge.kind() == JoinKind.INNER) {
+		if (working == null && leftOnPk && leftOrds.length == 1 && edge.kind() == JoinKind.INNER) {
 			final List<byte[]> rightBlobs = DistributedKeyFanOut.fanInBuildBlobs(
 					rightName, right, peers, peerBlobs);
 			return SqlJoinOps.joinProbeLeftPk(rightBlobs, left, right.schema(), rightOrd);
@@ -1042,7 +1061,7 @@ public final class SqlQueryExecutor {
 		final List<byte[]> rightBlobs = DistributedKeyFanOut.fanInBuildBlobs(
 				rightName, right, peers, peerBlobs);
 		return SqlJoinOps.joinStep(
-				leftRows, sideSchemas, right, rightBlobs, leftOrd, rightOrd, edge.kind());
+				leftRows, sideSchemas, right, rightBlobs, leftOrds, rightOrds, edge.kind());
 	}
 
 	/**

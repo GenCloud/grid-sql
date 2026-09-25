@@ -20,7 +20,7 @@ powershell -File .\examples\scripts\build-sql-image.ps1
 
 ## Эталонные параметры HA / multi-DC
 
-YAML под каждой топологией совпадает с живыми ориентирами Jepsen / HA Load / Multidc:
+YAML под каждой топологией совпадает с рабочими ориентирами Jepsen / HA Load / Multidc:
 
 | Параметр | Значение | Источник |
 |----------|----------|----------|

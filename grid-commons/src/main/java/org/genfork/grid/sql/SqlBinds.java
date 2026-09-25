@@ -68,21 +68,22 @@ public final class SqlBinds {
 	}
 
 	public static String toSqlLiteral(Object value) {
-        switch (value) {
-            case null -> {
-                return "NULL";
-            }
-            case Boolean b -> {
-                return b ? "TRUE" : "FALSE";
-            }
-            case Number _ -> {
-                return value.toString();
-            }
-            default -> {
-            }
-        }
+		switch (value) {
+			case null -> {
+				return "NULL";
+			}
+			case Boolean b -> {
+				return b ? "TRUE" : "FALSE";
+			}
+			case Number n -> {
+				// Prefer signed decimal form once grammar accepts '-'? INT (VALUES + predicates).
+				return n.toString();
+			}
+			default -> {
+			}
+		}
 
-        final String s = String.valueOf(value);
+		final String s = String.valueOf(value);
 		return "'" + s.replace("'", "''") + "'";
 	}
 

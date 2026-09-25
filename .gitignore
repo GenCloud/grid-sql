@@ -43,6 +43,7 @@ dump*.jps
 **/replica-run.err
 grid-sql-jmeter/target/jmeter-run/
 
+benchmarks/jepsen/ARTIFACTS.txt
 benchmarks/jepsen/clojure/store/
 benchmarks/jepsen/clojure/target/
 benchmarks/jepsen/docker-staging/app.jar

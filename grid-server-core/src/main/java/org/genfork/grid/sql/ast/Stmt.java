@@ -31,6 +31,7 @@ public sealed interface Stmt permits
 		DmlAst.MergeSql,
 		DmlAst.AnalyzeSql,
 		DmlAst.DeleteSql,
+		DmlAst.TruncateSql,
 		DmlAst.UpdateSql,
 		DdlAst.CreateTableSql,
 		DdlAst.DropTableSql,
