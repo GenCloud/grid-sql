@@ -18,6 +18,8 @@ package org.genfork.grid.sql.exec;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.serial.LogicalFieldCursor;
+import org.genfork.grid.sql.SqlBuiltinEvalUtil;
+import org.genfork.grid.sql.SqlBuiltinNames;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
@@ -142,8 +144,13 @@ public final class SelectProjectionAssembler {
 				metas.add(SqlResult.ColumnMeta.ofCatalog(
 						item.label(), cdef.type(), cdef.nullable(), table, schema));
 			} else if (item instanceof FunctionSelectItem fn) {
-				final FunctionDef def = SqlUdfLookup.require(fn.functionName());
-				metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));
+				if (SqlBuiltinNames.isBuiltin(fn.functionName())) {
+					metas.add(SqlResult.ColumnMeta.of(
+							item.label(), SqlBuiltinEvalUtil.builtinReturnType(fn.functionName())));
+				} else {
+					final FunctionDef def = SqlUdfLookup.require(fn.functionName());
+					metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));
+				}
 			} else {
 				metas.add(SqlResult.ColumnMeta.of(item.label(), SqlType.DOUBLE));
 			}
@@ -161,8 +168,13 @@ public final class SelectProjectionAssembler {
 				throw new IllegalArgumentException(
 						"expression SELECT without FROM supports UDF calls only, got: " + item);
 			}
-			final FunctionDef def = SqlUdfLookup.require(fn.functionName());
-			metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));
+			if (SqlBuiltinNames.isBuiltin(fn.functionName())) {
+				metas.add(SqlResult.ColumnMeta.of(
+						item.label(), SqlBuiltinEvalUtil.builtinReturnType(fn.functionName())));
+			} else {
+				final FunctionDef def = SqlUdfLookup.require(fn.functionName());
+				metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));
+			}
 		}
 		return metas;
 	}
@@ -266,6 +278,13 @@ public final class SelectProjectionAssembler {
 	}
 
 	private static Object evalUdf(FunctionSelectItem fn, java.util.function.Function<String, Object> columnValue) {
+		if (SqlBuiltinNames.isBuiltin(fn.functionName())) {
+			return SqlBuiltinEvalUtil.evalBuiltin(
+					fn.functionName(),
+					fn.args(),
+					columnValue,
+					java.time.ZoneOffset.UTC);
+		}
 		final FunctionDef def = SqlUdfLookup.require(fn.functionName());
 		final Object[] args = new Object[fn.args().size()];
 		for (int i = 0; i < fn.args().size(); i++) {

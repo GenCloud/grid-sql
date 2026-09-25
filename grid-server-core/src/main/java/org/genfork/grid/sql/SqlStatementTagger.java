@@ -32,6 +32,7 @@ import org.genfork.grid.sql.ast.AdminAst.CreateUserSql;
 import org.genfork.grid.sql.ast.DdlAst.CreateViewSql;
 import org.genfork.grid.sql.ast.TxAst.DeallocateSql;
 import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
+import org.genfork.grid.sql.ast.DmlAst.TruncateSql;
 import org.genfork.grid.sql.ast.DdlAst.DropFunctionSql;
 import org.genfork.grid.sql.ast.DdlAst.DropTriggerSql;
 import org.genfork.grid.sql.ast.DdlAst.DropIndexSql;
@@ -124,6 +125,7 @@ public final class SqlStatementTagger {
 			case MergeSql ignored -> SqlStatementTag.MERGE;
 			case AnalyzeSql ignored -> SqlStatementTag.ANALYZE;
 			case DeleteSql ignored -> SqlStatementTag.DELETE;
+			case TruncateSql ignored -> SqlStatementTag.TRUNCATE;
 			case UpdateSql ignored -> SqlStatementTag.UPDATE;
 			case SelectSql ignored -> SqlStatementTag.SELECT;
 			case SetOpSql ignored -> SqlStatementTag.SELECT;

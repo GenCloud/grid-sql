@@ -21,6 +21,7 @@ executable
     | insertStmt
     | mergeStmt
     | deleteStmt
+    | truncateStmt
     | updateStmt
     | analyzeStmt
     | createTableStmt
@@ -252,6 +253,7 @@ explainBody
     | insertStmt
     | mergeStmt
     | deleteStmt
+    | truncateStmt
     | updateStmt
     | analyzeStmt
     | createTableStmt
@@ -357,6 +359,11 @@ deleteStmt
     : DELETE FROM tableName WHERE expression
     ;
 
+/** Unconditional clear (fail-closed OpLog/DELETE path). */
+truncateStmt
+    : TRUNCATE TABLE tableName
+    ;
+
 updateStmt
     : UPDATE targetTable=tableName SET updateAssign (',' updateAssign)*
       (FROM sourceTable=tableName)?
@@ -388,9 +395,18 @@ tableElement
     ;
 
 columnDef
-    : columnName serialType (PRIMARY KEY)?
-    | columnName typeName (NOT NULL)? identityClause? (PRIMARY KEY)?
-    | columnName typeName (NOT NULL)? (PRIMARY KEY)? identityClause?
+    : columnName serialType (PRIMARY KEY)? columnDefault?
+    | columnName typeName (NOT NULL)? identityClause? (PRIMARY KEY)? columnDefault?
+    | columnName typeName (NOT NULL)? (PRIMARY KEY)? identityClause? columnDefault?
+    ;
+
+/** Literal or clock builtin for INSERT omit-col materialization. */
+columnDefault
+    : DEFAULT defaultValue
+    ;
+
+defaultValue
+    : value
     ;
 
 identityClause
@@ -453,11 +469,11 @@ dropTableStmt
     ;
 
 createIndexStmt
-    : CREATE (UNIQUE | BITMAP)? INDEX indexName ON tableName '(' columnName (',' columnName)* ')'
+    : CREATE (UNIQUE | BITMAP)? INDEX (IF NOT EXISTS)? indexName ON tableName '(' columnName (',' columnName)* ')'
     ;
 
 dropIndexStmt
-    : DROP INDEX indexName (ON tableName)?
+    : DROP INDEX (IF EXISTS)? indexName (ON tableName)?
     ;
 
 indexName
@@ -493,6 +509,10 @@ selectItem
     | aggregateExpr (AS alias=ident)?
     | windowExpr (AS alias=ident)?
     | functionCall (AS alias=ident)?
+    | coalesceExpr (AS alias=ident)?
+    | NOW '(' ')' (AS alias=ident)?
+    | CURRENT_TIMESTAMP (AS alias=ident)?
+    | CURRENT_DATE (AS alias=ident)?
     ;
 
 functionCall
@@ -586,9 +606,14 @@ setRemoteDirtyStmt
     ;
 
 alterTableStmt
-    : ALTER TABLE tableName ADD COLUMN columnDef
+    : ALTER TABLE tableName ADD COLUMN (IF NOT EXISTS)? columnDef
     | ALTER TABLE tableName ADD (CONSTRAINT constraintName)? CHECK '(' expression ')'
+    | ALTER TABLE tableName ADD (CONSTRAINT constraintName)? PRIMARY KEY '(' columnName (',' columnName)* ')'
+    | ALTER TABLE tableName ADD (CONSTRAINT constraintName)? FOREIGN KEY '(' columnName (',' columnName)* ')'
+      REFERENCES tableName '(' columnName (',' columnName)* ')'
+      (ON DELETE referentialAction)? (ON UPDATE referentialAction)?
     | ALTER TABLE tableName DROP COLUMN columnName
+    | ALTER TABLE tableName DROP CONSTRAINT constraintName
     ;
 
 expression
@@ -637,7 +662,12 @@ value
     | FALSE
     | PARAM
     | oldNewRef
+    | excludedRef
     | CAST '(' value AS typeName ')'
+    | coalesceExpr
+    | NOW '(' ')'
+    | CURRENT_TIMESTAMP
+    | CURRENT_DATE
     | UUID_TYPE STRING
     | DATE_TYPE STRING
     | TIME_TYPE STRING
@@ -645,6 +675,21 @@ value
     | TIMESTAMPTZ_TYPE STRING
     | caseExpr
     | sequenceCall
+    ;
+
+/** First non-null among args (column or value). */
+coalesceExpr
+    : COALESCE '(' coalesceArg (',' coalesceArg)+ ')'
+    ;
+
+coalesceArg
+    : columnName
+    | value
+    ;
+
+/** ON CONFLICT DO UPDATE proposed-row column. */
+excludedRef
+    : EXCLUDED '.' ID
     ;
 
 /** Trigger body/WHEN only: OLD.col / NEW.col (parsed via parseTriggerBody). */
@@ -680,6 +725,7 @@ UPSERT: 'UPSERT';
 INTO: 'INTO';
 VALUES: 'VALUES';
 DELETE: 'DELETE';
+TRUNCATE: 'TRUNCATE';
 UPDATE: 'UPDATE';
 SET: 'SET';
 REMOTE_DIRTY: 'REMOTE_DIRTY';
@@ -688,6 +734,7 @@ CONFLICT: 'CONFLICT';
 DO: 'DO';
 NOTHING: 'NOTHING';
 MATCHED: 'MATCHED';
+EXCLUDED: 'EXCLUDED';
 CREATE: 'CREATE';
 DROP: 'DROP';
 ALTER: 'ALTER';
@@ -741,6 +788,10 @@ MIN: 'MIN';
 MAX: 'MAX';
 CONCAT: 'CONCAT';
 CAST: 'CAST';
+COALESCE: 'COALESCE';
+NOW: 'NOW';
+CURRENT_TIMESTAMP: 'CURRENT_TIMESTAMP';
+CURRENT_DATE: 'CURRENT_DATE';
 UUID_TYPE: 'UUID';
 DATE_TYPE: 'DATE';
 TIME_TYPE: 'TIME';
@@ -830,4 +881,6 @@ INT: [0-9]+;
 FLOAT: [0-9]+ '.' [0-9]* | '.' [0-9]+;
 STRING: '\'' ('\'\'' | ~'\'')* '\'';
 
+LINE_COMMENT: '--' ~[\r\n]* -> skip;
+BLOCK_COMMENT: '/*' .*? '*/' -> skip;
 WS: [ \t\r\n]+ -> skip;

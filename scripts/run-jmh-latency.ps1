@@ -52,6 +52,7 @@ Latency harness: ``AbstractLatencyBenchmark`` (forks=1, threads=1, $IterNote).
 Tracks run **sequentially** — never parallelize on one host.
 
 "@
+$utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllText($Fingerprint, $md, $utf8)
 
 $env:JMH_STAMP = $Stamp

@@ -1352,6 +1352,11 @@ public final class TableCatalog {
 						.append(col.externalOrder()).append(',')
 						.append(col.identity()).append(',')
 						.append(col.identitySequence() == null ? "" : col.identitySequence())
+						.append(',')
+						.append(col.defaultExprOrNull() == null
+								? ""
+								: Base64.getUrlEncoder().withoutPadding().encodeToString(
+										col.defaultExprOrNull().getBytes(StandardCharsets.UTF_8)))
 						.append('\n');
 			}
 			for (IndexDef idx : schema.indexes()) {
@@ -1430,6 +1435,9 @@ public final class TableCatalog {
 				final String[] p = line.substring(4).split(",", -1);
 				final boolean identity = p.length > 5 && Boolean.parseBoolean(p[5]);
 				final String seq = p.length > 6 && !p[6].isEmpty() ? p[6] : null;
+				final String defaultExpr = p.length > 7 && !p[7].isEmpty()
+						? new String(Base64.getUrlDecoder().decode(p[7]), StandardCharsets.UTF_8)
+						: null;
 				cols.add(new ColumnDef(
 						p[0],
 						SqlType.valueOf(p[1]),
@@ -1438,7 +1446,8 @@ public final class TableCatalog {
 						Boolean.parseBoolean(p[3]),
 						Boolean.parseBoolean(p[4]),
 						identity,
-						seq
+						seq,
+						defaultExpr
 				));
 			} else if (line.startsWith("idx=")) {
 				final String[] p = line.substring(4).split(",", 3);

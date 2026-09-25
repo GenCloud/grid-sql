@@ -761,6 +761,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterTruncateStmt(SimplifiedSqlParser.TruncateStmtContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitTruncateStmt(SimplifiedSqlParser.TruncateStmtContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterUpdateStmt(SimplifiedSqlParser.UpdateStmtContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -828,6 +840,30 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitColumnDef(SimplifiedSqlParser.ColumnDefContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterColumnDefault(SimplifiedSqlParser.ColumnDefaultContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitColumnDefault(SimplifiedSqlParser.ColumnDefaultContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterDefaultValue(SimplifiedSqlParser.DefaultValueContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitDefaultValue(SimplifiedSqlParser.DefaultValueContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -1524,6 +1560,42 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitValue(SimplifiedSqlParser.ValueContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterCoalesceArg(SimplifiedSqlParser.CoalesceArgContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitCoalesceArg(SimplifiedSqlParser.CoalesceArgContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterExcludedRef(SimplifiedSqlParser.ExcludedRefContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitExcludedRef(SimplifiedSqlParser.ExcludedRefContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

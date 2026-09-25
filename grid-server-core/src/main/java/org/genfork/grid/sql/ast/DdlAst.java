@@ -76,10 +76,22 @@ public final class DdlAst {
 			boolean notNull,
 			boolean primaryKey,
 			boolean identity,
-			boolean serial
+			boolean serial,
+			String defaultExprOrNull
 	) {
 		public ColumnSpec(String name, String typeToken, boolean notNull, boolean primaryKey) {
-			this(name, typeToken, notNull, primaryKey, false, false);
+			this(name, typeToken, notNull, primaryKey, false, false, null);
+		}
+
+		public ColumnSpec(
+				String name,
+				String typeToken,
+				boolean notNull,
+				boolean primaryKey,
+				boolean identity,
+				boolean serial
+		) {
+			this(name, typeToken, notNull, primaryKey, identity, serial, null);
 		}
 	}
 
@@ -147,8 +159,16 @@ public final class DdlAst {
 	 * @date: 2025/11
 	 * @since: 1.0
 	 */
-	public record CreateIndexSql(String indexName, String table, List<String> columns,
-	                             IndexType kind) implements Stmt {
+	public record CreateIndexSql(
+			String indexName,
+			String table,
+			List<String> columns,
+			IndexType kind,
+			boolean ifNotExists
+	) implements Stmt {
+		public CreateIndexSql(String indexName, String table, List<String> columns, IndexType kind) {
+			this(indexName, table, columns, kind, false);
+		}
 	}
 
 	/**
@@ -158,7 +178,10 @@ public final class DdlAst {
 	 * @date: 2025/11
 	 * @since: 1.0
 	 */
-	public record DropIndexSql(String indexName, String tableOrNull) implements Stmt {
+	public record DropIndexSql(String indexName, String tableOrNull, boolean ifExists) implements Stmt {
+		public DropIndexSql(String indexName, String tableOrNull) {
+			this(indexName, tableOrNull, false);
+		}
 	}
 
 	/**
@@ -203,7 +226,8 @@ public final class DdlAst {
 
 	/**
 	 * Typed ALTER TABLE operation.
-	 * {@code addColumn} null means DROP COLUMN {@code dropColumn}.
+	 * <p>
+	 * Exactly one of the mutation fields is set (add column / drop column / check / PK / FK / drop constraint).
 	 *
 	 * @author: GenCloud
 	 * @date: 2025/11
@@ -212,11 +236,20 @@ public final class DdlAst {
 	public record AlterTableSql(
 			String table,
 			ColumnSpec addColumn,
+			boolean addColumnIfNotExists,
 			String dropColumn,
-			CheckSpec addCheck
+			CheckSpec addCheck,
+			List<String> addPrimaryKeyColumns,
+			String addConstraintNameOrNull,
+			FkSpec addForeignKey,
+			String dropConstraintName
 	) implements Stmt {
 		public AlterTableSql(String table, ColumnSpec addColumn, String dropColumn) {
-			this(table, addColumn, dropColumn, null);
+			this(table, addColumn, false, dropColumn, null, null, null, null, null);
+		}
+
+		public AlterTableSql(String table, ColumnSpec addColumn, String dropColumn, CheckSpec addCheck) {
+			this(table, addColumn, false, dropColumn, addCheck, null, null, null, null);
 		}
 	}
 

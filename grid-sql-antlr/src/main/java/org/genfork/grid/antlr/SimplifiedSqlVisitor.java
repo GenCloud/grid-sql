@@ -383,6 +383,12 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitDeleteStmt(SimplifiedSqlParser.DeleteStmtContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#truncateStmt}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitTruncateStmt(SimplifiedSqlParser.TruncateStmtContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#updateStmt}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -418,6 +424,18 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitColumnDef(SimplifiedSqlParser.ColumnDefContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#columnDefault}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitColumnDefault(SimplifiedSqlParser.ColumnDefaultContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#defaultValue}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitDefaultValue(SimplifiedSqlParser.DefaultValueContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#identityClause}.
 	 * @param ctx the parse tree
@@ -784,6 +802,24 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitValue(SimplifiedSqlParser.ValueContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#coalesceExpr}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#coalesceArg}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitCoalesceArg(SimplifiedSqlParser.CoalesceArgContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#excludedRef}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitExcludedRef(SimplifiedSqlParser.ExcludedRefContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#oldNewRef}.
 	 * @param ctx the parse tree

@@ -628,6 +628,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitDeleteStmt(SimplifiedSqlParser.DeleteStmtContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#truncateStmt}.
+	 * @param ctx the parse tree
+	 */
+	void enterTruncateStmt(SimplifiedSqlParser.TruncateStmtContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#truncateStmt}.
+	 * @param ctx the parse tree
+	 */
+	void exitTruncateStmt(SimplifiedSqlParser.TruncateStmtContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#updateStmt}.
 	 * @param ctx the parse tree
 	 */
@@ -687,6 +697,26 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitColumnDef(SimplifiedSqlParser.ColumnDefContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#columnDefault}.
+	 * @param ctx the parse tree
+	 */
+	void enterColumnDefault(SimplifiedSqlParser.ColumnDefaultContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#columnDefault}.
+	 * @param ctx the parse tree
+	 */
+	void exitColumnDefault(SimplifiedSqlParser.ColumnDefaultContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#defaultValue}.
+	 * @param ctx the parse tree
+	 */
+	void enterDefaultValue(SimplifiedSqlParser.DefaultValueContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#defaultValue}.
+	 * @param ctx the parse tree
+	 */
+	void exitDefaultValue(SimplifiedSqlParser.DefaultValueContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#identityClause}.
 	 * @param ctx the parse tree
@@ -1303,6 +1333,36 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitValue(SimplifiedSqlParser.ValueContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#coalesceExpr}.
+	 * @param ctx the parse tree
+	 */
+	void enterCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#coalesceExpr}.
+	 * @param ctx the parse tree
+	 */
+	void exitCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#coalesceArg}.
+	 * @param ctx the parse tree
+	 */
+	void enterCoalesceArg(SimplifiedSqlParser.CoalesceArgContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#coalesceArg}.
+	 * @param ctx the parse tree
+	 */
+	void exitCoalesceArg(SimplifiedSqlParser.CoalesceArgContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#excludedRef}.
+	 * @param ctx the parse tree
+	 */
+	void enterExcludedRef(SimplifiedSqlParser.ExcludedRefContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#excludedRef}.
+	 * @param ctx the parse tree
+	 */
+	void exitExcludedRef(SimplifiedSqlParser.ExcludedRefContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#oldNewRef}.
 	 * @param ctx the parse tree

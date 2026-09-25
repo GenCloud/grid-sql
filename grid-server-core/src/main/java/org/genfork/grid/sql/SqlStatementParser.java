@@ -104,6 +104,7 @@ import org.genfork.grid.sql.ast.DmlAst.InsertSql;
 import org.genfork.grid.sql.ast.DmlAst.MergeSql;
 import org.genfork.grid.sql.ast.DmlAst.OnConflict;
 import org.genfork.grid.sql.ast.DmlAst.SequenceCallExpr;
+import org.genfork.grid.sql.ast.DmlAst.TruncateSql;
 import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
 import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
@@ -198,7 +199,51 @@ public final class SqlStatementParser {
 		}
 	}
 
+	/**
+	 * Parse a standalone {@code value} fragment (column DEFAULT text) with the same ANTLR
+	 * front-end as {@link #parse} (SLL then LL, shared zone / literal coercion).
+	 */
+	public static Object parseValue(String sql, ZoneId zone) {
+		if (sql == null || sql.isBlank()) {
+			return null;
+		}
+		SqlParseSupport.beginParse(zone);
+		try {
+			final OpenParser open = openParser(sql.trim());
+			ValueContext valueCtx;
+			try {
+				valueCtx = open.parser().value();
+			} catch (ParseCancellationException ex) {
+				open.tokens().seek(0);
+				open.parser().reset();
+				open.parser().getInterpreter().setPredictionMode(PredictionMode.LL);
+				open.parser().setErrorHandler(new BailErrorStrategy());
+				valueCtx = open.parser().value();
+			}
+			return SqlParseSupport.literal(valueCtx);
+		} catch (ParseCancellationException ex) {
+			throw new IllegalArgumentException("bad DEFAULT expression: " + sql, ex);
+		} finally {
+			SqlParseSupport.endParse();
+		}
+	}
+
 	private static Stmt parseStrict(String sql) {
+		final OpenParser open = openParser(sql);
+		StatementContext stmt;
+		try {
+			stmt = open.parser().statement();
+		} catch (ParseCancellationException ex) {
+			open.tokens().seek(0);
+			open.parser().reset();
+			open.parser().getInterpreter().setPredictionMode(PredictionMode.LL);
+			open.parser().setErrorHandler(new BailErrorStrategy());
+			stmt = open.parser().statement();
+		}
+		return fromExecutable(stmt.executable(), open.tokens(), sql);
+	}
+
+	private static OpenParser openParser(String sql) {
 		final SimplifiedSqlLexer lexer = new SimplifiedSqlLexer(CharStreams.fromString(sql));
 		lexer.removeErrorListeners();
 		final CommonTokenStream tokens = new CommonTokenStream(lexer);
@@ -206,17 +251,10 @@ public final class SqlStatementParser {
 		parser.removeErrorListeners();
 		parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
 		parser.setErrorHandler(new BailErrorStrategy());
-		StatementContext stmt;
-		try {
-			stmt = parser.statement();
-		} catch (ParseCancellationException ex) {
-			tokens.seek(0);
-			parser.reset();
-			parser.getInterpreter().setPredictionMode(PredictionMode.LL);
-			parser.setErrorHandler(new BailErrorStrategy());
-			stmt = parser.statement();
-		}
-		return fromExecutable(stmt.executable(), tokens, sql);
+		return new OpenParser(parser, tokens);
+	}
+
+	private record OpenParser(SimplifiedSqlParser parser, CommonTokenStream tokens) {
 	}
 
 	private static Stmt fromExecutable(
@@ -306,6 +344,9 @@ public final class SqlStatementParser {
 		}
 		if (ex.deleteStmt() != null) {
 			return parseDelete(ex.deleteStmt());
+		}
+		if (ex.truncateStmt() != null) {
+			return new TruncateSql(ex.truncateStmt().tableName().getText());
 		}
 		if (ex.updateStmt() != null) {
 			return parseUpdate(ex.updateStmt());
@@ -515,6 +556,16 @@ public final class SqlStatementParser {
 				final FunctionSelectItem fnItem = parseFunctionSelectItem(itemCtx);
 				selectItems.add(fnItem);
 				projection.add(fnItem.label());
+			} else if (itemCtx.coalesceExpr() != null) {
+				final FunctionSelectItem fnItem = parseCoalesceSelectItem(itemCtx);
+				selectItems.add(fnItem);
+				projection.add(fnItem.label());
+			} else if (itemCtx.NOW() != null
+					|| itemCtx.CURRENT_TIMESTAMP() != null
+					|| itemCtx.CURRENT_DATE() != null) {
+				final FunctionSelectItem fnItem = parseClockSelectItem(itemCtx);
+				selectItems.add(fnItem);
+				projection.add(fnItem.label());
 			} else if (itemCtx.columnName() != null) {
 				throw new IllegalArgumentException(
 						"expression SELECT without FROM cannot reference columns: " + itemCtx.getText());
@@ -632,6 +683,16 @@ public final class SqlStatementParser {
 					}
 				} else if (itemCtx.functionCall() != null) {
 					final FunctionSelectItem fnItem = parseFunctionSelectItem(itemCtx);
+					selectItems.add(fnItem);
+					projection.add(fnItem.label());
+				} else if (itemCtx.coalesceExpr() != null) {
+					final FunctionSelectItem fnItem = parseCoalesceSelectItem(itemCtx);
+					selectItems.add(fnItem);
+					projection.add(fnItem.label());
+				} else if (itemCtx.NOW() != null
+						|| itemCtx.CURRENT_TIMESTAMP() != null
+						|| itemCtx.CURRENT_DATE() != null) {
+					final FunctionSelectItem fnItem = parseClockSelectItem(itemCtx);
 					selectItems.add(fnItem);
 					projection.add(fnItem.label());
 				} else if (itemCtx.columnName() != null) {
@@ -1001,6 +1062,36 @@ public final class SqlStatementParser {
 		return new FunctionSelectItem(label, name, args);
 	}
 
+	private static FunctionSelectItem parseCoalesceSelectItem(SimplifiedSqlParser.SelectItemContext itemCtx) {
+		final SimplifiedSqlParser.CoalesceExprContext coal = itemCtx.coalesceExpr();
+		final List<FuncArg> args = new ArrayList<>();
+		for (SimplifiedSqlParser.CoalesceArgContext arg : coal.coalesceArg()) {
+			if (arg.columnName() != null) {
+				args.add(new ColumnFuncArg(simpleColumn(arg.columnName())));
+			} else {
+				args.add(new LiteralFuncArg(SqlParseSupport.literal(arg.value())));
+			}
+		}
+		final String alias = itemCtx.alias != null ? itemCtx.alias.getText() : null;
+		final String coalesceName = SqlBuiltinNames.COALESCE.sqlToken();
+		final String label = alias != null ? alias : functionCallLabel(coalesceName, args);
+		return new FunctionSelectItem(label, coalesceName, List.copyOf(args));
+	}
+
+	private static FunctionSelectItem parseClockSelectItem(SimplifiedSqlParser.SelectItemContext itemCtx) {
+		final String name;
+		if (itemCtx.NOW() != null) {
+			name = SqlBuiltinNames.NOW.sqlToken();
+		} else if (itemCtx.CURRENT_TIMESTAMP() != null) {
+			name = SqlBuiltinNames.CURRENT_TIMESTAMP.sqlToken();
+		} else {
+			name = SqlBuiltinNames.CURRENT_DATE.sqlToken();
+		}
+		final String alias = itemCtx.alias != null ? itemCtx.alias.getText() : null;
+		final String label = alias != null ? alias : name;
+		return new FunctionSelectItem(label, name, List.of());
+	}
+
 	private static List<FuncArg> parseFuncArgs(SimplifiedSqlParser.FunctionCallContext fc) {
 		final List<FuncArg> args = new ArrayList<>();
 		if (fc.funcArg() == null) {
@@ -1106,7 +1197,7 @@ public final class SqlStatementParser {
 		for (UpdateAssignContext a : actionCtx.updateAssign()) {
 			final String col = a.columnName() != null ? simpleColumn(a.columnName()) : null;
 			if (a.updateRhs() != null) {
-				throw new IllegalArgumentException("ON CONFLICT DO UPDATE supports literal SET only in v1");
+				throw new IllegalArgumentException("ON CONFLICT DO UPDATE supports value SET only in v1");
 			}
 			sets.put(col, SqlParseSupport.literal(a.value()));
 		}
@@ -1305,7 +1396,8 @@ public final class SqlStatementParser {
 						true,
 						cd.PRIMARY() != null,
 						true,
-						true
+						true,
+						columnDefaultSql(cd)
 				));
 				continue;
 			}
@@ -1315,10 +1407,18 @@ public final class SqlStatementParser {
 					cd.NOT() != null,
 					cd.PRIMARY() != null,
 					cd.identityClause() != null,
-					false
+					false,
+					columnDefaultSql(cd)
 			));
 		}
 		return new CreateTableSql(table, ifNotExists, cols, tablePk, fks, checks);
+	}
+
+	private static String columnDefaultSql(ColumnDefContext cd) {
+		if (cd.columnDefault() == null || cd.columnDefault().defaultValue() == null) {
+			return null;
+		}
+		return SqlParseSupport.textOf(cd.columnDefault().defaultValue());
 	}
 
 	private static FkSpec parseFkSpec(TableElementContext el) {
@@ -1406,39 +1506,116 @@ public final class SqlStatementParser {
 		if (kind == IndexType.BITMAP && cols.size() > 1) {
 			throw new IllegalArgumentException(IndexDef.BITMAP_SINGLE_COLUMN_ONLY);
 		}
-		return new CreateIndexSql(ctx.indexName().getText(), ctx.tableName().getText(), cols, kind);
+		return new CreateIndexSql(
+				ctx.indexName().getText(),
+				ctx.tableName().getText(),
+				cols,
+				kind,
+				ctx.IF() != null
+		);
 	}
 
 	private static DropIndexSql parseDropIndex(DropIndexStmtContext ctx) {
 		final String table = ctx.tableName() == null ? null : ctx.tableName().getText();
-		return new DropIndexSql(ctx.indexName().getText(), table);
+		return new DropIndexSql(ctx.indexName().getText(), table, ctx.IF() != null);
 	}
 
 	private static AlterTableSql parseAlterTable(SimplifiedSqlParser.AlterTableStmtContext ctx) {
-		final String table = ctx.tableName().getText();
+		final String table = ctx.tableName(0).getText();
+		final String constraintName = ctx.constraintName() == null ? null : ctx.constraintName().getText();
+		if (ctx.DROP() != null && ctx.CONSTRAINT() != null) {
+			return new AlterTableSql(
+					table, null, false, null, null, null, null, null, ctx.constraintName().getText());
+		}
+		if (ctx.PRIMARY() != null && ctx.ADD() != null) {
+			final List<String> pkCols = new ArrayList<>();
+			for (ColumnNameContext c : ctx.columnName()) {
+				pkCols.add(c.getText());
+			}
+			return new AlterTableSql(
+					table, null, false, null, null, List.copyOf(pkCols), constraintName, null, null);
+		}
+		if (ctx.FOREIGN() != null && ctx.ADD() != null) {
+			final List<ColumnNameContext> names = ctx.columnName();
+			final int totalCols = names.size();
+			final int half = totalCols / 2;
+			final List<String> childCols = new ArrayList<>(half);
+			final List<String> parentCols = new ArrayList<>(half);
+			for (int i = 0; i < half; i++) {
+				childCols.add(names.get(i).getText());
+			}
+			for (int i = half; i < totalCols; i++) {
+				parentCols.add(names.get(i).getText());
+			}
+			String onDelete = null;
+			String onUpdate = null;
+			final List<SimplifiedSqlParser.ReferentialActionContext> actions = ctx.referentialAction();
+			if (ctx.DELETE() != null && !actions.isEmpty()) {
+				onDelete = actions.getFirst().getText();
+				if (ctx.UPDATE() != null && actions.size() > 1) {
+					onUpdate = actions.get(1).getText();
+				}
+			} else if (ctx.UPDATE() != null && !actions.isEmpty()) {
+				onUpdate = actions.getFirst().getText();
+			}
+			final String parentTable = ctx.tableName(1).getText();
+			return new AlterTableSql(
+					table,
+					null,
+					false,
+					null,
+					null,
+					null,
+					null,
+					new FkSpec(
+							constraintName,
+							childCols,
+							parentTable,
+							parentCols,
+							onDelete,
+							onUpdate),
+					null);
+		}
 		if (ctx.CHECK() != null) {
 			return new AlterTableSql(
 					table,
 					null,
+					false,
 					null,
-					new CheckSpec(
-							ctx.constraintName() == null ? null : ctx.constraintName().getText(),
-							SqlParseSupport.textOf(ctx.expression())));
+					new CheckSpec(constraintName, SqlParseSupport.textOf(ctx.expression())),
+					null,
+					null,
+					null,
+					null);
 		}
-		if (ctx.ADD() != null) {
+		if (ctx.ADD() != null && ctx.columnDef() != null) {
 			final ColumnDefContext cd = ctx.columnDef();
-			return new AlterTableSql(
-					table,
-					new ColumnSpec(
-							cd.columnName().getText(),
-							cd.typeName().getText(),
-							cd.NOT() != null,
-							cd.PRIMARY() != null
-					),
-					null
-			);
+			final boolean ifNotExists = ctx.IF() != null;
+			final ColumnSpec col;
+			if (cd.serialType() != null) {
+				final String serialTok = cd.serialType().getText().toUpperCase(Locale.ROOT);
+				final String typeTok = "BIGSERIAL".equals(serialTok) ? "BIGINT" : "INT";
+				col = new ColumnSpec(
+						cd.columnName().getText(),
+						typeTok,
+						true,
+						cd.PRIMARY() != null,
+						true,
+						true,
+						columnDefaultSql(cd));
+			} else {
+				col = new ColumnSpec(
+						cd.columnName().getText(),
+						cd.typeName().getText(),
+						cd.NOT() != null,
+						cd.PRIMARY() != null,
+						cd.identityClause() != null,
+						false,
+						columnDefaultSql(cd));
+			}
+			return new AlterTableSql(table, col, ifNotExists, null, null, null, null, null, null);
 		}
-		return new AlterTableSql(table, null, ctx.columnName().getText());
+		return new AlterTableSql(table, null, false, ctx.columnName().get(0).getText(), null, null, null, null, null);
 	}
 
 }

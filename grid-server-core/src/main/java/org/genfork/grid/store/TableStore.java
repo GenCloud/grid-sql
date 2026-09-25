@@ -215,6 +215,24 @@ public final class TableStore {
 		applySchema(next);
 		if (dropped && !next.indexes().isEmpty()) {
 			rebuildAllSecondaryIndexes();
+		} else {
+			wireMissingSecondaryIndexes(previous, next);
+		}
+	}
+
+	/** Wire + backfill indexes that appear on {@code next} but not yet in the live tree map. */
+	private void wireMissingSecondaryIndexes(TableSchema previous, TableSchema next) {
+		for (IndexDef def : previous.indexes()) {
+			if (next.findIndex(def.name()) == null && index.hasNamedIndex(def.name())) {
+				index.dropNamedIndex(def.name());
+			}
+		}
+		for (IndexDef def : next.indexes()) {
+			if (index.hasNamedIndex(def.name())) {
+				continue;
+			}
+			index.addNamedIndex(def, next);
+			backfillIndex(def);
 		}
 	}
 
@@ -247,16 +265,48 @@ public final class TableStore {
 		});
 	}
 
-	/** Drop and re-backfill every named secondary index under the current schema. */
+	/**
+	 * Drop and re-backfill every named secondary index under the current schema.
+	 * <p>
+	 * Skips the synthetic PRIMARY KEY tree ({@code table_pk}): {@link #forEachPrimaryKey} walks that
+	 * tree, so dropping it mid-rebuild would empty the backfill source.
+	 */
 	private void rebuildAllSecondaryIndexes() {
 		final List<IndexDef> defs = new ArrayList<>(schema.indexes());
 		for (IndexDef def : defs) {
+			if (isSyntheticPrimaryKeyIndex(def)) {
+				continue;
+			}
 			if (index.hasNamedIndex(def.name())) {
 				index.dropNamedIndex(def.name());
 			}
 			index.addNamedIndex(def, schema);
 			backfillIndex(def);
 		}
+	}
+
+	/** Synthetic STRICT PK covering index — never drop during secondary rebuild. */
+	private boolean isSyntheticPrimaryKeyIndex(IndexDef def) {
+		if (def.kind() != IndexType.STRICT) {
+			return false;
+		}
+		final String syntheticName = schema.tableName() + "_pk";
+		if (def.name().equalsIgnoreCase(syntheticName)) {
+			return true;
+		}
+		final List<String> pkNames = new ArrayList<>(schema.pkColumns().size());
+		for (ColumnDef col : schema.pkColumns()) {
+			pkNames.add(col.name());
+		}
+		if (def.columns().size() != pkNames.size()) {
+			return false;
+		}
+		for (int i = 0; i < pkNames.size(); i++) {
+			if (!def.columns().get(i).equalsIgnoreCase(pkNames.get(i))) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private void applySchema(TableSchema next) {

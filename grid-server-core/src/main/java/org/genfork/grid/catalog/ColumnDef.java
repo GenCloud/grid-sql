@@ -18,6 +18,8 @@ package org.genfork.grid.catalog;
 /**
  * Immutable column definition in a {@link TableSchema}.
  *
+ * @param defaultExprOrNull SQL text of {@code DEFAULT} (literal / {@code NOW()} / clock keyword), or null
+ *
  * @author: GenCloud
  * @date: 2025/07
  * @since: 1.0
@@ -30,7 +32,8 @@ public record ColumnDef(
 		boolean primaryKey,
 		boolean externalOrder,
 		boolean identity,
-		String identitySequence
+		String identitySequence,
+		String defaultExprOrNull
 ) {
 	public ColumnDef {
 		if (name == null || name.isBlank()) {
@@ -48,6 +51,9 @@ public record ColumnDef(
 		if (!identity) {
 			identitySequence = null;
 		}
+		if (defaultExprOrNull != null && defaultExprOrNull.isBlank()) {
+			defaultExprOrNull = null;
+		}
 	}
 
 	public ColumnDef(
@@ -58,7 +64,20 @@ public record ColumnDef(
 			boolean primaryKey,
 			boolean externalOrder
 	) {
-		this(name, type, nullable, ordinal, primaryKey, externalOrder, false, null);
+		this(name, type, nullable, ordinal, primaryKey, externalOrder, false, null, null);
+	}
+
+	public ColumnDef(
+			String name,
+			SqlType type,
+			boolean nullable,
+			int ordinal,
+			boolean primaryKey,
+			boolean externalOrder,
+			boolean identity,
+			String identitySequence
+	) {
+		this(name, type, nullable, ordinal, primaryKey, externalOrder, identity, identitySequence, null);
 	}
 
 	public int nameHash() {
