@@ -157,6 +157,7 @@ jobs:
           JEPSEN_M2: /home/runner/.m2
         run: bash benchmarks/jepsen/scripts/run-jepsen-nochao.sh
 
+      # Ref B p95 living floor = calm host. On GITHUB_ACTIONS qg-gate is CI_ADVISORY (p50 hard, p95 advisory).
       - name: qg-gate (nochao latency)
         if: matrix.config == '1dc-nochao'
         shell: bash

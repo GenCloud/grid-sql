@@ -120,6 +120,8 @@ Separate workflow [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/je
 
 **Artifacts:** each matrix cell uploads `RESULTS.md`, `ARTIFACTS.txt` (nochao), and `clojure/store/**/{history,results}.edn` when present. Shared image `jamoa-grid-jepsen:local` is built once and loaded per cell (`JEPSEN_REBUILD=0` / `MULTIDC_SKIP_REBUILD=1`).
 
+**Latency vs consistency on GHA:** matrix cells hard-gate Knossos/Elle (`:valid?`). `qg-gate.ps1` Ref B **p50+p95** remains the living floor on a **calm host** (do not raise Ref B to green CI). On `GITHUB_ACTIONS`, qg-gate runs in **CI_ADVISORY** mode: p95 FAIL prints `OVERALL=CI_ADVISORY_P95_FAIL` and exits 0 (shared-runner tail noise); **p50 hard FAIL still fails the job** (median-path regression smoke). Re-stamp Ref B on calm host before claiming algorithm PASS.
+
 **Local pre-commit smoke** (calm host; one contour at a time):
 
 ```bash
