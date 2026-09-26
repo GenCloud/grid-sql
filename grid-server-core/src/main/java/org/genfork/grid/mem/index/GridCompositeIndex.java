@@ -120,7 +120,7 @@ public class GridCompositeIndex {
 	private record RevertComposite(CompositeTreeKey treeKey, IndexPointerRef pointer) {
 	}
 
-	private final FieldMetaData primaryKeyField;
+	private volatile List<String> primaryKeyColumns;
 	private final String tableLabel;
 	/**
 	 * Lowercase column name → catalog {@link FieldMetaData} (SQL-first; no domain Class).
@@ -155,7 +155,7 @@ public class GridCompositeIndex {
 	public GridCompositeIndex(TableSchema schema) {
 		this.schema = Objects.requireNonNull(schema, "schema");
 		this.tableLabel = schema.tableName();
-		this.primaryKeyField = schema.pkFieldMeta();
+		this.primaryKeyColumns = pkColumnNamesOf(schema);
 		final Map<String, FieldMetaData> byName = new HashMap<>(schema.columnCount() * 2);
 		for (FieldMetaData fm : schema.fieldMetas()) {
 			byName.put(fm.getName().toLowerCase(Locale.ROOT), fm);
@@ -174,6 +174,23 @@ public class GridCompositeIndex {
 	 */
 	public void replaceSchema(TableSchema next) {
 		this.schema = Objects.requireNonNull(next, "next");
+		this.primaryKeyColumns = pkColumnNamesOf(next);
+	}
+
+	/**
+	 * Ordered PRIMARY KEY column names for exact PK tree bind.
+	 */
+	public List<String> primaryKeyColumns() {
+		return primaryKeyColumns;
+	}
+
+	private static List<String> pkColumnNamesOf(TableSchema schema) {
+		final List<ColumnDef> pk = schema.pkColumns();
+		final List<String> names = new ArrayList<>(pk.size());
+		for (ColumnDef col : pk) {
+			names.add(col.name());
+		}
+		return List.copyOf(names);
 	}
 
 	/**
@@ -358,25 +375,49 @@ public class GridCompositeIndex {
 
 	/**
 	 * Stream every primary-key posting (maintenance / ANALYZE / backfill). Prefer EQ probes on hot paths.
+	 * <p>
+	 * Leaf walk — no full {@code searchAll} HashSet materialization.
 	 */
 	public void forEachPrimaryKey(Consumer<byte[]> consumer) {
 		Objects.requireNonNull(consumer, "consumer");
-		final IndexOperationResult result = PkIndexScanUtil.searchAllPrimaryKeys(
-				property2Index, compositeIndexes, primaryKeyField);
-		if (result == null || result == IndexOperationResult.EMPTY) {
+		final boolean found = PkIndexScanUtil.forEachPrimaryKeyRow(
+				property2Index, compositeIndexes, primaryKeyColumns, consumer);
+		if (!found) {
 			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
 		}
-		result.expandBitmapPointers();
-		final Set<IndexPointerRef> pointers = result.getPointers();
-		if (pointers == null || pointers.isEmpty()) {
-			return;
+	}
+
+	/**
+	 * Resumable PRIMARY KEY leaf cursor for Portal FETCH pull (AlwaysTrue SELECT *).
+	 */
+	public AbstractBPTree.RowKeyCursor<?, ?> openPrimaryKeyRowCursor() {
+		final AbstractBPTree.RowKeyCursor<?, ?> cursor = PkIndexScanUtil.openPrimaryKeyRowCursor(
+				property2Index, compositeIndexes, primaryKeyColumns);
+		if (cursor == null) {
+			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
 		}
-		for (IndexPointerRef ptr : pointers) {
-			final byte[] key = ptr.resolveKey();
-			if (key != null) {
-				consumer.accept(key);
-			}
+		return cursor;
+	}
+
+	/**
+	 * True when SELECT is AlwaysTrue (no WHERE) with no ORDER BY — Portal pull-cursor eligible.
+	 */
+	public boolean isRamPrimaryKeyBptree() {
+		return PkIndexScanUtil.hasRamPrimaryKeyBptree(property2Index, compositeIndexes, primaryKeyColumns);
+	}
+
+	public boolean isAlwaysTrueNoOrderSelect(String selectSql) {
+		if (selectSql == null || selectSql.isBlank()) {
+			return false;
 		}
+		final QueryData optimized = optimizedPlanCache.computeIfAbsent(selectSql.trim(), this::buildOptimizedQuery);
+		if (optimized.filter() == null || optimized.filter().conditionTree() == null) {
+			return false;
+		}
+		if (!(optimized.filter().conditionTree() instanceof AlwaysTrueCondition)) {
+			return false;
+		}
+		return optimized.sortOrder() == null || optimized.sortOrder().length == 0;
 	}
 
 	/**
@@ -406,6 +447,7 @@ public class GridCompositeIndex {
 	 * No ORDER BY, or composite leaf order matching ORDER BY: iterates pointers without an
 	 * intermediate key {@link List}. Unordered ORDER BY materializes via {@link #executeStatement}.
 	 * Visitor returning {@code false} stops enumeration (LIMIT / early-stop).
+	 * {@link AlwaysTrueCondition} uses PK leaf walk (no {@code searchAll} HashSet).
 	 */
 	public void forEachSelectKeys(String selectSql, Predicate<byte[]> visitor) {
 		Objects.requireNonNull(visitor, "visitor");
@@ -442,6 +484,9 @@ public class GridCompositeIndex {
 		final FilterCondition conditionTree = conditionData.conditionTree();
 		conditionTree.validate(this.schema);
 		final PagingData paging = optimizedQuery.paging();
+		if (streamAlwaysTruePrimaryKeys(conditionTree, paging, visitor)) {
+			return;
+		}
 		// No ORDER BY, or composite leaf order matches ORDER BY — LIMIT early-stop is safe.
 		final IndexOperationResult operationResult = executeFilterWithPaging(conditionTree, paging, null);
 		operationResult.expandBitmapPointers();
@@ -487,6 +532,47 @@ public class GridCompositeIndex {
 	}
 
 	/**
+	 * AlwaysTrue / no WHERE: PK leaf walk with OFFSET/LIMIT (no searchAll HashSet).
+	 *
+	 * @return {@code true} when handled
+	 */
+	private boolean streamAlwaysTruePrimaryKeys(
+			FilterCondition conditionTree,
+			PagingData paging,
+			Predicate<byte[]> visitor
+	) {
+		if (!(conditionTree instanceof AlwaysTrueCondition)) {
+			return false;
+		}
+		final int offset = paging != null ? Math.max(0, paging.offset()) : 0;
+		final int limit = paging != null && paging.limit() > 0 ? paging.limit() : UNBOUNDED_KEY_PAGE;
+		final int[] skipped = {0};
+		final int[] emitted = {0};
+		final boolean found = PkIndexScanUtil.forEachPrimaryKeyRowUntil(
+				property2Index,
+				compositeIndexes,
+				primaryKeyColumns,
+				rowKey -> {
+					if (skipped[0] < offset) {
+						skipped[0]++;
+						return true;
+					}
+					if (limit != UNBOUNDED_KEY_PAGE && emitted[0] >= limit) {
+						return false;
+					}
+					if (!visitor.test(rowKey)) {
+						return false;
+					}
+					emitted[0]++;
+					return true;
+				});
+		if (!found) {
+			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
+		}
+		return true;
+	}
+
+	/**
 	 * Lightweight EXPLAIN probe: if {@code sql} filter optimizes onto a composite index EQ,
 	 * return the catalog index name; otherwise {@code null}. Does not execute the scan.
 	 */
@@ -500,7 +586,7 @@ public class GridCompositeIndex {
 				return null;
 			}
 			final SortOrderData sortOrder = queryData.sortOrder() != null && queryData.sortOrder().length == 1 ? queryData.sortOrder()[0] : null;
-			final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(compositeIndexes, queryData.filter().conditionTree(), sortOrder);
+			final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(compositeIndexes, property2Index, queryData.filter().conditionTree(), sortOrder);
 			final AbstractIndexOperation<byte[][], CompositeTreeKey> used = CompositeIndexProbeOps.findCompositeIndexInTree(optimized.conditionTree());
 			if (used == null) {
 				return null;
@@ -884,6 +970,20 @@ public class GridCompositeIndex {
 		final PagingData paging = optimizedQuery.paging();
 		final boolean hasSort = optimizedQuery.sortOrder() != null && optimizedQuery.sortOrder().length > 0;
 		final boolean orderedLeafScan = conditionData.useSameOrderAscendingIndex();
+		// AlwaysTrue: leaf stream → key list (no searchAll HashSet). LIMIT early-stop when no unordered ORDER BY.
+		if (!(hasSort && !orderedLeafScan) && conditionTree instanceof AlwaysTrueCondition) {
+			final List<byte[]> keys = new ArrayList<>();
+			streamAlwaysTruePrimaryKeys(conditionTree, paging, key -> {
+				keys.add(key);
+				return true;
+			});
+			if (queryPlan != null) {
+				final IndexOperationResult stub = new IndexOperationResult();
+				stub.setSize(keys.size());
+				recordScanCost(queryPlan, optimizedQuery, stub);
+			}
+			return keys;
+		}
 		// TD-PERF-002: push LIMIT into EQ/prefix only when leaf order already matches ORDER BY
 		// (or there is no ORDER BY). Unordered ORDER BY must collect full candidates first.
 		final PagingData filterPaging = QueryPagingContext.forFilterEarlyStop(paging, hasSort && !orderedLeafScan);
@@ -949,7 +1049,7 @@ public class GridCompositeIndex {
 			final int maxPointers = Math.max(0, filterPaging.offset()) + filterPaging.limit();
 			return composite.executeLimited(queryPlan, maxPointers);
 		}
-		return QueryPagingContext.callWithPaging(filterPaging, () -> conditionTree.execute(property2Index, compositeIndexes, primaryKeyField, queryPlan));
+		return QueryPagingContext.callWithPaging(filterPaging, () -> conditionTree.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan));
 	}
 
 	private QueryOptimizer.ScanChoice recordScanCost(ExplainQuery.QueryPlan queryPlan, QueryData optimizedQuery, IndexOperationResult operationResult) {
@@ -989,7 +1089,7 @@ public class GridCompositeIndex {
 			return queryData;
 		}
 		final FilterCondition bitmapPreferred = QueryOptimizer.preferBitmapPredicates(property2Index, conditionData.conditionTree());
-		final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(compositeIndexes, bitmapPreferred, queryData.sortOrder() != null && queryData.sortOrder().length == 1 ? queryData.sortOrder()[0] : null);
+		final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(compositeIndexes, property2Index, bitmapPreferred, queryData.sortOrder() != null && queryData.sortOrder().length == 1 ? queryData.sortOrder()[0] : null);
 		return new QueryData(queryData.table(), queryData.fields(), optimized, queryData.paging(), queryData.sortOrder(), queryData.aggregate(), queryData.joins());
 	}
 
@@ -1002,7 +1102,7 @@ public class GridCompositeIndex {
 		try {
 			final FilterCondition conditionTree = queryData.filter().conditionTree();
 			conditionTree.validate(this.schema);
-			final IndexOperationResult operationResult = conditionTree.execute(property2Index, compositeIndexes, primaryKeyField, queryPlan);
+			final IndexOperationResult operationResult = conditionTree.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
 			final Set<IndexPointerRef> pointers = operationResult.getPointers();
 			if (pointers == null || pointers.isEmpty() || rowResolver == null || this.schema == null) {
 				return Collections.emptyList();
@@ -1122,7 +1222,7 @@ public class GridCompositeIndex {
 		try {
 			final FilterCondition conditionTree = queryData.filter().conditionTree();
 			conditionTree.validate(this.schema);
-			final IndexOperationResult operationResult = conditionTree.execute(property2Index, compositeIndexes, primaryKeyField, queryPlan);
+			final IndexOperationResult operationResult = conditionTree.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
 			final Set<IndexPointerRef> leftPointers = operationResult.getPointers();
 			if (leftPointers == null || leftPointers.isEmpty() || rowResolver == null) {
 				return Collections.emptyList();
@@ -1140,7 +1240,7 @@ public class GridCompositeIndex {
 				}
 			}
 			// Right side: full scan via AlwaysTrue for nested-loop join.
-			final IndexOperationResult rightOps = AlwaysTrueCondition.getInstance().execute(property2Index, compositeIndexes, primaryKeyField, queryPlan);
+			final IndexOperationResult rightOps = AlwaysTrueCondition.getInstance().execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
 			final Set<IndexPointerRef> rightPointers = rightOps.getPointers();
 			final Map<WireFieldBytes, List<byte[]>> rightByKey = new HashMap<>();
 			if (rightPointers != null) {

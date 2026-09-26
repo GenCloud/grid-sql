@@ -82,17 +82,20 @@ public class GridEntriesWorker implements Runnable {
 			}
 		} finally {
 			if (running.get()) {
-                if (gridEntriesProcessor.getQueue().size() > 0) {
-                    signal();
-                } else if (!gridEntriesProcessor.isIdle()) {
-                    // Orphan staging should not happen; re-wake briefly to recover races.
-                    if (scheduled.compareAndSet(false, true)) {
-                        ThreadService.getScheduledExecutor().schedule(() -> {
-                            scheduled.set(false);
-                            signal();
-                        }, 1, MILLISECONDS);
-                    }
-                }
+				if (gridEntriesProcessor.getQueue().size() > 0) {
+					signal();
+				} else if (!gridEntriesProcessor.isIdle()) {
+					gridEntriesProcessor.reclaimCommittedStaging();
+					if (!gridEntriesProcessor.isIdle()) {
+						// Orphan staging with pending commit should not happen; re-wake briefly.
+						if (scheduled.compareAndSet(false, true)) {
+							ThreadService.getScheduledExecutor().schedule(() -> {
+								scheduled.set(false);
+								signal();
+							}, 1, MILLISECONDS);
+						}
+					}
+				}
 			}
 		}
 	}

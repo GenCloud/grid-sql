@@ -63,7 +63,7 @@ public class AndCondition implements FilterCondition {
 	@Override
 	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                    Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-	                                    FieldMetaData primaryKeyField, ExplainQuery.QueryPlan queryPlan) {
+	                                    List<String> primaryKeyColumns, ExplainQuery.QueryPlan queryPlan) {
 		ExplainQuery.QueryPlanNode queryPlanNode = null;
 		if (queryPlan != null) {
 			queryPlanNode = ExplainQuery.startNode(queryPlan, "AND FILTER", "none");
@@ -73,8 +73,8 @@ public class AndCondition implements FilterCondition {
 		long rowsReturned = 0;
 
 		try {
-			final IndexOperationResult leftResult = left.execute(property2Index, compositeIndexes, primaryKeyField, queryPlan);
-			final IndexOperationResult rightResult = right.execute(property2Index, compositeIndexes, primaryKeyField, queryPlan);
+			final IndexOperationResult leftResult = left.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
+			final IndexOperationResult rightResult = right.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
 
 			if (leftResult == null || rightResult == null) {
 				return IndexOperationResult.EMPTY;

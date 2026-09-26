@@ -33,7 +33,7 @@ public final class SealedIndexKeyOrder {
 	private SealedIndexKeyOrder() {
 	}
 
-	public static int compareUnsigned(byte[] left, byte[] right) {
+	public static int compare(byte[] left, byte[] right) {
 		Objects.requireNonNull(left, "left");
 		Objects.requireNonNull(right, "right");
 		if (left.length == 4 && right.length == 4) {

@@ -1,19 +1,31 @@
-# Top load runs (lab)
+﻿# OSS compare SUMMARY
 
-Curated machine stamps that back the planning numbers in [capacity-slo](../../../docs/en/performance/capacity-slo.md).
-Product JMH tables live in [results](../../../docs/en/performance/results.md). This folder keeps **only** these TOP `*-load-slo.json` files — not campaign diaries.
+- Stamp: `2026-09-26-select-star-opt`
+- Generated: 2026-09-26T13:17:05.6995439+03:00
+- Overall gate: PASS (measured tracks)
+- vs-baseline: `2026-09-14-followup` (tolerance +/-5%) - SQL-rewrite quality gate
+- Harness: SQL-first TableStore (selectKeys / putIndexed / RowEncoder); query Gate vs H2 is informational when keys-only
+- Known ceiling: EQ+ORDER+LIMIT vs H2 Gate FAIL is informational - hard Overall / encode / WAL / IMDG / sealed gates unchanged
+- Sealed hard gate: rows=100000 (+1000000 if present); rows=1000 smoke RAN only; hybrid.pkGet/whereEq <= max(disk,memory)x1.15 (dual-residency); disk.whereEq <= 2.5x memory
+- Sealed invariant: sealedPartitionScan expected = 0; an index miss returns empty without partition scan
 
-| Role | Stamp | Threads | Window | TPS | p95 | File |
-|------|-------|--------:|-------:|----:|----:|------|
-| WRITE_ONLY (HA) | `2026-09-20-ha-write` | 48 | 40 s | **4921.975** | 14 ms | `2026-09-20-ha-write-load-slo.json` |
-| READ_ONLY (HA) upper | `2026-09-20-ooo-fix-load-read` | 64 | 45 s | **59430.467** | 1 ms | `2026-09-20-ooo-fix-load-read-load-slo.json` |
-| READ_ONLY (HA) lower | `2026-09-21-cutover-squeeze-read` | 64 | 45 s | **52260.578** | 1 ms | `2026-09-21-cutover-squeeze-read-load-slo.json` |
-| Capacity QG (HA) upper | `2026-09-21-cutover-squeeze-r2-qg` | 64 | 45 s | **11351.533** | 16 ms | `2026-09-21-cutover-squeeze-r2-qg-load-slo.json` |
-| Capacity QG (HA) lower | `2026-09-21-cutover-squeeze-r6-qg` | 64 | 45 s | **8772.022** | 31 ms | `2026-09-21-cutover-squeeze-r6-qg-load-slo.json` |
-| HA mix | `2026-09-20-ha-mix-r2` | 128 | 120 s | **9013.292** | 43 ms | `2026-09-20-ha-mix-r2-load-slo.json` |
-| WRITE (solo) | `2026-09-20-single-write` | 48 | 40 s | **7095.325** | 8 ms | `2026-09-20-single-write-load-slo.json` |
-| QG (solo) | `2026-09-21-single-qg` | 64 | 45 s | **19526.133** | 7 ms | `2026-09-21-single-qg-load-slo.json` |
-| READ (solo) | `2026-09-20-single-read` | 64 | 45 s | **56563.533** | 1 ms | `2026-09-20-single-read-load-slo.json` |
-| Chaos | `2026-09-18-chaos` | 32 | 40 s | **301.7** | 138 ms | `2026-09-18-chaos-load-slo.json` |
+## Gates
 
-Host and ~95% thresholds: [capacity-slo](../../../docs/en/performance/capacity-slo.md). Consistency stamps: [Jepsen 1-DC](../../../benchmarks/jepsen/RESULTS.md), [Multi-DC](../../../benchmarks/jepsen/multidc/RESULTS.md).
+| Track | Ours | OSS | Gate | vs-baseline |
+|-------|------|-----|------|-------------|
+| query EQ+LIMIT | 1.122 us | 2.447 us H2 | PASS | PASS |
+| query EQ+ORDER+LIMIT | 2.238 us | 2.653 us H2 | PASS | PASS |
+| encode logical vs Kryo | 45.9 ns | 49.3 ns Kryo | PASS | PASS |
+| encode logical vs FST | 45.9 ns | 397.8 ns FST | PASS | PASS |
+| WAL batch vs RocksDB | 51.984 | 557.634 Rocks | PASS | PASS |
+| sealed disk.pkGet / memory rows=100000 | 0.137 us | 0.178 us memory | PASS | n/a |
+| sealed disk.whereEq / memory rows=100000 | 7.119 us | 5.028 us memory | PASS | n/a |
+| sealed hybrid.pkGet <= disk rows=100000 | 0.180 us | 0.178 us memory (+15% dual-residency) | PASS | n/a |
+| sealed hybrid.whereEq <= disk rows=100000 | 5.180 us | 7.119 us disk (+15% dual-residency) | PASS | n/a |
+| ORCHID durable | 1746.4 us/op | etcd (host) | RAN | n/a |
+
+JSON: `.\grid-server-core\benchmarks\results/2026-09-26-select-star-opt-*.json`
+
+Docs claim wins only when Gate=PASS (encode/WAL/IMDG). Query Gate vs H2 may FAIL while vs-baseline PASSes (keys-only harness).
+**EQ+ORDER+LIMIT vs H2:** documented informational ceiling (near-parity FAIL) - not a hard Overall flip; hard OSS gates must stay as-is.
+Overall FAIL if vs-baseline FAIL or encode/WAL/IMDG Gate FAIL. Do not stamp SQL rewrite PASS until gated tracks + Jepsen nochao hold.

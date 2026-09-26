@@ -6,9 +6,9 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-09-26-select-star-jepsen |
-| date | 2026-09-26T10:04:47.6972050+03:00 |
-| git | 47e2276 |
+| stamp | 2026-09-26-select-star-multidc-sync-r2 |
+| date | 2026-09-26T13:22:02.7123400+03:00 |
+| git | a2f095e |
 | host | DESKTOP-4IC511D |
 | mode | `full-jepsen` |
 | outcome | `PASS` |
@@ -632,4 +632,14 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - chaos-it: partition+kill
 - full-jepsen: PASS
 - command: run-jepsen.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS
+
+### 2026-09-26-select-star-multidc-sync-r2
+- mode: full-jepsen
+- outcome: PASS
+- git: a2f095e
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=30)
 - notes: register=PASS; append=PASS

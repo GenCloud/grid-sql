@@ -60,7 +60,7 @@ public class IsNotNullCondition implements FilterCondition {
 	@Override
 	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                    Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-	                                    FieldMetaData primaryKeyField, ExplainQuery.QueryPlan queryPlan) {
+	                                    List<String> primaryKeyColumns, ExplainQuery.QueryPlan queryPlan) {
 		final AbstractIndexOperation<byte[], SingleTreeKey> index = property2Index.get(field);
 		if (index == null) {
 			return IndexOperationResult.EMPTY;

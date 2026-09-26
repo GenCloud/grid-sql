@@ -243,6 +243,7 @@ public class QueryOptimizer {
 	}
 
 	public static FilterConditionData tryOptimizeForCompositeIndex(Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
+	                                                               Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                                               FilterCondition root,
 	                                                               SortOrderData sortOrder) {
 		final FilterCondition normalizedRoot = normalizeFilterTree(root);
@@ -255,7 +256,7 @@ public class QueryOptimizer {
 			final List<String> indexFields = entry.getKey();
 			final AbstractIndexOperation<byte[][], CompositeTreeKey> index = entry.getValue();
 
-			final DnfResult dnfResult = optimizeDnfWithCompositeIndex(dnfRoot, indexFields, index, sortOrder);
+			final DnfResult dnfResult = optimizeDnfWithCompositeIndex(dnfRoot, indexFields, index, property2Index, sortOrder);
 			dnfRoot = dnfResult.condition();
 
 			if (dnfResult.useSameOrderAscendingIndex()) {
@@ -442,10 +443,11 @@ public class QueryOptimizer {
 	private static DnfResult optimizeDnfWithCompositeIndex(FilterCondition dnfNode,
 	                                                       List<String> indexFields,
 	                                                       AbstractIndexOperation<byte[][], CompositeTreeKey> index,
+	                                                       Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                                       SortOrderData sortOrder) {
 		if (dnfNode instanceof OrCondition orOperator) {
-			final DnfResult left = optimizeDnfWithCompositeIndex(orOperator.getLeft(), indexFields, index, sortOrder);
-			final DnfResult right = optimizeDnfWithCompositeIndex(orOperator.getRight(), indexFields, index, sortOrder);
+			final DnfResult left = optimizeDnfWithCompositeIndex(orOperator.getLeft(), indexFields, index, property2Index, sortOrder);
+			final DnfResult right = optimizeDnfWithCompositeIndex(orOperator.getRight(), indexFields, index, property2Index, sortOrder);
 			return new DnfResult(
 					new OrCondition(left.condition(), right.condition()),
 					false
@@ -453,7 +455,7 @@ public class QueryOptimizer {
 		}
 
 		if (dnfNode instanceof AndCondition andOperator) {
-			return tryConvertToCompositeFilter(andOperator, indexFields, index, sortOrder);
+			return tryConvertToCompositeFilter(andOperator, indexFields, index, property2Index, sortOrder);
 		}
 
 		// Leading EQ on composite: always wire prefix seek. Ordered-leaf only when ORDER BY
@@ -462,6 +464,10 @@ public class QueryOptimizer {
 				&& loc.getOperator() == LogicalOperatorCondition.Operator.EQ
 				&& indexFields.size() >= 2
 				&& indexFields.getFirst().equals(loc.getField())) {
+			if (QueryIndexChoiceUtil.preferScalarOverCompositePrefix(
+					property2Index, indexFields, loc.getField(), sortOrder)) {
+				return new DnfResult(dnfNode, false);
+			}
 			final byte[] prefixVal = SqlWireUtil.toGenericArray(loc.getValues()[0]);
 			final boolean orderMatched = sortOrder != null
 					&& indexFields.get(1).equals(sortOrder.sortField())
@@ -479,6 +485,7 @@ public class QueryOptimizer {
 	private static DnfResult tryConvertToCompositeFilter(AndCondition andOperator,
 	                                                     List<String> indexFields,
 	                                                     AbstractIndexOperation<byte[][], CompositeTreeKey> index,
+	                                                     Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                                     SortOrderData sortOrder) {
 		if (hasContradictoryConditions(andOperator)) {
 			return EMPTY_FILTER;
@@ -517,6 +524,10 @@ public class QueryOptimizer {
 							&& sortOrder.direction() == OrderDirection.ASC;
 					final String prefixField = indexFields.getFirst();
 					if (prefixLen == 1) {
+						if (QueryIndexChoiceUtil.preferScalarOverCompositePrefix(
+								property2Index, indexFields, prefixField, sortOrder)) {
+							return new DnfResult(andOperator, false);
+						}
 						final byte[] prefixVal = SqlWireUtil.toGenericArray(fieldToFilterMap.get(prefixField).getValues()[0]);
 						return new DnfResult(
 								new CompositeIndexCondition(prefixVal, prefixField, index),

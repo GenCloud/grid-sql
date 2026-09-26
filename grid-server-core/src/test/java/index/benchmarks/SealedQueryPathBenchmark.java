@@ -307,7 +307,7 @@ public class SealedQueryPathBenchmark extends AbstractLatencyBenchmark {
 			return pointersToKeys(memoryIndex.searchGreaterThan(new SingleTreeKey(boundKey)));
 		}
 		return sealedIndex.searchMatching(
-				indexKey -> SealedIndexKeyOrder.compareUnsigned(indexKey, boundKey) > 0);
+				indexKey -> SealedIndexKeyOrder.compare(indexKey, boundKey) > 0);
 	}
 
 	/** Wire LIKE pattern {@code <4-byte-prefix>%} matching one secondary bucket's BE int key. */

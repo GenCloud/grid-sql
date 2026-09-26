@@ -206,18 +206,18 @@ public final class SealedCompositeIndexKey {
 			return false;
 		}
 		final byte[] actual = components[componentIndex];
-		if (lowInclusiveOrNull != null && compareUnsigned(actual, lowInclusiveOrNull) < 0) {
+		if (lowInclusiveOrNull != null && compare(actual, lowInclusiveOrNull) < 0) {
 			return false;
 		}
-		if (highInclusiveOrNull != null && compareUnsigned(actual, highInclusiveOrNull) > 0) {
+		if (highInclusiveOrNull != null && compare(actual, highInclusiveOrNull) > 0) {
 			return false;
 		}
 		return true;
 	}
 
 	@VisibleForTesting
-	static int compareUnsigned(byte[] left, byte[] right) {
-		return SealedIndexKeyOrder.compareUnsigned(left, right);
+	static int compare(byte[] left, byte[] right) {
+		return SealedIndexKeyOrder.compare(left, right);
 	}
 
 	@VisibleForTesting
