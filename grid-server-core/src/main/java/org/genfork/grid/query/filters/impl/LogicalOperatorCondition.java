@@ -88,11 +88,11 @@ public class LogicalOperatorCondition implements FilterCondition {
 	}
 
 	@Override
-	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index, Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes, FieldMetaData primaryKeyField, ExplainQuery.QueryPlan queryPlan) {
+	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index, Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes, List<String> primaryKeyColumns, ExplainQuery.QueryPlan queryPlan) {
 		final AbstractIndexOperation<byte[], SingleTreeKey> index = property2Index.get(field);
 		if (index == null) {
 			// Unindexed column: candidate set = all PK rows; residual matches() applied by caller.
-			return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyField);
+			return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyColumns);
 		}
 		ExplainQuery.QueryPlanNode queryPlanNode = null;
 		if (queryPlan != null) {

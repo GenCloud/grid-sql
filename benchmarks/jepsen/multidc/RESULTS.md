@@ -7,8 +7,8 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 | Field | Value |
 |-------|--------|
 | stamp | `2026-09-26-select-star-multidc-sync-r2` |
-| date | 2026-09-26T10:33:36.2771737+03:00 |
-| git | 47e2276 |
+| date | 2026-09-26T13:30:02.1986483+03:00 |
+| git | a2f095e |
 | host | DESKTOP-4IC511D |
 | mode | `SYNC_VOTERS_ACROSS_DC` (topology 3+2) |
 | outcome | `PASS` |
@@ -16,7 +16,7 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 | append | PASS (:valid? true) |
 | chaos | dc-link+kill-voter+kill-dc-a+revive-dc-a |
 | multi-host SQL | `grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public` |
-| latency (ok-ops, warmup 10s) | register: workload=register warmupDrop=10s fail=0 info=5 ok=28 | read: n=15 p50=2.990ms p95=7.428ms p99=7.428ms | write: n=10 p50=17.838ms p95=27.206ms p99=27.206ms | txn_r: n=0 | txn_append: n=0; append: workload=append warmupDrop=10s fail=6 info=12 ok=42 | read: n=0 | write: n=0 | txn_r: n=10 p50=2.891ms p95=38.692ms p99=38.692ms | txn_append: n=11 p50=11.226ms p95=25.647ms p99=25.647ms |
+| latency (ok-ops, warmup 10s) | register: workload=register warmupDrop=10s fail=0 info=5 ok=30 | read: n=13 p50=2.854ms p95=39.429ms p99=39.429ms | write: n=13 p50=18.306ms p95=27.741ms p99=27.741ms | txn_r: n=0 | txn_append: n=0; append: workload=append warmupDrop=10s fail=0 info=12 ok=26 | read: n=0 | write: n=0 | txn_r: n=10 p50=4.022ms p95=66.784ms p99=66.784ms | txn_append: n=4 p50=13.771ms p95=27.054ms p99=27.054ms |
 | notes | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=30 |
 
 ## History

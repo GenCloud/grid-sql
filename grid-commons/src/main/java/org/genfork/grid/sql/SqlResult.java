@@ -40,28 +40,31 @@ public final class SqlResult {
 	private final SqlStatementTag tag;
 	private final long rowsAffected;
 	private final List<ColumnMeta> columns;
-	private final List<Object[]> rows;
+	private List<Object[]> rows;
+	private final SqlRowWindowSource windowSource;
 
 	private SqlResult(
 			Kind kind,
 			SqlStatementTag tag,
 			long rowsAffected,
 			List<ColumnMeta> columns,
-			List<Object[]> rows
+			List<Object[]> rows,
+			SqlRowWindowSource windowSource
 	) {
 		this.kind = kind;
 		this.tag = Objects.requireNonNull(tag, "tag");
 		this.rowsAffected = rowsAffected;
 		this.columns = columns;
 		this.rows = rows;
+		this.windowSource = windowSource;
 	}
 
 	public static SqlResult ddl(SqlStatementTag tag) {
-		return new SqlResult(Kind.OK_DDL, tag, 0L, List.of(), List.of());
+		return new SqlResult(Kind.OK_DDL, tag, 0L, List.of(), List.of(), null);
 	}
 
 	public static SqlResult affected(SqlStatementTag tag, long rowsAffected) {
-		return new SqlResult(Kind.ROWS_AFFECTED, tag, rowsAffected, List.of(), List.of());
+		return new SqlResult(Kind.ROWS_AFFECTED, tag, rowsAffected, List.of(), List.of(), null);
 	}
 
 	public static SqlResult resultSet(List<ColumnMeta> columns, List<Object[]> rows) {
@@ -73,7 +76,25 @@ public final class SqlResult {
 			List<ColumnMeta> columns,
 			List<Object[]> rows
 	) {
-		return new SqlResult(Kind.RESULT_SET, tag, rows.size(), columns, rows);
+		return new SqlResult(Kind.RESULT_SET, tag, rows.size(), columns, rows, null);
+	}
+
+	
+	/**
+	 * RESULT_SET backed by a pull cursor (Portal FETCH without full List materialize).
+	 * {@link #rows()} drains the cursor once for in-process SPI callers.
+	 */
+	public static SqlResult resultSetPull(
+			SqlStatementTag tag,
+			List<ColumnMeta> columns,
+			SqlRowWindowSource windowSource
+	) {
+		Objects.requireNonNull(windowSource, "windowSource");
+		return new SqlResult(Kind.RESULT_SET, tag, 0L, columns, null, windowSource);
+	}
+
+	public static SqlResult resultSetPull(List<ColumnMeta> columns, SqlRowWindowSource windowSource) {
+		return resultSetPull(SqlStatementTag.SELECT, columns, windowSource);
 	}
 
 	public Kind kind() {
@@ -98,7 +119,22 @@ public final class SqlResult {
 	}
 
 	public List<Object[]> rows() {
-		return rows;
+		if (rows != null) {
+			return rows;
+		}
+		if (windowSource != null) {
+			// Cache drain so repeated rows() / size()+getFirst() do not see an empty closed cursor.
+			rows = windowSource.drainAll();
+			return rows;
+		}
+		return List.of();
+	}
+
+	/**
+	 * Pull cursor for wire Portal FETCH; {@code null} when rows are fully eager.
+	 */
+	public SqlRowWindowSource windowSource() {
+		return windowSource;
 	}
 
 	/** Column metadata for result sets / wire ROW_DESC. */

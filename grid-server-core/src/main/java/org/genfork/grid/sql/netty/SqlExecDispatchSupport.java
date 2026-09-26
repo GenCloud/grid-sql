@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.sql.netty;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntConsumer;
 import java.util.function.IntPredicate;
@@ -23,6 +24,7 @@ import java.util.function.Supplier;
 import io.netty.channel.ChannelHandlerContext;
 
 import org.genfork.grid.sql.SqlReplicaAdmission;
+import org.genfork.grid.sql.SqlRowWindowSource;
 import org.genfork.grid.sql.client.ServerMeta;
 
 /**
@@ -93,5 +95,28 @@ final class SqlExecDispatchSupport {
 			written++;
 		}
 		return written;
+	}
+
+	/**
+	 * Pull up to {@code max} rows from {@code source} and write ROW_DATA frames.
+	 *
+	 * @return rows written
+	 */
+	static int writeRowWindowFromSource(
+			ChannelHandlerContext ctx,
+			int requestId,
+			SqlRowWindowSource source,
+			int max
+	) {
+		if (source == null || max <= 0 || source.exhausted()) {
+			return 0;
+		}
+		final List<Object[]> window = new ArrayList<>(Math.min(max, 64));
+		final int n = source.fillWindow(window, max);
+		for (int i = 0; i < n; i++) {
+			final Object[] row = window.get(i);
+			SqlFrames.write(ctx, SqlOpcode.ROW_DATA, requestId, out -> SqlWire.rowDataInto(out, row));
+		}
+		return n;
 	}
 }

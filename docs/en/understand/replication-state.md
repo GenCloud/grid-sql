@@ -1,8 +1,8 @@
 # Replication state: memory vs disk
 
-When replication is on (`grid.replication.enabled=true`), part of the cluster state always lives on disk. Which part matters: it decides what survives a restart, what has to be rebuilt, and what a peer can help you recover.
+Replication is on. The node restarted. What must live on disk, and what can be rebuilt from the journal and from peers?
 
-The short answer: **on disk — the mutation journal, the last confirmed commit number, and divergence-repair data. In memory — the working set of rows, the indexes, and the current view of live peers.**
+**On disk** — the mutation journal, the last confirmed commit number, and divergence-repair data. **In memory** — the hot set of rows, indexes, and the current view of live peers.
 
 ## Layout
 
@@ -119,6 +119,4 @@ Details: [shard placement](overlay-and-swarm.md).
 
 There is no CRDT-style merge of competing versions, no biological naming in the public API or YAML, no `hdcrm.*` configuration namespace, and WAN phase coupling is not the default multi-site consistency path. Where the metaphors stop and the implementation starts: [claim boundaries](bio-inspired.md).
 
-## Related
-
-[replication network](replication-network.md), [ORCHID](orchid-consensus.md), [storage](storage-sealed-gmap.md), [backup and restore](../configure-and-operate/operations/backup-restore.md), [durability](../configure-and-operate/configuration/durability.md).
+Next: [replication network](replication-network.md), [ORCHID](orchid-consensus.md), [storage](storage-sealed-gmap.md).

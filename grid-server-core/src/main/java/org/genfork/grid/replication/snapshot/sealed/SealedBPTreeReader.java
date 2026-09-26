@@ -541,8 +541,13 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		if (buffer.getInt() != SealedBPTreeWriter.MAGIC) {
 			throw new IOException("bad sealed BPTree magic: " + path);
 		}
-		if (buffer.getInt() != SealedBPTreeWriter.VERSION) {
-			throw new IOException("unsupported sealed BPTree version: " + path);
+		final int version = buffer.getInt();
+		if (version == SealedBPTreeWriter.VERSION_LEGACY_UNSIGNED) {
+			throw new IOException(
+					"sealed BPTree VERSION=1 unsupported (signed order requires reseal / dumpDomain): " + path);
+		}
+		if (version != SealedBPTreeWriter.VERSION) {
+			throw new IOException("unsupported sealed BPTree version " + version + ": " + path);
 		}
 		if (buffer.getInt() != SealedBPTreeWriter.PAGE_SIZE) {
 			throw new IOException("unsupported sealed BPTree page size: " + path);

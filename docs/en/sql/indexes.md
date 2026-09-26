@@ -81,17 +81,30 @@ Check the plan with `EXPLAIN` — [EXPLAIN and AQE](explain-and-aqe.md).
 
 ## Primary key
 
-There is no need to index the primary key separately. It determines the shard, and equality on the full primary key becomes a point read — no scan and no secondary index lookup.
+There is no need to index the primary key separately. It determines the shard. Equality on the **full** primary key is a point read — no scan and no secondary index lookup. Equality on only the leading column of a composite PK is not “the whole key”: the planner does not rewrite it into a full-PK get.
+
+## Which index the plan picks
+
+| Condition | What to expect |
+|-----------|----------------|
+| EQ on the full PK | Point read by key |
+| EQ on the leading column of a composite secondary index `(a, b)` | Prefix path on `(a, …)`; if a separate single-column / bitmap index on `a` exists and there is no `ORDER BY` on `b`, the plan may prefer the narrow index |
+| EQ only on a non-leading column | Composite `(a, b)` does not apply |
+| `ORDER BY` on the second composite column with EQ on the first | Keeps the ordered composite leaf |
+
+Fixed-width INT/LONG compare in the index and in residual filters is **signed** (`Integer.compare` / `Long.compare`), matching signed literals in the grammar. Details: [SQL support matrix](support-matrix.md).
+
+Check the plan with `EXPLAIN` — [EXPLAIN and AQE](explain-and-aqe.md).
 
 ## Query path
 
 An index lookup goes through three levels, top down:
 
-1. **In-memory index** — the working-set accelerator.
-2. **Sealed `.sbpt` tree** — an immutable fixed-page B+ tree on disk.
+1. **In-memory index** — the hot-set accelerator.
+2. **Sealed `.sbpt` tree** — an immutable fixed-page B+ tree on disk (written as **VERSION 2**, signed INT/LONG order). **VERSION 1** (legacy unsigned) files are **rejected** on read — reseal / `dumpDomain` after upgrade.
 3. **`.gmap` data file** — the row is fetched by the pointer that was found.
 
-The key property: **an index miss does not turn into a full partition scan**. If the index answers "no such value", the query answers the same way instead of starting to read the whole table in hope of finding something.
+**An index miss does not turn into a full partition scan.** If the index answers “no such value”, the query answers the same way instead of reading the whole table.
 
 Key values stay as bytes along this whole path: the index never decodes a row into objects just to compare a value.
 
@@ -105,7 +118,9 @@ The practical consequence: the index trails the data rather than leading it. Poi
 
 ## Long-term storage
 
-Once a segment is sealed, secondary indexes live in fixed-page files (`.sbpt`, or `.sbm` for bitmaps). The in-memory index remains a working-set accelerator and may be evicted entirely — no data is lost by that, the query simply goes to the sealed file. Under `hydrate-mode: LAZY`, the first miss after restart pays sealed I/O; under `FULL`, trees are warmer at the cost of longer start.
+Once a segment is sealed, secondary indexes live in fixed-page files (`.sbpt`, or `.sbm` for bitmaps). New `.sbpt` files are written as **VERSION 2** (signed INT/LONG compare on disk matches RAM). **VERSION 1** (unsigned compare) files are **rejected** on open — after a binary upgrade reseal / `dumpDomain`, do not expect silent reads of old trees: [upgrade](../configure-and-operate/operations/upgrade.md).
+
+The in-memory index remains a hot-set accelerator and may be evicted entirely — no data is lost; the query goes to the sealed file. Under `hydrate-mode: LAZY`, the first miss after restart pays sealed-file I/O; under `FULL`, trees are warmer at the cost of a longer start.
 
 The `index-ckpt` checkpoint stores a key watermark, not a full tree dump.
 

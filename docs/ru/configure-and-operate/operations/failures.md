@@ -96,4 +96,4 @@
 - Отключать `fsync` в эксплуатации ради TPS.
 - Считать HTTP `/replication/compare` источником для выбора writer — лабораторная сверка lag, не штатная HA.
 
-**Связанное:** [мониторинг](../monitoring.md), [безопасность](security.md), [обновление узла](upgrade.md), [рекомендации](../../getting-started/best-practices.md).
+Дальше: [мониторинг](../monitoring.md), [обновление узла](upgrade.md), [PITR](pitr.md).

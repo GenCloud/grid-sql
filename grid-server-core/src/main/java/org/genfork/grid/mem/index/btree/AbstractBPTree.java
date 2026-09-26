@@ -272,18 +272,108 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 
 	public void forEachLeafEntry(BiConsumer<K, byte[]> consumer) {
 		Objects.requireNonNull(consumer, "consumer");
+		forEachLeafEntryUntil((indexKey, rowKey) -> {
+			consumer.accept(indexKey, rowKey);
+			return true;
+		});
+	}
+
+	/**
+	 * Walk leaf postings left-to-right; stop when {@code visitor} returns {@code false}.
+	 */
+	public void forEachLeafEntryUntil(LeafEntryVisitor<K> visitor) {
+		Objects.requireNonNull(visitor, "visitor");
 		LeafNode<K, T> current = getFirstLeafNode();
 		while (current != null) {
 			for (int i = 0; i < current.keys.size(); i++) {
 				final K indexKey = current.keys.get(i).getKey();
 				for (IndexPointerRef pointer : current.values.get(i)) {
 					final byte[] rowKey = pointer.resolveKey();
-					if (rowKey != null) {
-						consumer.accept(indexKey, rowKey);
+					if (rowKey != null && !visitor.visit(indexKey, rowKey)) {
+						return;
 					}
 				}
 			}
 			current = current.next;
+		}
+	}
+
+	/**
+	 * Continues the leaf walk while {@link #visit} returns {@code true}.
+	 *
+	 * @param <K> index key type
+	 */
+	@FunctionalInterface
+	public interface LeafEntryVisitor<K> {
+		boolean visit(K indexKey, byte[] rowKey);
+	}
+
+	/**
+	 * Resumable left-to-right walk of row PK bytes (Portal pull / FETCH windows).
+	 */
+	public RowKeyCursor<K, T> openRowKeyCursor() {
+		return new RowKeyCursor<>(getFirstLeafNode());
+	}
+
+	/**
+	 * Stateful leaf posting cursor — no HashSet / full key List.
+	 *
+	 * @param <K> index key type
+	 * @param <T> tree key type
+	 */
+	public static final class RowKeyCursor<K, T extends TreeKey<K>> {
+		private LeafNode<K, T> leaf;
+		private int keyIndex;
+		private Iterator<IndexPointerRef> pointerIter;
+		private byte[] nextRowKey;
+		private boolean closed;
+
+		private RowKeyCursor(LeafNode<K, T> first) {
+			this.leaf = first;
+			this.keyIndex = 0;
+			advance();
+		}
+
+		public boolean hasNext() {
+			return !closed && nextRowKey != null;
+		}
+
+		public byte[] next() {
+			if (!hasNext()) {
+				throw new NoSuchElementException();
+			}
+			final byte[] out = nextRowKey;
+			advance();
+			return out;
+		}
+
+		public void close() {
+			closed = true;
+			nextRowKey = null;
+			leaf = null;
+			pointerIter = null;
+		}
+
+		private void advance() {
+			nextRowKey = null;
+			while (leaf != null) {
+				if (pointerIter != null && pointerIter.hasNext()) {
+					final byte[] key = pointerIter.next().resolveKey();
+					if (key != null) {
+						nextRowKey = key;
+						return;
+					}
+					continue;
+				}
+				pointerIter = null;
+				if (keyIndex >= leaf.keys.size()) {
+					leaf = leaf.next;
+					keyIndex = 0;
+					continue;
+				}
+				pointerIter = leaf.values.get(keyIndex).iterator();
+				keyIndex++;
+			}
 		}
 	}
 

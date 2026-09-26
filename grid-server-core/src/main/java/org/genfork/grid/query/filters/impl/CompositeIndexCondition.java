@@ -96,7 +96,7 @@ public class CompositeIndexCondition implements FilterCondition {
 	@Override
 	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                    Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-	                                    FieldMetaData primaryKeyField, ExplainQuery.QueryPlan queryPlan) {
+	                                    List<String> primaryKeyColumns, ExplainQuery.QueryPlan queryPlan) {
 		return executeLimited(queryPlan,
 				QueryPagingContext.maxPointersHint());
 	}

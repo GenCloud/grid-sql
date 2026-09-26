@@ -32,7 +32,11 @@ import org.genfork.grid.metrics.DistributedQueryMetrics;
 import org.genfork.grid.metrics.SqlTxMetrics;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.sql.EagerListRowWindowSource;
+import org.genfork.grid.sql.EagerListRowWindowSource;
 import org.genfork.grid.sql.SqlResult;
+import org.genfork.grid.sql.SqlRowWindowSource;
+import org.genfork.grid.sql.SqlRowWindowSource;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.sql.client.ServerMeta;
 import org.genfork.grid.threading.SerialTaskQueue;
@@ -372,12 +376,12 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 			if (p == null || p.cancelled) {
 				return;
 			}
-			final int sent = SqlExecDispatchSupport.writeRowWindow(ctx, frame.requestId(), p.rows, p.index, n);
-			p.index += sent;
-			if (p.index >= p.rows.size()) {
+			SqlExecDispatchSupport.writeRowWindowFromSource(ctx, frame.requestId(), p.source, n);
+			if (p.source.exhausted()) {
+				final long total = p.source.emitted();
 				dropPortal(frame.requestId());
 				ctx.writeAndFlush(new SqlFrame(SqlOpcode.EXEC_DONE, frame.requestId(),
-						SqlWire.execDone(p.rows.size(), p.tag)));
+						SqlWire.execDone(total, p.tag)));
 				final Runnable cont = p.onComplete;
 				if (cont != null) {
 					cont.run();
@@ -422,6 +426,7 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		final Portal removed = portals.remove(requestId);
 		if (removed != null) {
 			removed.cancelled = true;
+			removed.source.close();
 		}
 		return removed;
 	}
@@ -518,19 +523,26 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 			}
 			if (result.kind() == SqlResult.Kind.RESULT_SET) {
 				SqlFrames.write(ctx, SqlOpcode.ROW_DESC, requestId, out -> SqlWire.rowDescInto(out, result.columns()));
-				final List<Object[]> rows = result.rows();
-				final int sent = SqlExecDispatchSupport.writeRowWindow(ctx, requestId, rows, 0, SqlWire.DEFAULT_FETCH_WINDOW);
-				if (sent < rows.size()) {
-					portals.put(requestId, new Portal(rows, sent, result.tag(), onComplete));
+				final SqlRowWindowSource source = result.windowSource() != null
+						? result.windowSource()
+						: EagerListRowWindowSource.of(result.rows());
+				SqlExecDispatchSupport.writeRowWindowFromSource(
+						ctx, requestId, source, SqlWire.DEFAULT_FETCH_WINDOW);
+				if (!source.exhausted()) {
+					portals.put(requestId, new Portal(source, result.tag(), onComplete));
 					ctx.flush();
-				} else if (onComplete != null) {
-					ctx.writeAndFlush(new SqlFrame(SqlOpcode.EXEC_DONE, requestId,
-							SqlWire.execDone(rows.size(), result.tag())));
-					onComplete.run();
 				} else {
-					finishRequest(requestId);
-					ctx.writeAndFlush(new SqlFrame(SqlOpcode.EXEC_DONE, requestId,
-							SqlWire.execDone(rows.size(), result.tag())));
+					source.close();
+					final long total = source.emitted();
+					if (onComplete != null) {
+						ctx.writeAndFlush(new SqlFrame(SqlOpcode.EXEC_DONE, requestId,
+								SqlWire.execDone(total, result.tag())));
+						onComplete.run();
+					} else {
+						finishRequest(requestId);
+						ctx.writeAndFlush(new SqlFrame(SqlOpcode.EXEC_DONE, requestId,
+								SqlWire.execDone(total, result.tag())));
+					}
 				}
 			} else if (onComplete != null) {
 				ctx.writeAndFlush(new SqlFrame(SqlOpcode.EXEC_DONE, requestId,
@@ -548,15 +560,13 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 	 * Open RESULT_SET cursor for a single EXEC / BATCH_EXEC requestId.
 	 */
 	private static final class Portal {
-		private final List<Object[]> rows;
-		private int index;
+		private final SqlRowWindowSource source;
 		private final String tag;
 		private final Runnable onComplete;
 		private volatile boolean cancelled;
 
-		private Portal(List<Object[]> rows, int index, String tag, Runnable onComplete) {
-			this.rows = rows;
-			this.index = index;
+		private Portal(SqlRowWindowSource source, String tag, Runnable onComplete) {
+			this.source = source;
 			this.tag = tag;
 			this.onComplete = onComplete;
 		}

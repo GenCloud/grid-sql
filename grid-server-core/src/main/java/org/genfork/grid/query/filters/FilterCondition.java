@@ -25,8 +25,6 @@ import org.genfork.grid.mem.index.btree.CompositeTreeKey;
 import org.genfork.grid.mem.index.btree.IndexOperationResult;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.query.plan.ExplainQuery;
-import org.genfork.grid.serial.FieldMetaData;
-
 
 /**
  * Index / residual filter for SQL query plans (matches on stored row bytes, not domain POJO).
@@ -39,7 +37,7 @@ import org.genfork.grid.serial.FieldMetaData;
 public interface FilterCondition {
 	IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                             Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-	                             FieldMetaData primaryKeyField,
+	                             List<String> primaryKeyColumns,
 	                             ExplainQuery.QueryPlan queryPlan);
 
 	default boolean validate(TableSchema schema) {

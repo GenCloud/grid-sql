@@ -202,6 +202,9 @@ public final class SqlQueryExecutor {
 			if (s.forUpdate()) {
 				// Local + optional peer locks; PREPARE/COMMIT votes via DistForUpdatePrepareVotes.
 				raw = selectLockedKeys(session, table, store, lockBatch.selectedKeys(), metas, projection);
+			} else if (!session.inTransaction()
+					&& canUsePortalPullCursor(session, store, s)) {
+				return SqlResult.resultSetPull(metas, new PkLeafSelectRowWindowSource(store, projection, s.offset(), s.limitOrNull()));
 			} else if (!session.inTransaction()) {
 				raw = selectCommitted(store, s, metas, projection);
 			} else {
@@ -1127,6 +1130,27 @@ public final class SqlQueryExecutor {
 		return qd.filter().conditionTree();
 	}
 
+
+	/**
+	 * Portal pull-cursor eligible: autocommit AlwaysTrue SELECT without ORDER BY / DISTINCT / joins.
+	 */
+	private boolean canUsePortalPullCursor(SqlSession session, TableStore store, SelectSql s) {
+		if (session.inTransaction() || s.forUpdate() || s.hasJoins() || s.aggregate() || s.distinct()) {
+			return false;
+		}
+		if (s.hasWhereSubqueries() || s.hasFromFunction() || s.hasGroupBy()) {
+			return false;
+		}
+		if (SqlProjectionOps.hasFunctionProjection(s)) {
+			return false;
+		}
+		final List<Function<String, List<byte[]>>> peers = tables.distributedPeerKeyExecutors();
+		if (peers != null && !peers.isEmpty()) {
+			return false;
+		}
+		return store.isRamPrimaryKeyBptree() && store.isAlwaysTrueNoOrderSelect(s.sql());
+	}
+
 	private SqlResult selectCommitted(
 			TableStore store,
 			SelectSql s,
@@ -1162,13 +1186,26 @@ public final class SqlQueryExecutor {
 						peers,
 						tables.distributedPeerRowBlobFetchers());
 			} else {
-				final List<byte[]> keys = store.selectKeys(s.sql(), subqueryFiltersTls.get());
-				rows = new ArrayList<>(keys.size());
-				for (byte[] key : keys) {
-					final byte[] value = store.getCommittedBytes(key);
-					if (value != null) {
-						rows.add(store.projectBytes(value, projection));
+				final List<FilterCondition> resolvedSubqueries = subqueryFiltersTls.get();
+				if (resolvedSubqueries != null && !resolvedSubqueries.isEmpty()) {
+					final List<byte[]> keys = store.selectKeys(s.sql(), resolvedSubqueries);
+					rows = new ArrayList<>(keys.size());
+					for (byte[] key : keys) {
+						final byte[] value = store.getCommittedBytes(key);
+						if (value != null) {
+							rows.add(store.projectBytes(value, projection));
+						}
 					}
+				} else {
+					final List<Object[]> collected = new ArrayList<>();
+					store.forEachSelectKeys(s.sql(), key -> {
+						final byte[] value = store.getCommittedBytes(key);
+						if (value != null) {
+							collected.add(store.projectBytes(value, projection));
+						}
+						return true;
+					});
+					rows = collected;
 				}
 			}
 		}

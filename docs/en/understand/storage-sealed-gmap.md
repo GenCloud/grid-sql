@@ -1,10 +1,8 @@
 # Storage: sealed map files
 
-With durability enabled (`grid.durability.enabled`), Grid keeps data in two tiers. In memory lives the **working set** — hot keys in `GridScalableMap`. On disk live the mutation journal and immutable sealed files, and those are the source of truth.
+Durability is on and the node restarts. Is an “empty” heap a disaster or normal? With `hydrate-mode: LAZY` it is normal: truth is on disk in the journal (OpLog) and sealed files; memory holds only the hot set.
 
-The ordering is fixed: a change goes into the journal first, then a group of changes is sealed into files, and only after that may the journal be truncated. The in-memory map is an accelerator, not storage.
-
-For operators: an "empty" heap after a restart with `hydrate-mode: LAZY` is normal — truth is on disk (OpLog plus the `sealed/` directory). Loading everything into memory is `FULL`, which costs more startup time and RAM. Details: [durability](../configure-and-operate/configuration/durability.md).
+Ordering is fixed: journal first, then seal a group of changes into files, and only then truncate the journal. The in-memory map is an accelerator, not storage. Settings: [durability](../configure-and-operate/configuration/durability.md).
 
 ## How data is divided
 
@@ -18,7 +16,7 @@ Inside a shard, a row is a packed binary record with an offset table at the end.
 |----------|------|
 | OpLog | The mutation journal. A commit counts as done only after the journal write; after sealing, the journal is truncated through a watermark |
 | `{domain}_{shard}_n{node}.gmap` | An immutable node file: directory (buckets), key → offset mapping and the payloads themselves |
-| `*.sbpt` | A sealed secondary B+ tree with a fixed page size |
+| `*.sbpt` | A sealed secondary B+ tree with a fixed page size. New files are **VERSION 2** (signed INT/LONG compare); **VERSION 1** is rejected on read — reseal / `dumpDomain` required |
 | `*.sbm` | A sealed bitmap index |
 | `index-ckpt/*.bytes` | A key watermark plus CRC. This is **not** a full dump of the in-memory index: after sealing, secondary indexes live in `.sbpt` |
 | `orchid/state.bin` | The global sequence number of the last confirmed commit |
@@ -130,6 +128,4 @@ Before a host migration, when disk health is doubtful, or after a crash with a t
 
 Procedures: [backup and restore](../configure-and-operate/operations/backup-restore.md), [point-in-time recovery](../configure-and-operate/operations/pitr.md).
 
-## Related
-
-[the write path](write-path-staging.md), [replication state](replication-state.md), [durability](../configure-and-operate/configuration/durability.md), [indexes](../sql/indexes.md), [monitoring](../configure-and-operate/monitoring.md).
+Next: [write path](write-path-staging.md), [durability](../configure-and-operate/configuration/durability.md), [indexes](../sql/indexes.md).

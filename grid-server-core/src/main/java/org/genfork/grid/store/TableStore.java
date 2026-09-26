@@ -43,6 +43,7 @@ import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.GridScalableMap;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.mem.index.IndexType;
+import org.genfork.grid.mem.index.btree.AbstractBPTree;
 import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.mem.stage.GridEntriesProcessor.AddEntry;
 import org.genfork.grid.mem.stage.GridEntriesProcessor.RemoveEntry;
@@ -446,6 +447,26 @@ public final class TableStore {
 	public void forEachPrimaryKey(Consumer<byte[]> consumer) {
 		ensureAllShardsHydrated();
 		index.forEachPrimaryKey(consumer);
+	}
+
+	/**
+	 * Resumable PRIMARY KEY leaf cursor for Portal pull FETCH.
+	 */
+	public AbstractBPTree.RowKeyCursor<?, ?> openPrimaryKeyRowCursor() {
+		ensureAllShardsHydrated();
+		return index.openPrimaryKeyRowCursor();
+	}
+
+	/**
+	 * True when SELECT is AlwaysTrue with no ORDER BY (Portal pull eligible).
+	 */
+	public boolean isAlwaysTrueNoOrderSelect(String selectSql) {
+		return index.isAlwaysTrueNoOrderSelect(selectSql);
+	}
+
+	/** {@code true} when PRIMARY KEY is an in-RAM B+ tree (Portal pull eligible). */
+	public boolean isRamPrimaryKeyBptree() {
+		return index.isRamPrimaryKeyBptree();
 	}
 
 	/**

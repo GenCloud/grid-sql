@@ -43,7 +43,9 @@ import java.util.zip.CRC32;
  */
 public final class SealedBPTreeWriter {
 	public static final int MAGIC = 0x53425054;
-	public static final int VERSION = 1;
+	public static final int VERSION = 2;
+	/** Legacy on-disk version — reader fail-closed; reseal / dumpDomain required. */
+	public static final int VERSION_LEGACY_UNSIGNED = 1;
 	public static final int PAGE_SIZE = 8192;
 	public static final int INTERNAL = 1;
 	public static final int LEAF = 2;

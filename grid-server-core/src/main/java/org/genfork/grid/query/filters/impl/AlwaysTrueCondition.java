@@ -25,10 +25,9 @@ import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.query.filters.FilterCondition;
 import org.genfork.grid.query.filters.PkIndexScanUtil;
 import org.genfork.grid.query.plan.ExplainQuery;
-import org.genfork.grid.serial.FieldMetaData;
 
 /**
- * No WHERE — full PRIMARY KEY {@code searchAll} (scalar or composite).
+ * No WHERE — full PRIMARY KEY leaf stream (scalar or composite).
  *
  * @author: GenCloud
  * @date: 2025/09
@@ -44,9 +43,9 @@ public class AlwaysTrueCondition implements FilterCondition {
 	@Override
 	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                    Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-	                                    FieldMetaData primaryKeyField,
-	                                    ExplainQuery.QueryPlan queryPlan) {
-		return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyField);
+	                                    List<String> primaryKeyColumns, ExplainQuery.QueryPlan queryPlan) {
+		// Universe for Not/residual: full searchAll. Product SELECT * bypasses via leaf stream.
+		return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyColumns);
 	}
 
 	@Override

@@ -96,4 +96,4 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 - Disable `fsync` in operations for TPS.
 - Treat HTTP `/replication/compare` as the writer pin source — lab lag compare, not operational HA discovery.
 
-**Related:** [monitoring](../monitoring.md), [security](security.md), [upgrade](upgrade.md), [best practices](../../getting-started/best-practices.md).
+Next: [monitoring](../monitoring.md), [upgrade](upgrade.md), [PITR](pitr.md).

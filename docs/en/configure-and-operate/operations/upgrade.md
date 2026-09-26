@@ -29,6 +29,7 @@ During a rolling upgrade the ring may briefly run **two binary versions**. That 
 | Combination | Allowed briefly? | Notes |
 |-------------|------------------|-------|
 | Same major sealed/OpLog layout, two jar versions | Yes, during rolling only | Finish every node; then one version |
+| `.sbpt` VERSION 2 on some nodes, VERSION 1 on others | Not as a lasting state | VERSION 1 is rejected on read. Take PITR base before upgrade; after — reseal / `dumpDomain` on every node, then one version |
 | Incompatible `dataDir` layout across nodes | No | Take PITR base first; migrate one layout family at a time |
 | Two processes / two binaries on one `dataDir` | Never | Incident — stop the extra process |
 

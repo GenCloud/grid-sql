@@ -15,7 +15,7 @@ What Grid supports today: SQL, storage, transactions, cluster behaviour, and cli
 
 - Queries are parsed with an ANTLR grammar: Simplified SQL, a bounded dialect — not a full SQL clone.
 - DDL for tables, indexes, and constraints.
-- DML: `INSERT`, `UPDATE`, `DELETE`, `UPSERT`, `INSERT … ON CONFLICT`, and a subset of `MERGE`.
+- DML: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT`, and a subset of `MERGE`.
 - SELECT: filters, INNER / LEFT / RIGHT / FULL JOIN, multi-column `GROUP BY` and `PARTITION BY`, `ORDER BY`, `LIMIT`, `OFFSET`.
 - `EXISTS` / `NOT EXISTS`, CTEs (`WITH`), views, window functions, scalar and table user functions — within the dialect.
 - `PREPARE` and bound parameters.

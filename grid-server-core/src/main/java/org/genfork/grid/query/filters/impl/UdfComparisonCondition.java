@@ -75,10 +75,9 @@ public final class UdfComparisonCondition implements FilterCondition {
 	public IndexOperationResult execute(
 			Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 			Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-			FieldMetaData primaryKeyField,
-			ExplainQuery.QueryPlan queryPlan
+			List<String> primaryKeyColumns, ExplainQuery.QueryPlan queryPlan
 	) {
-		return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyField);
+		return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyColumns);
 	}
 
 	@Override

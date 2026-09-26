@@ -23,8 +23,11 @@ import org.genfork.grid.utils.ArrayUtil;
 import org.springframework.util.CollectionUtils;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -368,11 +371,43 @@ public class GridEntriesProcessor {
 	public void awaitIdle(long timeoutMs) throws InterruptedException, TimeoutException {
 		final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
 		while (queue.size() > 0 || !stagingArea.isEmpty()) {
+			dropCommittedStagingOrphans();
+			if (queue.size() == 0 && stagingArea.isEmpty()) {
+				return;
+			}
 			if (System.nanoTime() >= deadline) {
 				throw new TimeoutException("Shard " + shardNum + " still busy queue=" + queue.size() + " staging=" + stagingArea.size());
 			}
 			signalWake();
 			Thread.sleep(1);
+		}
+	}
+
+	/**
+	 * Drop staging rows whose commit future is already done (queue empty for that object).
+	 * <p>
+	 * Closes the race where a stale in-flight apply completes after a newer enqueue
+	 * already replaced staging, then a later apply of the newer entry clears by identity only
+	 * and leaves the superseded object stranded with {@code committed} done.
+	 *
+	 * @return remaining staging size after reclaim
+	 */
+	public int reclaimCommittedStaging() {
+		dropCommittedStagingOrphans();
+		return stagingArea.size();
+	}
+
+	private void dropCommittedStagingOrphans() {
+		if (stagingArea.isEmpty()) {
+			return;
+		}
+		final Iterator<Map.Entry<KeyEntry, Entry>> it = stagingArea.entrySet().iterator();
+		while (it.hasNext()) {
+			final Map.Entry<KeyEntry, Entry> e = it.next();
+			final Entry staged = e.getValue();
+			if (staged != null && staged.getCommitted().isDone()) {
+				it.remove();
+			}
 		}
 	}
 
@@ -463,7 +498,8 @@ public class GridEntriesProcessor {
 			}
 			toApply = ok;
 		}
-		final Set<Entry> applied = new HashSet<>(Math.max(16, toApply.size() * 2));
+		// Identity set: Entry.equals includes storeTime/value and can collapse distinct queue objects.
+		final Set<Entry> applied = Collections.newSetFromMap(new IdentityHashMap<>(Math.max(16, toApply.size() * 2)));
 		for (Entry entry : toApply) {
 			final byte[] key = entry.getKey();
 			final KeyEntry ke = new KeyEntry(key);
@@ -480,8 +516,7 @@ public class GridEntriesProcessor {
 						gridIndexWorker.add(entry);
 					}
 				}
-				// Drop staging only if this entry is still the visible staged version.
-				stagingArea.compute(ke, (_, cur) -> cur == entry ? null : cur);
+				dropStagingIfNotNewer(ke, entry);
 				entry.getCommitted().complete(null);
 				applied.add(entry);
 			} catch (RuntimeException ex) {
@@ -497,10 +532,31 @@ public class GridEntriesProcessor {
 			}
 			for (Entry entry : ordered) {
 				if (!entry.getCommitted().isDone() && appliedKeys.contains(new KeyEntry(entry.getKey()))) {
+					final KeyEntry ke = new KeyEntry(entry.getKey());
+					stagingArea.compute(ke, (_, cur) -> cur == entry ? null : cur);
 					entry.getCommitted().complete(null);
 				}
 			}
 		}
+	}
+
+	/**
+	 * Clear staging for {@code key} unless a strictly newer in-flight entry replaced it.
+	 */
+	private void dropStagingIfNotNewer(KeyEntry ke, Entry applied) {
+		stagingArea.compute(ke, (_, cur) -> {
+			if (cur == null || cur == applied) {
+				return null;
+			}
+			if (cur.getCommitted().isDone()) {
+				return null;
+			}
+			// Same or older generation left behind by drain/supersede race — do not strand it.
+			if (cur.getStoreTime() <= applied.getStoreTime()) {
+				return null;
+			}
+			return cur;
+		});
 	}
 
 	/**

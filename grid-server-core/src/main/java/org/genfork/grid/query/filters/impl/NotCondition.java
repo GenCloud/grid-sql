@@ -30,7 +30,6 @@ import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.query.filters.FilterCondition;
 import org.genfork.grid.query.filters.PkIndexScanUtil;
 import org.genfork.grid.query.plan.ExplainQuery;
-import org.genfork.grid.serial.FieldMetaData;
 
 /**
  * Negation over a child filter; universe = all PRIMARY KEY postings.
@@ -54,14 +53,12 @@ public class NotCondition implements FilterCondition {
 	@Override
 	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                    Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-	                                    FieldMetaData primaryKeyField,
-	                                    ExplainQuery.QueryPlan queryPlan) {
-		final IndexOperationResult childResult = child.execute(property2Index, compositeIndexes, primaryKeyField, queryPlan);
+	                                    List<String> primaryKeyColumns, ExplainQuery.QueryPlan queryPlan) {
+		final IndexOperationResult childResult = child.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
 		if (childResult == null) {
 			return null;
 		}
-		final IndexOperationResult allResult = PkIndexScanUtil.searchAllPrimaryKeys(
-				property2Index, compositeIndexes, primaryKeyField);
+		final IndexOperationResult allResult = PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyColumns);
 		if (allResult == null || allResult.getPointers() == null) {
 			return IndexOperationResult.EMPTY;
 		}

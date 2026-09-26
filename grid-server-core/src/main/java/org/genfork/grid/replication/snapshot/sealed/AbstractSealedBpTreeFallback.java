@@ -63,7 +63,7 @@ public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 	}
 
 	protected static boolean openCmp(byte[] indexKey, byte[] bound, OpenBound mode) {
-		final int cmp = SealedIndexKeyOrder.compareUnsigned(indexKey, bound);
+		final int cmp = SealedIndexKeyOrder.compare(indexKey, bound);
 		return switch (mode) {
 			case GT -> cmp > 0;
 			case GE -> cmp >= 0;

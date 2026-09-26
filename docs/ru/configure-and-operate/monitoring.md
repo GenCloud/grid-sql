@@ -1,6 +1,6 @@
 # Мониторинг
 
-Узел отдаёт своё состояние через HTTP-эндпоинты Spring Actuator и метрики Micrometer. Оркестраторы смотрят пробы; дашборды и алерты — метрики. Выбор пишущего узла клиентом сюда не относится — это делается по протоколу, см. [повышение роли узла](operations/ha-promote.md).
+Оркестратор спрашивает: можно ли слать трафик на этот узел? Клиент спрашивает другое: кто сейчас пишущий? Первое — Actuator readiness и метрики. Второе — мета протокола (`ServerMeta` / `PROMOTE_NOTIFY`), не HTTP. См. [повышение роли узла](operations/ha-promote.md).
 
 ## Эндпоинты
 
@@ -32,7 +32,7 @@ curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.d
 | `reason` | `sql_tcp_down`, `orchid_not_synced` | Только при DOWN |
 | `writerEligible` | boolean, `n/a` | Узел может принимать запись |
 | `applyLagStale` | boolean, `n/a` | Отставание apply выше `grid.replication.ha.max-stale-lag` |
-| `orchidR` | double, `n/a` | Параметр порядка фазы |
+| `orchidR` | double, `n/a` | Параметр порядка фазы `R` (насколько фазы узлов близки) |
 | `repairIssued` / `repairApplied` | long, `n/a` | Счётчики ремонта пропусков |
 | `rpoEstimateMs` | long, `n/a` | Оценка отставания между площадками |
 | `swarmHint` | `KEEP`, `ATTRACT_LEARNER`, …, `n/a` | Подсказка размещения по имени |
@@ -154,4 +154,4 @@ SQL и блокировки:
 
 Ориентиры TPS на лабораторном хосте: [ёмкость и пороги](../performance/capacity-slo.md). Нагрузка JMeter: [нагрузочные прогоны](../tools/jmeter-load-slo.md). Для дежурства опирайтесь на readiness и сигналы выше, не на цифры TPS.
 
-**Связанное:** [отказы](operations/failures.md), [повышение роли узла](operations/ha-promote.md), [настройка репликации](configuration/replication.md), [долговременное хранение](configuration/durability.md).
+Дальше: [отказы](operations/failures.md), [повышение роли узла](operations/ha-promote.md), [репликация](configuration/replication.md).

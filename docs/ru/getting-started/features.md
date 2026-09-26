@@ -15,7 +15,7 @@
 
 - Запросы разбираются грамматикой ANTLR: Simplified SQL, ограниченный диалект — не полная копия «большого» SQL.
 - DDL для таблиц, индексов и ограничений.
-- DML: `INSERT`, `UPDATE`, `DELETE`, `UPSERT`, `INSERT … ON CONFLICT` и подмножество `MERGE`.
+- DML: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT` и подмножество `MERGE`.
 - SELECT: фильтры, соединения INNER / LEFT / RIGHT / FULL JOIN, `GROUP BY` и `PARTITION BY` по нескольким колонкам, `ORDER BY`, `LIMIT`, `OFFSET`.
 - `EXISTS` / `NOT EXISTS`, обобщённые табличные выражения (`WITH`), представления, оконные функции, скалярные и табличные пользовательские функции — в пределах диалекта.
 - `PREPARE` и параметры запросов.
