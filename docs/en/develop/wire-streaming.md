@@ -1,6 +1,6 @@
 # Streaming results
 
-A large result set does not arrive as a single response. Client and server work in windows: the server delivers a batch of rows and stops until the client asks for the next one. This is built into the product protocol, not layered on top like a JDBC cursor.
+A large `SELECT *` with no `ORDER BY`. Must the whole table sit in memory before the first window reaches the client? No: client and server work in windows — the server delivers a batch and waits for the next `FETCH`. This is the product protocol, not a JDBC-style add-on.
 
 ## What it looks like on the wire
 
@@ -82,7 +82,11 @@ Two consequences follow:
 
 ## What happens on the server
 
-`SqlEngine` executes the query, and the Netty layer encodes cells with LE tags. Inside the engine rows live as bytes: keys and values in filters, joins and indexes are `byte[]` / `WireSpan` over the binary record. Decoding into Java objects happens only at the very boundary — when the result row is assembled for the client.
+The client said `SELECT * FROM t` with no `ORDER BY` — a large table. Must the server build every row in memory before the first window? No.
+
+For a full primary-key walk without sort, the server pulls rows **in windows** from the PK leaf: each `FETCH` fills at most the requested row count. A full `List` of every row is not built on that path. Other plans may still materialize first and then deliver through the same `ROW_DATA` / `FETCH` frames — the wire protocol is one.
+
+`SqlEngine` executes the query, and the Netty layer encodes cells with LE tags. Inside the engine rows live as bytes: keys and values in filters, joins and indexes are `byte[]` / spans over the binary record. Decoding into Java objects happens only at the very boundary — when the result row is assembled for the client.
 
 That is why you should not ask the engine for "the entire table in application memory": streaming is cheaper on both sides.
 
@@ -90,4 +94,4 @@ That is why you should not ask the engine for "the entire table in application m
 
 The compare suite contains a `SELECT stream consume` JMH track (µs/op) — it measures streaming overhead, not TPS. Throughput is measured separately with the load generator: [capacity and SLO](../performance/capacity-slo.md), [results summary](../performance/results.md).
 
-**Related:** [Java client](java-client.md), [transactions](transactions.md), [SQL fundamentals](../sql/fundamentals.md), [EXPLAIN and AQE](../sql/explain-and-aqe.md).
+Next: [Java client](java-client.md), [transactions](transactions.md), [EXPLAIN and AQE](../sql/explain-and-aqe.md).

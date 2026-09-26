@@ -12,15 +12,15 @@ Object names are unquoted words — ASCII letters, digits and underscore, matche
 CREATE TABLE IF NOT EXISTS orders (
   id          BIGINT PRIMARY KEY,
   customer_id BIGINT NOT NULL,
-  total       DOUBLE,
-  status      VARCHAR,
-  created_at  TIMESTAMPTZ
+  total       DOUBLE DEFAULT 0,
+  status      VARCHAR DEFAULT 'new',
+  created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 `IF NOT EXISTS` makes the statement repeatable: if the table already exists, the statement succeeds without an error and without changes. That is convenient for bootstrap scripts that run on every application start.
 
-For column types see [types](types.md).
+Column `DEFAULT` is a literal or a clock builtin (`NOW()` / `CURRENT_TIMESTAMP` / `CURRENT_DATE`). It materializes once at `INSERT`/`UPSERT` when the column is omitted from the list. For column types see [types](types.md).
 
 ### Primary key
 
@@ -135,10 +135,14 @@ A single column gives a B+ tree of pointers, several columns give a composite tr
 ```sql
 ALTER TABLE orders ADD COLUMN channel VARCHAR;
 ALTER TABLE orders ADD CONSTRAINT total_nonneg CHECK (total >= 0);
+ALTER TABLE orders ADD PRIMARY KEY (id);
+ALTER TABLE orders ADD CONSTRAINT fk_orders_customer
+  FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE RESTRICT;
+ALTER TABLE orders DROP CONSTRAINT fk_orders_customer;
 ALTER TABLE orders DROP COLUMN channel;
 ```
 
-For existing rows an added column reads as `NULL` — no data rewrite is needed. Column type changes and renames are not supported.
+For existing rows an added column reads as `NULL` — no data rewrite is needed. Column type changes and renames are not supported. `DROP CONSTRAINT` removes FK and CHECK; PRIMARY KEY cannot be dropped alone — replace via `ADD PRIMARY KEY`.
 
 ## DROP TABLE
 
@@ -240,11 +244,10 @@ The privilege set is `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`. The target i
 | The `JSONB` type | Use `JSON` or `VARCHAR` — it is opaque UTF-8 text |
 | An unknown type token | The allowed list is in [types](types.md) |
 | `ALTER TABLE ... ALTER COLUMN TYPE`, renames | Not supported: recreate the table |
-| Column `DEFAULT <expression>` | Defaults come from the application or from `IDENTITY`/`SERIAL` |
 | `CREATE BITMAP INDEX` over several columns | Bitmap is single-column only |
 | `DROP SCHEMA … CASCADE` | Cascading schema drop is not supported; omit CASCADE or use RESTRICT |
 | Partial indexes, expression indexes | Only columns are indexed |
-| `ALTER TABLE … DROP CONSTRAINT` | Constraints are dropped by recreating the table |
+| `ALTER TABLE … DROP CONSTRAINT` for PRIMARY KEY | PK cannot be dropped alone — replace via `ADD PRIMARY KEY`; `DROP CONSTRAINT` removes FK/CHECK |
 | A double-quoted identifier | Names are unquoted words only |
 
 A parse error or a catalog validation error means the statement did not apply at all. There is no such thing as partially applied DDL.

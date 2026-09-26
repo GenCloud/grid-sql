@@ -1,8 +1,10 @@
 # Replication
 
-Replication ships committed journal records to other nodes, gates write admission on ORCHID quorum, and repairs gaps during catch-up. It is a separate layer from local durability: peers are enabled with `grid.replication.enabled`, while [durability](durability.md) works with no peers at all.
+Two nodes, one journal. How does the second learn about a commit, and when may the cluster accept a write at all? Replication ships committed journal records to peers, admits writes only under ORCHID agreement (phase + checksum), and closes gaps on catch-up.
 
-Node-to-node transport is always Netty on its own port. Every node keeps its own data directory.
+That is **not** the same as durability on disk: peers turn on with `grid.replication.enabled`, while [durability](durability.md) works with none.
+
+Node-to-node transport is always Netty on its own port. Every node keeps its own data directory (not a shared NFS for the cluster).
 
 ## Minimal highly available pair
 
@@ -114,4 +116,4 @@ Site fencing (`grid.replication.region.enabled`, default `false`) separates Acti
 - Orchestrator probes use Actuator `/health/liveness` and `/health/readiness`. The HTTP lag-compare endpoint is a lab aid, not writer discovery.
 - Declared durability behaviour assumes `op-log.fsync: true` on every node that may become a writer.
 
-**Related:** [ORCHID](../../understand/orchid-consensus.md), [replication network](../../understand/replication-network.md), [monitoring](../monitoring.md), [failures](../operations/failures.md), [capacity](../../performance/capacity-slo.md).
+Next: [ORCHID](../../understand/orchid-consensus.md), [replication network](../../understand/replication-network.md), [monitoring](../monitoring.md).

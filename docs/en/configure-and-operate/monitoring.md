@@ -1,6 +1,6 @@
 # Monitoring
 
-A node publishes its state through Spring Actuator health endpoints and Micrometer metrics. Orchestrators use the health probes; dashboards and alerts use the metrics. Neither surface is used for writer discovery — clients learn the writer from wire metadata, described in [role promotion](operations/ha-promote.md).
+The orchestrator asks: may we send traffic to this node? The client asks something else: who is the writer right now? The first answer is Actuator readiness and metrics. The second is protocol meta (`ServerMeta` / `PROMOTE_NOTIFY`), not HTTP. See [promote a node](operations/ha-promote.md).
 
 ## Endpoints
 
@@ -155,4 +155,4 @@ Incident procedures: [failures](operations/failures.md).
 
 Lab-host TPS figures: [capacity](../performance/capacity-slo.md). How to drive load with JMeter: [load and SLO](../tools/jmeter-load-slo.md). On duty, lean on readiness and the signals above — not on TPS numbers.
 
-**Related:** [failures](operations/failures.md), [role promotion](operations/ha-promote.md), [replication](configuration/replication.md), [durability](configuration/durability.md).
+Next: [failures](operations/failures.md), [promote a node](operations/ha-promote.md), [replication](configuration/replication.md).

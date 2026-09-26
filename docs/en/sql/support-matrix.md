@@ -72,7 +72,7 @@ Positional `?` parameters are materialized into SQL literals before parsing, so 
 | `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET col = value, …` | Values may be literals, `EXCLUDED.col`, `COALESCE(…)`, or clock builtins; the optional column list names the primary key or a unique index |
 | `UPDATE` | `SET` assignments, optional `FROM source`, mandatory `WHERE`, optional `RETURNING` | See the assignment table below |
 | `DELETE` | Mandatory `WHERE` | No unconditional delete, no `RETURNING` |
-| `TRUNCATE TABLE` | Unconditional clear of all rows | Fail-closed OpLog / TX stage path (same durability as DELETE) |
+| `TRUNCATE TABLE` | Unconditional clear of all rows | Same journal / TX path as DELETE: on failure, reject to the client with no partial visibility |
 | `MERGE` | `USING (VALUES (…))` or `USING table`, `ON a = b`, `WHEN MATCHED THEN UPDATE`, `WHEN NOT MATCHED THEN INSERT` | Single source row; `WHEN MATCHED` takes literal assignments only |
 
 `WHERE` is mandatory on `UPDATE` and `DELETE`. Unconditional mass delete uses `TRUNCATE TABLE` (not a bare `DELETE`).

@@ -12,15 +12,15 @@ DDL меняет каталог: `TableCatalog` и `TableSchema`. Разбор �
 CREATE TABLE IF NOT EXISTS orders (
   id          BIGINT PRIMARY KEY,
   customer_id BIGINT NOT NULL,
-  total       DOUBLE,
-  status      VARCHAR,
-  created_at  TIMESTAMPTZ
+  total       DOUBLE DEFAULT 0,
+  status      VARCHAR DEFAULT 'new',
+  created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 `IF NOT EXISTS` делает оператор повторяемым: если таблица уже есть, оператор проходит без ошибки и без изменений. Это удобно для скриптов инициализации, которые выполняются при каждом старте приложения.
 
-Типы колонок — см. [типы](types.md).
+`DEFAULT` у колонки — литерал или часы (`NOW()` / `CURRENT_TIMESTAMP` / `CURRENT_DATE`). Материализуется один раз при `INSERT`/`UPSERT`, если колонка опущена в списке. Типы колонок — см. [типы](types.md).
 
 ### Первичный ключ
 
@@ -135,10 +135,14 @@ DROP INDEX idx_orders_customer ON orders;
 ```sql
 ALTER TABLE orders ADD COLUMN channel VARCHAR;
 ALTER TABLE orders ADD CONSTRAINT total_nonneg CHECK (total >= 0);
+ALTER TABLE orders ADD PRIMARY KEY (id);
+ALTER TABLE orders ADD CONSTRAINT fk_orders_customer
+  FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE RESTRICT;
+ALTER TABLE orders DROP CONSTRAINT fk_orders_customer;
 ALTER TABLE orders DROP COLUMN channel;
 ```
 
-Добавленная колонка у существующих строк читается как `NULL` — переписывать данные не нужно. Смены типа колонки и переименования нет.
+Добавленная колонка у существующих строк читается как `NULL` — переписывать данные не нужно. Смены типа колонки и переименования нет. `DROP CONSTRAINT` снимает FK и CHECK; PRIMARY KEY отдельно не сбрасывается — замена через `ADD PRIMARY KEY`.
 
 ## DROP TABLE
 
@@ -240,11 +244,10 @@ DROP ROLE readers;
 | Тип `JSONB` | Используйте `JSON` или `VARCHAR` — это непрозрачный текст UTF-8 |
 | Незнакомый токен типа | Список допустимых — в [типах](types.md) |
 | `ALTER TABLE ... ALTER COLUMN TYPE`, переименование | Не поддерживается: пересоздайте таблицу |
-| `DEFAULT <выражение>` у колонки | Значения по умолчанию задаёт приложение или `IDENTITY`/`SERIAL` |
 | `CREATE BITMAP INDEX` по нескольким колонкам | Bitmap — только одна колонка |
 | `DROP SCHEMA … CASCADE` | Каскадного удаления схемы нет; без CASCADE или с RESTRICT |
 | Частичные индексы, индексы по выражению | Индексируются только колонки |
-| `ALTER TABLE … DROP CONSTRAINT` | Ограничение снимается пересозданием таблицы |
+| `ALTER TABLE … DROP CONSTRAINT` для PRIMARY KEY | PK отдельно не сбрасывается — замена через `ADD PRIMARY KEY`; `DROP CONSTRAINT` снимает FK/CHECK |
 | Идентификатор в двойных кавычках | Имена — только слова без кавычек |
 
 Ошибка разбора или проверки каталога означает, что оператор не применился вовсе. Частично применённого DDL не бывает.

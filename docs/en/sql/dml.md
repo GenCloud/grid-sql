@@ -27,7 +27,7 @@ INSERT INTO orders (id, customer_id, total) VALUES
   (4, 101, 30.00);
 ```
 
-Columns not listed get `NULL` — unless they carry `NOT NULL`, `IDENTITY` or `SERIAL`.
+Columns not listed take a declared `DEFAULT` (literal / `NOW()` / `CURRENT_TIMESTAMP` / `CURRENT_DATE`), otherwise `NULL` — unless they carry `NOT NULL`, `IDENTITY` or `SERIAL`.
 
 ## ON CONFLICT
 
@@ -68,7 +68,7 @@ UPDATE orders SET total = total + 10, status = 'updated' WHERE id = 1;
 
 Such forms are evaluated on the server against the current row: the cursor reads the field, the value is recomputed, the row is re-encoded in full. Races are closed by a record lock, not by an optimistic client-side rewrite. Mixing a read-modify-write with literal assignments produces a single merge — one write of the final row bytes, not two sequential updates.
 
-That list is exhaustive: subtraction, multiplication and division are not in the grammar, and numeric literals carry no sign. To decrease a value, read it and assign the result inside a transaction, where the record lock covers the read-then-write:
+That list is exhaustive: subtraction, multiplication and division are not in the grammar, and numeric literals **are signed** (`-10` is accepted); binds may also supply negative INT/LONG. To decrease a value relative to the current one, use `SET total = total + (-10)` or read-then-assign inside a transaction:
 
 ```sql
 BEGIN;
@@ -95,6 +95,14 @@ DELETE FROM orders WHERE customer_id = 100 AND status = 'draft';
 `WHERE` is mandatory here too. A delete appends a `DELETE` record for the key to the journal and removes entries from secondary indexes.
 
 If a foreign key references the table, behaviour depends on `ON DELETE` in the [DDL](ddl.md): `RESTRICT` rejects the delete, `CASCADE` deletes child rows, `SET NULL` clears the references.
+
+## TRUNCATE
+
+```sql
+TRUNCATE TABLE orders;
+```
+
+Unconditional clear of every row. There is no `WHERE` here — unlike `DELETE`, where a condition is mandatory. The path is the same journal-backed mass delete: on failure, reject to the client with no partial visibility. Details: [support matrix](support-matrix.md).
 
 ## MERGE
 

@@ -1,10 +1,10 @@
 # Durability
 
-A node keeps data on disk through the mutation journal (OpLog) and sealed map files (`.gmap`, `.sbpt`, `.sbm`). That path needs no peers: `grid.durability.enabled` is independent of `grid.replication.enabled`, and a solo node can be fully durable with an empty peer list.
+The node restarts. Rows the client already committed must still be there. Memory alone is not enough: you need the on-disk journal (OpLog) and sealed map files (`.gmap`, `.sbpt`, `.sbm`). Until the journal confirms the write, other sessions do not see the row. Better a client reject than “in memory, not yet on disk”.
 
-With durability enabled a commit is appended to the journal and acknowledged before the row becomes visible in the in-memory map. If the journal write fails, the commit is aborted instead of partially applied. Memory holds a working set, not the only copy of the data.
+That path needs no peers: `grid.durability.enabled` is independent of `grid.replication.enabled`. A solo node with an empty peer list is a normal, supported mode.
 
-Peer shipping, quorum, and catch-up are a separate layer — see [replication](replication.md).
+Shipping the journal to peers, quorum, and catch-up are a separate layer — [replication](replication.md).
 
 ## Reference profile
 
@@ -119,4 +119,4 @@ Under `LAZY`, low memory usage right after step 3 is expected and is not data lo
 - The PITR archive must be enabled before the incident; it cannot be produced retroactively.
 - With durability enabled, memory is a working set. Sizing memory as if it were the only copy will mislead capacity planning.
 
-**Related:** [replication](replication.md), [PITR](../operations/pitr.md), [backup and restore](../operations/backup-restore.md), [write path](../../understand/write-path-staging.md), [capacity](../../performance/capacity-slo.md).
+Next: [replication](replication.md), [PITR](../operations/pitr.md), [write path](../../understand/write-path-staging.md).

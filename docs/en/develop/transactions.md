@@ -1,6 +1,6 @@
 # Transactions
 
-Grid transactions live in the `org.genfork.grid.sql.tx` package. The model is short: until `COMMIT`, changes accumulate in a dirty session buffer and are invisible to everyone else; at `COMMIT` they become visible all at once and — when durability is enabled — reach the journal first and the in-memory map only afterwards.
+Two sessions, one key. Until the first transaction commits, the second must not see its dirty rows. In Grid, until `COMMIT` changes live only in the session buffer; on `COMMIT` — with durability on — the journal comes first, then the map. Better a reject than a half-visible commit.
 
 ## The parts
 
@@ -89,7 +89,7 @@ Mono<Void> partial = Mono.usingWhen(
 
 Locks are taken per record key through `SqlRecordLockManager`: a fair queue on `(table, key)`. Waiting happens on a logic virtual thread, never on the Netty event loop.
 
-`FOR UPDATE` and `SKIP LOCKED` execute **on the writer only** — a read replica rejects such a statement. With replication on, peer-lock agents are wired from **replication `peers`** (not `grid.sql.distributed-peers` — that knob is read-only SELECT/JOIN fan-out); the same indexed wire keys are locked on peers via `DistForUpdateCoordinator` (fail-closed Netty path). Without agents, behaviour stays local-only. Multi-table / INNER JOIN `FOR UPDATE` locks are supported. Prepare/commit-dec peer votes are product-wired — not external XA. Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
+`FOR UPDATE` and `SKIP LOCKED` execute **on the writer only** — a read replica rejects such a statement. With replication on, peer-lock agents are wired from **replication `peers`** (not `grid.sql.distributed-peers` — that knob is read-only SELECT/JOIN fan-out); the same indexed wire keys are locked on peers via `DistForUpdateCoordinator`. A Netty error on a peer lock is a **reject to the client**, not a silent local-only commit. Without agents, behaviour stays local-only. Multi-table / INNER JOIN `FOR UPDATE` locks are supported. Prepare/commit-dec peer votes are product-wired (2PC-lite for peer row locks) — not external XA. Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 A typical queue pattern:
 
@@ -111,7 +111,7 @@ COMMIT;
 
 A commit unit is assembled from the participating `table#shard` streams: `MultiShardCommitBarrier` opens all streams, lets the operations through and closes them together, rolling back the already opened ones if something fails midway.
 
-This is a **local barrier on the proposer**, not full XA 2PC over foreign resource managers. Dist `FOR UPDATE` can take **peer row locks** and use prepare/commit-dec scaffolding (`DistForUpdatePrepareVotes`) when agents are wired — that is still not an external XA coordinator.
+This is a **local barrier on the writer**, not full XA 2PC over foreign resource managers. Dist `FOR UPDATE` can take **peer row locks** and use prepare/commit-dec scaffolding (`DistForUpdatePrepareVotes`) when agents are wired — that is still not an external XA coordinator.
 
 Cross-DC uses envelope membership (`TxEnvelopeCoordinator`): the set of streams in a transaction is written into the `TX_BEGIN` marker, and shipping to the remote site plus publication in the remote map happen only after every stream of the envelope has committed. In other words, half a transaction cannot become visible remotely.
 
@@ -124,4 +124,4 @@ The practical consequence: keep a transaction within one logical key set. The mo
 - Treating `maxTxContexts` as a connection count, or opening a socket per transaction.
 - Calling `.block()` on `commit()` / `rollback()` inside service code — only at the application boundary (`main`, CLI, test).
 
-**Related:** [Java client](java-client.md), [the write path](../understand/write-path-staging.md), [replica reads](../configure-and-operate/operations/replica-reads.md), [durability](../configure-and-operate/configuration/durability.md).
+Next: [Java client](java-client.md), [write path](../understand/write-path-staging.md), [replica reads](../configure-and-operate/operations/replica-reads.md).

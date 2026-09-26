@@ -1,37 +1,35 @@
 # Replication network path
 
-Nodes exchange the mutation journal over Netty (`NettyReplicationTransport`). There is no second transport: the same channel carries traffic inside a data centre and between data centres. The OpLog and the ORCHID state always live on disk under `op-log.data-dir`.
+Peers must receive the same journal the writer confirmed. Exchange is over Netty (`NettyReplicationTransport`) — there is no second transport inside a site or across sites. The journal and ORCHID state live on disk under `op-log.data-dir`.
 
-In the demo configuration replication listens on **5615** (primary) and **5616** (replica); SQL listens on **15432** and **15433**.
+In the demo, replication listens on **5615** / **5616**, SQL on **15432** / **15433**.
 
-**Do not send SQL to 5615/5616.** Those ports carry replication frames, and an SQL client gets `bad frameLen`. Applications use the SQL port. Incident triage: [failures](../configure-and-operate/operations/failures.md).
+**Do not send SQL to 5615/5616.** Those ports carry replication frames; an SQL client gets `bad frameLen`. Incidents: [failures](../configure-and-operate/operations/failures.md).
 
 ## How a change reaches other nodes
 
 ```
-MutationRecorder
+ORCHID admission (phase + checksum)
       │
-   ORCHID: phases + digest agreement
+OpLog: append + confirmation
       │
-   OpLog: append + write confirmation
+put into the map (the row becomes visible)
       │
-   put into the map (the row becomes visible)
+ship to peers over Netty
       │
-   ship to peers over Netty
-      │
-   ReplicaApplier on the peer → peer map
+apply on peer → peer map
 ```
 
 *Figure 1. Shipping to peers is the last step, not the first.*
 
 Two similar-sounding mechanisms should be kept apart:
 
-| Mechanism | What it distributes |
-|-----------|---------------------|
-| Replication | Journal operations to peers: `UPSERT`, `DELETE`, transaction markers |
-| Shard map-reduce (`DistributedKeyFanOut`) | Spreads **shard-local keys** across threads of a single node for heavy SELECTs |
+| Mechanism | What it does |
+|-----------|--------------|
+| Replication | Ships journal operations to peers: `UPSERT`, `DELETE`, transaction markers |
+| Shard map-reduce | Spreads **shard-local keys** across threads of one node for heavy SELECTs |
 
-The second is not SQL fan-out to peers. The old mode that sent an identical query to every node is obsolete and disabled.
+The second is not SQL fan-out to peers. The old “same SQL to every node” mode is disabled.
 
 ## Wire frames
 
@@ -146,6 +144,4 @@ Comparing locus digests between nodes is an operator action over SQL TCP and adm
 | Witness in multi-site | Takes part in region fencing; does not hold the Active writer role |
 | SQL sent to 5615 | `bad frameLen`: that is the replication port, not SQL TCP |
 
-## Related
-
-[ORCHID](orchid-consensus.md), [replication state](replication-state.md), [shard placement](overlay-and-swarm.md), [multi-site](../configure-and-operate/operations/multi-dc.md), [monitoring](../configure-and-operate/monitoring.md).
+Next: [ORCHID](orchid-consensus.md), [replication state](replication-state.md), [monitoring](../configure-and-operate/monitoring.md).
