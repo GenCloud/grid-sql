@@ -239,7 +239,7 @@ public class QueryParser {
 
 		int offset = 0;
 		// No LIMIT → unbounded scan (avoid Integer.MAX_VALUE overflow in offset+limit helpers).
-		int limit = 1_000_000_000;
+		int limit = PagingData.UNBOUNDED_LIMIT;
 
 		if (query.LIMIT() != null) {
 			final LimitClauseContext limitClauseContext = query.limitClause();
@@ -476,12 +476,18 @@ public class QueryParser {
 				throw new IllegalArgumentException(
 						"non-constant CASE in WHERE not supported; use CAST or literal");
 			}
+			// value : '-'? INT | '-'? FLOAT — use full text so leading minus is kept
 			if (ctx.INT() != null) {
-				return Integer.parseInt(ctx.INT().getText());
+				final String text = ctx.getText();
+				try {
+					return Integer.parseInt(text);
+				} catch (NumberFormatException e) {
+					return Long.parseLong(text);
+				}
 			}
 
 			if (ctx.FLOAT() != null) {
-				return Double.parseDouble(ctx.FLOAT().getText());
+				return Double.parseDouble(ctx.getText());
 			}
 
 			if (ctx.STRING() != null) {

@@ -18,7 +18,9 @@ package org.genfork.grid.query.filters.impl;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+
 import com.google.common.collect.Sets;
+
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.AbstractIndexOperation;
 import org.genfork.grid.mem.index.IndexPointerRef;
@@ -26,11 +28,16 @@ import org.genfork.grid.mem.index.btree.CompositeTreeKey;
 import org.genfork.grid.mem.index.btree.IndexOperationResult;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.query.filters.FilterCondition;
+import org.genfork.grid.query.filters.PkIndexScanUtil;
 import org.genfork.grid.query.plan.ExplainQuery;
 import org.genfork.grid.serial.FieldMetaData;
 
 /**
- * @author: GenCloud @date: 2025/09 @since: 1.0
+ * Negation over a child filter; universe = all PRIMARY KEY postings.
+ *
+ * @author: GenCloud
+ * @date: 2025/09
+ * @since: 1.0
  */
 public class NotCondition implements FilterCondition {
 	private final FilterCondition child;
@@ -45,13 +52,19 @@ public class NotCondition implements FilterCondition {
 	}
 
 	@Override
-	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index, Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes, FieldMetaData primaryKeyField, ExplainQuery.QueryPlan queryPlan) {
+	public IndexOperationResult execute(Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
+	                                    Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
+	                                    FieldMetaData primaryKeyField,
+	                                    ExplainQuery.QueryPlan queryPlan) {
 		final IndexOperationResult childResult = child.execute(property2Index, compositeIndexes, primaryKeyField, queryPlan);
 		if (childResult == null) {
 			return null;
 		}
-		final AbstractIndexOperation<byte[], SingleTreeKey> index = property2Index.get(primaryKeyField.getName());
-		final IndexOperationResult allResult = index.searchAll();
+		final IndexOperationResult allResult = PkIndexScanUtil.searchAllPrimaryKeys(
+				property2Index, compositeIndexes, primaryKeyField);
+		if (allResult == null || allResult.getPointers() == null) {
+			return IndexOperationResult.EMPTY;
+		}
 		final Sets.SetView<IndexPointerRef> diff = Sets.difference(allResult.getPointers(), childResult.getPointers());
 		final IndexOperationResult result = new IndexOperationResult();
 		result.setPointers(diff);

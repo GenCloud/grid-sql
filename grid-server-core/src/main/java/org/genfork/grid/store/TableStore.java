@@ -31,6 +31,8 @@ import java.util.function.ToLongFunction;
 
 import org.springframework.util.CollectionUtils;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.CheckDef;
 import org.genfork.grid.catalog.IndexDef;
@@ -866,6 +868,14 @@ public final class TableStore {
 			replicationCoordinator.ensureShardHydrated(schema.tableName(), shard);
 		}
 		return processors[shard];
+	}
+
+	/**
+	 * Test hook: shard processor for a key (installCommitted / map visibility IT).
+	 */
+	@VisibleForTesting
+	public GridEntriesProcessor processorForTest(byte[] key) {
+		return getProcessor(key);
 	}
 
 	private void ensureAllShardsHydrated() {

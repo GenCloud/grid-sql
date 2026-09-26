@@ -22,6 +22,7 @@ import org.genfork.grid.mem.index.btree.CompositeTreeKey;
 import org.genfork.grid.mem.index.btree.IndexOperationResult;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.query.filters.FilterCondition;
+import org.genfork.grid.query.filters.PkIndexScanUtil;
 import org.genfork.grid.query.plan.ExplainQuery;
 import org.genfork.grid.serial.FieldMetaData;
 import org.genfork.grid.serial.LogicalFieldCursor;
@@ -77,14 +78,7 @@ public final class UdfComparisonCondition implements FilterCondition {
 			FieldMetaData primaryKeyField,
 			ExplainQuery.QueryPlan queryPlan
 	) {
-		if (primaryKeyField == null || property2Index == null) {
-			return IndexOperationResult.EMPTY;
-		}
-		final AbstractIndexOperation<byte[], SingleTreeKey> pk = property2Index.get(primaryKeyField.getName());
-		if (pk == null) {
-			return IndexOperationResult.EMPTY;
-		}
-		return pk.searchAll();
+		return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyField);
 	}
 
 	@Override

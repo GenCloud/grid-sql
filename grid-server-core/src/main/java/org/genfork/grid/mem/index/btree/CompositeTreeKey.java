@@ -134,14 +134,28 @@ public class CompositeTreeKey implements TreeKey<byte[][]> {
 		final CompositeTreeKey otherCompositeKey = (CompositeTreeKey) other;
 		final int otherCmpIndex = otherCompositeKey.cmpIndex;
 
-		if (cmpIndex != -1) {
-			// This key is partial — compare only the selected column
-			if (cmpIndex >= otherKey.length) {
-				return -1;
+		if (cmpIndex != NO_PARTIAL_COLUMN) {
+			// Single-column partial (createKey(field, value)): key holds one value at [0],
+			// cmpIndex selects which leaf column to compare.
+			if (key.length == 1) {
+				if (cmpIndex >= otherKey.length) {
+					return -1;
+				}
+				final byte[] otherValue = otherKey[cmpIndex];
+				return ARRAYS_COMPARATOR.compare(key[0], otherValue);
 			}
-
-			final byte[] otherValue = otherKey[cmpIndex];
-			return ARRAYS_COMPARATOR.compare(key[0], otherValue);
+			// Left-prefix multi: key[0..len) vs otherKey[0..len); tree order is left-to-right.
+			final int prefixLen = key.length;
+			if (prefixLen > otherKey.length) {
+				return 1;
+			}
+			for (int i = 0; i < prefixLen; i++) {
+				final int cmp = ARRAYS_COMPARATOR.compare(key[i], otherKey[i]);
+				if (cmp != 0) {
+					return cmp;
+				}
+			}
+			return 0;
 		}
 
 		if (otherCmpIndex != -1) {

@@ -61,9 +61,13 @@ foreach ($b in $Benches) {
   Write-Host "=== JMH $b (sequential) ==="
   $extra = @()
   if ($env:JMH_FAST -eq "1") { $extra += "-Djmh.fast=true" }
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   & mvn -pl grid-server-core -Pjmh "-Dtest=$b" "-Dsurefire.failIfNoSpecifiedTests=false" @extra test
-  if ($LASTEXITCODE -ne 0) {
-    throw "JMH failed for $b"
+  $mvnExit = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($null -ne $mvnExit -and $mvnExit -ne 0) {
+    throw "JMH failed for $b exit=$mvnExit"
   }
 }
 

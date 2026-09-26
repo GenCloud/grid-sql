@@ -33,6 +33,7 @@ import org.genfork.grid.mem.index.btree.CompositeTreeKey;
 import org.genfork.grid.mem.index.btree.IndexOperationResult;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.query.filters.FilterCondition;
+import org.genfork.grid.query.filters.PkIndexScanUtil;
 import org.genfork.grid.query.plan.ExplainQuery;
 import org.genfork.grid.query.plan.QueryPagingContext;
 import org.genfork.grid.replication.snapshot.sealed.SealedFallbackBitmap;
@@ -91,13 +92,7 @@ public class LogicalOperatorCondition implements FilterCondition {
 		final AbstractIndexOperation<byte[], SingleTreeKey> index = property2Index.get(field);
 		if (index == null) {
 			// Unindexed column: candidate set = all PK rows; residual matches() applied by caller.
-			if (primaryKeyField != null) {
-				final AbstractIndexOperation<byte[], SingleTreeKey> pk = property2Index.get(primaryKeyField.getName());
-				if (pk != null) {
-					return pk.searchAll();
-				}
-			}
-			return IndexOperationResult.EMPTY;
+			return PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyField);
 		}
 		ExplainQuery.QueryPlanNode queryPlanNode = null;
 		if (queryPlan != null) {

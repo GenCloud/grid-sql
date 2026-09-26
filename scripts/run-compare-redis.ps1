@@ -28,5 +28,13 @@ $env:COMPARE_RESULTS_DIR = $Results
 
 Set-Location $Root
 # -Pjmh: compile index/benchmarks (default Surefire excludes them); *Harness included in profile
+# Continue around mvn: JDK incubator WARNING on stderr must not trip Stop NativeCommandError.
+$prevEapMvn = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 mvn -q -pl grid-server-core -Pjmh "-Dtest=RedisJedisCompareHarness" "-Dsurefire.failIfNoSpecifiedTests=false" test
+$mvnExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEapMvn
+if ($null -ne $mvnExit -and $mvnExit -ne 0) {
+  throw "RedisJedisCompareHarness failed: $mvnExit"
+}
 Write-Host "Redis compare via host Jedis complete (stamp=$Stamp)"

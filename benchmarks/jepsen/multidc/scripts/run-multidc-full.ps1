@@ -249,7 +249,7 @@ function Run-Workload([string]$Workload) {
   $out | ForEach-Object { Write-Host $_ }
   Fetch-Store
   $text = ($out | Out-String)
-  # Prefer final Elle/Knossos summary — nested :timeline {:valid? true} must not count as PASS.
+  # Prefer final Elle/Knossos summary - nested :timeline {:valid? true} must not count as PASS.
   if ($text -match "Analysis invalid" -or $text -match ":valid\? false") {
     $mFail = [regex]::Match($text, "LEIN_EXIT=(\d+)")
     $codeFail = if ($mFail.Success) { [int]$mFail.Groups[1].Value } else { 1 }
@@ -268,6 +268,12 @@ function Run-Workload([string]$Workload) {
   }
   $m = [regex]::Match($text, "LEIN_EXIT=(\d+)")
   $code = if ($m.Success) { [int]$m.Groups[1].Value } elseif ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  # Knossos OOM (137) / missing validity on register: offline re-check with DB nodes stopped (16g).
+  if ($Workload -eq "register" -and $code -ne 0 -and $text -notmatch ":valid\? false" -and $text -notmatch "Analysis invalid") {
+    Write-Host "Register LEIN_EXIT=$code without definitive invalid - Offline Knossos fallback"
+    $off = Offline-Analyze-Register
+    return @{ code = $off; text = $text }
+  }
   return @{ code = $code; text = $text }
 }
 function Latest-StoreDir([string]$Workload) {

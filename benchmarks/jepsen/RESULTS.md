@@ -6,16 +6,15 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-09-25-jepsen-full |
-| date | 2026-09-25T14:23:11+03:00 |
-| git | unknown |
+| stamp | 2026-09-26-select-star-jepsen |
+| date | 2026-09-26T10:04:47.6972050+03:00 |
+| git | 47e2276 |
 | host | DESKTOP-4IC511D |
 | mode | `full-jepsen` |
 | outcome | `PASS` |
 | notes | register=PASS; append=PASS |
 
 ## History
-
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
 
 | Mode | register | append | outcome |
@@ -613,4 +612,24 @@ TOP JMeter load stamps (TPS): [`SUMMARY.md`](../../grid-server-core/benchmarks/r
 - chaos-it: not-run
 - full-jepsen: PASS
 - command: run-jepsen.sh register+append (time-limit=30)
+- notes: register=PASS; append=PASS
+
+### 2026-09-26-composite-prefix-jepsen
+- mode: full-jepsen
+- outcome: PASS
+- git: 47e2276
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS
+
+### 2026-09-26-select-star-jepsen
+- mode: full-jepsen
+- outcome: PASS
+- git: 47e2276
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=60)
 - notes: register=PASS; append=PASS

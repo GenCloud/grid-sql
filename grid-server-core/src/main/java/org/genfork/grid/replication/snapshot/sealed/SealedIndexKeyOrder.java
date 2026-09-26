@@ -15,13 +15,15 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
+import jodd.util.Bits;
+
 import java.util.Objects;
 
 /**
- * Unsigned byte-order compare for sealed index keys (single-column wire keys).
+ * Wire-key compare for sealed open-range cold-merge (single-column keys).
  * <p>
- * Shared by open-range cold-merge; does not change length-first {@code ArraysComparator}
- * used for BPTree leaf layout.
+ * Fixed-width INT (4) / LONG (8) match signed {@link org.genfork.grid.mem.index.btree.comparator.ArraysComparator}.
+ * Other lengths stay unsigned byte order with length-last tie-break (unlike length-first BPTree).
  *
  * @author: GenCloud
  * @date: 2026/05
@@ -34,6 +36,12 @@ public final class SealedIndexKeyOrder {
 	public static int compareUnsigned(byte[] left, byte[] right) {
 		Objects.requireNonNull(left, "left");
 		Objects.requireNonNull(right, "right");
+		if (left.length == 4 && right.length == 4) {
+			return Integer.compare(Bits.getInt(left, 0), Bits.getInt(right, 0));
+		}
+		if (left.length == 8 && right.length == 8) {
+			return Long.compare(Bits.getLong(left, 0), Bits.getLong(right, 0));
+		}
 		final int min = Math.min(left.length, right.length);
 		for (int i = 0; i < min; i++) {
 			final int a = Byte.toUnsignedInt(left[i]);

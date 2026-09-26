@@ -62,6 +62,7 @@ import org.genfork.grid.query.filters.impl.LogicalOperatorCondition;
 import org.genfork.grid.query.filters.impl.NotCondition;
 import org.genfork.grid.query.filters.impl.OrCondition;
 import org.genfork.grid.query.plan.AggregateSpec;
+import org.genfork.grid.query.filters.PkIndexScanUtil;
 import org.genfork.grid.query.plan.ExplainQuery;
 import org.genfork.grid.query.plan.FilterConditionData;
 import org.genfork.grid.query.plan.JoinSpec;
@@ -360,20 +361,10 @@ public class GridCompositeIndex {
 	 */
 	public void forEachPrimaryKey(Consumer<byte[]> consumer) {
 		Objects.requireNonNull(consumer, "consumer");
-		final AbstractIndexOperation<byte[], SingleTreeKey> pkTree = resolveSingleColumnIndex(primaryKeyField.getName());
-		final IndexOperationResult result;
-		if (pkTree != null) {
-			result = pkTree.searchAll();
-		} else {
-			final List<String> pkCols = schema.pkColumns().stream().map(ColumnDef::name).toList();
-			final AbstractIndexOperation<byte[][], CompositeTreeKey> composite = resolveCompositeIndex(pkCols);
-			if (composite == null) {
-				throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
-			}
-			result = composite.searchAll();
-		}
-		if (result == null) {
-			return;
+		final IndexOperationResult result = PkIndexScanUtil.searchAllPrimaryKeys(
+				property2Index, compositeIndexes, primaryKeyField);
+		if (result == null || result == IndexOperationResult.EMPTY) {
+			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
 		}
 		result.expandBitmapPointers();
 		final Set<IndexPointerRef> pointers = result.getPointers();
@@ -909,7 +900,7 @@ public class GridCompositeIndex {
 		}
 		if (rowResolver != null && needsResidualMatch(conditionTree)) {
 			// Ordered leaf: preserve encounter order with ArrayList; unordered needs Set semantics.
-			final Set<IndexPointerRef> residual = orderedLeafScan ? new LinkedHashSet<>(IndexPointerRef.listCapacity(filterPaging != null && filterPaging.limit() > 0 ? Math.max(0, filterPaging.offset()) + filterPaging.limit() : 16)) : new LinkedHashSet<>();
+			final Set<IndexPointerRef> residual = orderedLeafScan ? new LinkedHashSet<>(IndexPointerRef.listCapacity(filterPaging != null && filterPaging.hasBoundedLimit() ? Math.max(0, filterPaging.offset()) + filterPaging.limit() : 16)) : new LinkedHashSet<>();
 			for (IndexPointerRef ptr : filteredPointers) {
 				final byte[] key = ptr.resolveKey();
 				if (key == null) {
@@ -919,7 +910,7 @@ public class GridCompositeIndex {
 				if (valueBytes != null && conditionTree.matches(valueBytes, this.schema)) {
 					residual.add(ptr);
 					// Ordered leaf + LIMIT: residual cannot invent earlier rows — stop at page need.
-					if (orderedLeafScan && filterPaging != null && filterPaging.limit() > 0) {
+					if (orderedLeafScan && filterPaging != null && filterPaging.hasBoundedLimit()) {
 						final int need = Math.max(0, filterPaging.offset()) + filterPaging.limit();
 						if (residual.size() >= need) {
 							break;
@@ -954,7 +945,7 @@ public class GridCompositeIndex {
 	 * uses {@link CompositeIndexCondition#executeLimited} directly (no ScopedValue).
 	 */
 	private IndexOperationResult executeFilterWithPaging(FilterCondition conditionTree, PagingData filterPaging, ExplainQuery.QueryPlan queryPlan) {
-		if (conditionTree instanceof CompositeIndexCondition composite && filterPaging != null && filterPaging.limit() > 0) {
+		if (conditionTree instanceof CompositeIndexCondition composite && filterPaging != null && filterPaging.hasBoundedLimit()) {
 			final int maxPointers = Math.max(0, filterPaging.offset()) + filterPaging.limit();
 			return composite.executeLimited(queryPlan, maxPointers);
 		}

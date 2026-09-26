@@ -443,8 +443,7 @@ public final class SqlQueryExecutor {
 			List<String> projection
 	) {
 		final SqlTxBuffer tx = session.requireTx();
-		if (s.pkColumnOrNull() != null
-				&& store.schema().pkColumn().name().equalsIgnoreCase(s.pkColumnOrNull())) {
+		if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 			final SqlTxBuffer.DirtyEntry dirty = tx.get(table, key);
 			if (dirty != null) {
@@ -1135,8 +1134,7 @@ public final class SqlQueryExecutor {
 			List<String> projection
 	) {
 		final List<Object[]> rows;
-		if (s.pkColumnOrNull() != null
-				&& store.schema().pkColumn().name().equalsIgnoreCase(s.pkColumnOrNull())) {
+		if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final Object[] full = store.getByPk(s.pkValueOrNull());
 			if (full == null) {
 				rows = List.of();

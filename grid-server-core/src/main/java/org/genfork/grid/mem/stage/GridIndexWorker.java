@@ -91,8 +91,9 @@ public class GridIndexWorker implements Runnable {
 	}
 
 	/**
-	 * Pending async index entries (background {@link #run} drain). Product SQL uses {@code indexNow*}
-	 * (sync); this depth is for staged / installCommitted paths only.
+	 * Pending async index entries (background {@link #run} drain). Product SQL and
+	 * {@code installCommitted} / sealed miss warm use sync {@code indexNow*}; this depth
+	 * is for remaining staged queue paths only.
 	 */
 	@VisibleForTesting
 	public int pendingQueueSize() {
@@ -116,14 +117,12 @@ public class GridIndexWorker implements Runnable {
 					upsertIndexValuesFromSchemaUnlocked(addEntry);
 				} catch (RuntimeException ex) {
 					if (ex instanceof NonUniqueValueException) {
-						if (log.isDebugEnabled()) {
-							log.debug("Index upsert failed for keyHash={}: {}",
-									addEntry.getKey() == null ? -1 : java.util.Arrays.hashCode(addEntry.getKey()),
-									ex.toString());
-						}
-					} else {
+						log.warn("STRICT index upsert failed (indexNowBatch) keyHash={}: {}",
+								addEntry.getKey() == null ? -1 : java.util.Arrays.hashCode(addEntry.getKey()),
+								ex.toString());
 						throw ex;
 					}
+					throw ex;
 				}
 			}
 			index.startAnalyze();
@@ -260,12 +259,12 @@ public class GridIndexWorker implements Runnable {
 							}
 						} catch (RuntimeException ex) {
 							if (ex instanceof NonUniqueValueException) {
-								if (log.isDebugEnabled()) {
-									log.debug("Index upsert failed for keyHash={}: {}",
-											entry.getKey() == null ? -1 : java.util.Arrays.hashCode(entry.getKey()),
-											ex.toString());
-								}
+								log.warn("STRICT index upsert failed (async drain) keyHash={}: {}",
+										entry.getKey() == null ? -1 : java.util.Arrays.hashCode(entry.getKey()),
+										ex.toString());
+								throw ex;
 							}
+							throw ex;
 						}
 					}
 					index.startAnalyze();

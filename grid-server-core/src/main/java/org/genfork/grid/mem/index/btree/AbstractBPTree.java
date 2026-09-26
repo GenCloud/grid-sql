@@ -50,6 +50,14 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 	 * Accumulates leaf pointer sets into an ArrayList (ordered, limited-friendly).
 	 */
 	protected static final class PointerSetAccumulator {
+		/** Default capacity when unbounded ({@code maxSize == 0}). */
+		private static final int ACCUMULATOR_DEFAULT_CAPACITY = 16;
+		/**
+		 * Cap on ArrayList constructor capacity. QueryParser uses a large sentinel LIMIT
+		 * for unbounded SELECT; pre-sizing to that sentinel OOMs before any leaf walk.
+		 */
+		private static final int ACCUMULATOR_MAX_INITIAL_CAPACITY = 4096;
+
 		private final ArrayList<IndexPointerRef> list;
 		private final int maxSize;
 
@@ -59,7 +67,10 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 
 		PointerSetAccumulator(int maxSize) {
 			this.maxSize = Math.max(0, maxSize);
-			this.list = new ArrayList<>(this.maxSize > 0 ? this.maxSize : 16);
+			final int initial = this.maxSize > 0
+					? Math.min(this.maxSize, ACCUMULATOR_MAX_INITIAL_CAPACITY)
+					: ACCUMULATOR_DEFAULT_CAPACITY;
+			this.list = new ArrayList<>(initial);
 		}
 
 		/**

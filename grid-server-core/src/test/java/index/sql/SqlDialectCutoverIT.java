@@ -122,4 +122,33 @@ class SqlDialectCutoverIT {
 		assertEquals(-42, ((Number) r.rows().getFirst()[0]).intValue());
 		assertTrue(((Number) r.rows().getFirst()[0]).intValue() < 0);
 	}
+
+	@Test
+	void signedIntWhereGreaterThanMinusOneLiteralAndBind() {
+		engine.execute("CREATE TABLE signed_pk (id INT PRIMARY KEY, v INT)");
+		engine.execute("INSERT INTO signed_pk VALUES (1, 10)");
+		final SqlResult lit = engine.execute("SELECT id FROM signed_pk WHERE id > -1");
+		assertEquals(1, lit.rows().size());
+		assertEquals(1, ((Number) lit.rows().getFirst()[0]).intValue());
+		final SqlResult bind = engine.execute(
+				engine.newSession(), "SELECT id FROM signed_pk WHERE id > ?", new Object[]{-1});
+		assertEquals(1, bind.rows().size());
+		final SqlResult pos = engine.execute("SELECT id FROM signed_pk WHERE id > 0");
+		assertEquals(1, pos.rows().size());
+		final SqlResult ge = engine.execute("SELECT id FROM signed_pk WHERE id >= 1");
+		assertEquals(1, ge.rows().size());
+		final SqlResult eq = engine.execute("SELECT id FROM signed_pk WHERE id = 1");
+		assertEquals(1, eq.rows().size());
+	}
+
+	@Test
+	void signedLongWhereGreaterThanMinusOneLiteralAndBind() {
+		engine.execute("CREATE TABLE signed_long_pk (id LONG PRIMARY KEY, v INT)");
+		engine.execute("INSERT INTO signed_long_pk VALUES (1, 10)");
+		final SqlResult lit = engine.execute("SELECT id FROM signed_long_pk WHERE id > -1");
+		assertEquals(1, lit.rows().size());
+		final SqlResult bind = engine.execute(
+				engine.newSession(), "SELECT id FROM signed_long_pk WHERE id > ?", new Object[]{-1L});
+		assertEquals(1, bind.rows().size());
+	}
 }

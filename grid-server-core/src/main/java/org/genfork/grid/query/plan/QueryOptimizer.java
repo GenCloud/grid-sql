@@ -456,19 +456,19 @@ public class QueryOptimizer {
 			return tryConvertToCompositeFilter(andOperator, indexFields, index, sortOrder);
 		}
 
-		// Single EQ on composite: only when ORDER BY matches next column (ASC).
-		// Without ORDER BY prefer single-column index (posting-list + LIMIT), not prefix walk.
+		// Leading EQ on composite: always wire prefix seek. Ordered-leaf only when ORDER BY
+		// matches the next index column (ASC); otherwise sort flag stays false.
 		if (dnfNode instanceof LogicalOperatorCondition loc
 				&& loc.getOperator() == LogicalOperatorCondition.Operator.EQ
 				&& indexFields.size() >= 2
-				&& indexFields.getFirst().equals(loc.getField())
-				&& sortOrder != null
-				&& indexFields.get(1).equals(sortOrder.sortField())
-				&& sortOrder.direction() == OrderDirection.ASC) {
+				&& indexFields.getFirst().equals(loc.getField())) {
 			final byte[] prefixVal = SqlWireUtil.toGenericArray(loc.getValues()[0]);
+			final boolean orderMatched = sortOrder != null
+					&& indexFields.get(1).equals(sortOrder.sortField())
+					&& sortOrder.direction() == OrderDirection.ASC;
 			return new DnfResult(
 					new CompositeIndexCondition(prefixVal, loc.getField(), index),
-					true
+					orderMatched
 			);
 		}
 
@@ -498,8 +498,8 @@ public class QueryOptimizer {
 		}
 
 		if (!hasAllIndexFields) {
-			// EQ-prefix only when ORDER BY is on the next index column after the EQ prefix.
-			if (sortOrder != null && indexFields.size() >= 2
+			// Left EQ-prefix on composite (wire): always rewrite; ORDER BY only sets ordered-leaf flag.
+			if (indexFields.size() >= 2
 					&& fieldToFilterMap.containsKey(indexFields.getFirst())
 					&& fieldToFilterMap.get(indexFields.getFirst()).getOperator() == LogicalOperatorCondition.Operator.EQ
 					&& otherFilters.isEmpty()) {
@@ -511,10 +511,11 @@ public class QueryOptimizer {
 					}
 					prefixLen++;
 				}
-				if (prefixLen >= 1 && prefixLen < indexFields.size()
-						&& indexFields.get(prefixLen).equals(sortOrder.sortField())) {
+				if (prefixLen >= 1 && prefixLen < indexFields.size()) {
+					final boolean orderMatched = sortOrder != null
+							&& indexFields.get(prefixLen).equals(sortOrder.sortField())
+							&& sortOrder.direction() == OrderDirection.ASC;
 					final String prefixField = indexFields.getFirst();
-					final boolean orderMatched = sortOrder.direction() == OrderDirection.ASC;
 					if (prefixLen == 1) {
 						final byte[] prefixVal = SqlWireUtil.toGenericArray(fieldToFilterMap.get(prefixField).getValues()[0]);
 						return new DnfResult(

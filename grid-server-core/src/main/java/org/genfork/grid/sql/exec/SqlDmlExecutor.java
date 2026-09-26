@@ -405,9 +405,8 @@ public final class SqlDmlExecutor {
 		final String table = tables.resolveTable(session, s.table());
 		final TableStore store = tables.requireStore(table);
 		SqlTriggerFireOps.fireBeforeStatement(session, engine, table, TriggerEvent.DELETE);
-		final String pkName = store.schema().pkColumn().name();
 		if (!session.inTransaction()) {
-			if (s.pkColumnOrNull() != null && pkName.equalsIgnoreCase(s.pkColumnOrNull())) {
+			if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 				final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 				final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
 				SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
@@ -433,7 +432,7 @@ public final class SqlDmlExecutor {
 			return result;
 		}
 		long affected = 0L;
-		if (s.pkColumnOrNull() != null && pkName.equalsIgnoreCase(s.pkColumnOrNull())) {
+		if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 			final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
 			SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
@@ -468,10 +467,9 @@ public final class SqlDmlExecutor {
 			SqlTriggerFireOps.fireAfterStatement(session, engine, table, TriggerEvent.UPDATE);
 			return result;
 		}
-		final String pkName = store.schema().pkColumn().name();
 		final List<byte[]> returningKeys = s.returning().isEmpty()
 				? List.of()
-				: SqlDmlReturningOps.updateKeys(store, s, pkName);
+				: SqlDmlReturningOps.updateKeys(store, s);
 		if (!session.inTransaction()) {
 			if (s.rmw() != null) {
 				final byte[] key = store.keyBytesForPk(s.rmw().pkValue());
@@ -494,7 +492,7 @@ public final class SqlDmlExecutor {
 					session.lockManager().unlock(table, key);
 				}
 			}
-			if (s.pkColumnOrNull() != null && pkName.equalsIgnoreCase(s.pkColumnOrNull())) {
+			if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 				final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 				session.lockManager().lock(table, key);
 				try {
@@ -535,7 +533,7 @@ public final class SqlDmlExecutor {
 			SqlTriggerFireOps.fireAfterRow(
 					session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
 			affected = 1L;
-		} else if (s.pkColumnOrNull() != null && pkName.equalsIgnoreCase(s.pkColumnOrNull())) {
+		} else if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 			affected = updateOneKey(session, table, store, key, s.setLiterals(), true);
 		} else {

@@ -141,8 +141,7 @@ public final class SqlExplainService {
 
 		final String table = tables.resolveTable(session, s.table());
 		final TableStore store = tables.requireStore(table);
-		if (s.pkColumnOrNull() != null
-				&& store.schema().pkColumn().name().equalsIgnoreCase(s.pkColumnOrNull())) {
+		if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			return SqlResult.resultSet(metas, Collections.singletonList(
 					new Object[]{SqlExplainKinds.INDEX, table, "pk=" + s.pkColumnOrNull()}));
 		}
