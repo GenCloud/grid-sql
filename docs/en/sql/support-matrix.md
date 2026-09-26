@@ -59,7 +59,7 @@ Window functions: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG(col)`, `LEAD(co
 Two consequences worth knowing before you write a filter:
 
 - **No arithmetic in expressions.** `WHERE price * qty > 100` and `SELECT a + b` are not in the grammar. Compute on the application side, or keep the value in its own column.
-- **Numeric literals are unsigned.** A leading minus is not part of the grammar, so a negative number cannot be written as a literal or supplied as a bind. Keep signed values out of SQL text: store magnitude and direction separately, or compute the final value in the application and assign it with a plain `SET col = ?`.
+- **Numeric literals are signed.** A leading minus is part of the grammar (`'-'? INT` / decimal), and binds may supply negative INT/LONG. Wire order for fixed-width INT/LONG index and residual compare is signed (`Integer.compare` / `Long.compare`).
 - **`CAST` applies to a value, not a column.** `CAST('42' AS BIGINT)` is accepted; `CAST(col AS BIGINT)` is not.
 
 Positional `?` parameters are materialized into SQL literals before parsing, so a parameter is accepted anywhere a literal of the same shape is accepted — including inside `LIKE` and `IN`.

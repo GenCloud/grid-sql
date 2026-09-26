@@ -76,7 +76,7 @@ public final class QueryPagingContext {
 			return 0;
 		}
 		final PagingData p = PAGING.get();
-		if (p == null || p.limit() <= 0) {
+		if (p == null || !p.hasBoundedLimit()) {
 			return 0;
 		}
 		return Math.max(0, p.offset()) + p.limit();

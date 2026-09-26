@@ -416,7 +416,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		return mappedPage;
 	}
 
-	/** Same semantics as ArraysComparator without heap key copy. */
+	/** Same semantics as ArraysComparator without heap key copy (signed INT/LONG). */
 	private static int compareMapped(ByteBuffer buffer, int offset, int length, byte[] key) {
 		if (key == null) {
 			return -1;
@@ -426,7 +426,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 			final int a = buffer.getInt(offset);
 			final int b = ((key[0] & 0xFF) << 24) | ((key[1] & 0xFF) << 16)
 					| ((key[2] & 0xFF) << 8) | (key[3] & 0xFF);
-			return Integer.compareUnsigned(a, b);
+			return Integer.compare(a, b);
 		}
 		if (length == 8 && len2 == 8) {
 			final long a = buffer.getLong(offset);
@@ -434,7 +434,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 			for (int i = 0; i < 8; i++) {
 				b = (b << 8) | (key[i] & 0xFF);
 			}
-			return Long.compareUnsigned(a, b);
+			return Long.compare(a, b);
 		}
 		final int lenDiff = length - len2;
 		if (lenDiff != 0) {
@@ -466,7 +466,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 					| ((left[2] & 0xFF) << 8) | (left[3] & 0xFF);
 			final int b = ((right[0] & 0xFF) << 24) | ((right[1] & 0xFF) << 16)
 					| ((right[2] & 0xFF) << 8) | (right[3] & 0xFF);
-			return Integer.compareUnsigned(a, b);
+			return Integer.compare(a, b);
 		}
 		if (len1 == 8 && len2 == 8) {
 			long a = 0L;
@@ -475,7 +475,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 				a = (a << 8) | (left[i] & 0xFF);
 				b = (b << 8) | (right[i] & 0xFF);
 			}
-			return Long.compareUnsigned(a, b);
+			return Long.compare(a, b);
 		}
 		final int lenDiff = len1 - len2;
 		if (lenDiff != 0) {

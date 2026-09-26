@@ -204,7 +204,19 @@ public final class SealedGridMapService {
 				}
 				swapReader(domainType, shard, processor, reader);
 				bindSealedIndexes(domainType, shard, processor);
-				reader.forEachLive((key, value) -> processor.installCommitted(key, value, false));
+				final List<GridEntriesProcessor.AddEntry> chunk = new ArrayList<>(SEAL_DUMP_OPLOG_BATCH);
+				reader.forEachLive((key, value) -> {
+					processor.putMapOnly(key, value);
+					chunk.add(new GridEntriesProcessor.AddEntry(null, key, value));
+					if (chunk.size() >= SEAL_DUMP_OPLOG_BATCH) {
+						processor.indexDeltaNow(chunk);
+						chunk.clear();
+					}
+				});
+				if (!chunk.isEmpty()) {
+					processor.indexDeltaNow(chunk);
+					chunk.clear();
+				}
 				watermarks.put(shard, reader.watermark());
 				registeredShards.computeIfAbsent(domainType, ignored -> ConcurrentHashMap.newKeySet()).add(shard);
 			}

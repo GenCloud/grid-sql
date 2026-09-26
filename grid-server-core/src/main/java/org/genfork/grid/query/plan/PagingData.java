@@ -16,9 +16,23 @@
 package org.genfork.grid.query.plan;
 
 /**
+ * LIMIT / OFFSET for SELECT. Unbounded SELECT uses {@link #UNBOUNDED_LIMIT} so
+ * {@code offset + limit} stays within {@code int} (unlike {@link Integer#MAX_VALUE}).
+ *
  * @author: GenCloud
  * @date: 2025/09
  * @since: 1.0
  */
 public record PagingData(int offset, int limit) {
+	/**
+	 * Sentinel LIMIT when the statement has no LIMIT clause (unbounded result).
+	 */
+	public static final int UNBOUNDED_LIMIT = 1_000_000_000;
+
+	/**
+	 * {@code true} when LIMIT is a real bound suitable for index early-stop push-down.
+	 */
+	public boolean hasBoundedLimit() {
+		return limit > 0 && limit < UNBOUNDED_LIMIT;
+	}
 }

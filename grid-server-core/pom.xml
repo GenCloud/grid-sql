@@ -387,6 +387,8 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-surefire-plugin</artifactId>
                         <configuration>
+                            <!-- JMH benches often exceed the default 300s fork timeout after PASS. -->
+                            <forkedProcessTimeoutInSeconds>1200</forkedProcessTimeoutInSeconds>
                             <excludes combine.self="override"/>
                             <includes>
                                 <include>**/Test*.java</include>

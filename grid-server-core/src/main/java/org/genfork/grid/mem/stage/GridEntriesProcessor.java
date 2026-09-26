@@ -311,7 +311,7 @@ public class GridEntriesProcessor {
 	private void loadIntoWorkingSet(byte[] key, byte[] value) {
 		gridScalableMap.put(key, value);
 		if (gridIndexWorker != null) {
-			gridIndexWorker.add(addEntry(null, key, value));
+			gridIndexWorker.indexNow(key, value);
 		}
 		touchWorkingSet(key);
 	}
@@ -521,6 +521,10 @@ public class GridEntriesProcessor {
 
 	/**
 	 * Synchronous map (+ optional index) install without staging or commit listener.
+	 * <p>
+	 * Index updates use {@link GridIndexWorker#indexNow} / {@link GridIndexWorker#indexNowRemove}
+	 * so {@code SELECT *} (PK {@code searchAll}) observes the row immediately — async enqueue
+	 * left map/sealed visible to INSERT duplicate checks while the PK tree stayed empty.
 	 */
 	public void installCommitted(byte[] key, byte[] value, boolean delete) {
 		if (key == null) {
@@ -529,12 +533,12 @@ public class GridEntriesProcessor {
 		if (delete) {
 			final byte[] removed = gridScalableMap.remove(key);
 			if (removed != null && gridIndexWorker != null) {
-				gridIndexWorker.add(removeEntry(key));
+				gridIndexWorker.indexNowRemove(key);
 			}
 		} else {
 			gridScalableMap.put(key, value);
 			if (gridIndexWorker != null) {
-				gridIndexWorker.add(addEntry(null, key, value));
+				gridIndexWorker.indexNow(key, value);
 			}
 			touchWorkingSet(key);
 		}

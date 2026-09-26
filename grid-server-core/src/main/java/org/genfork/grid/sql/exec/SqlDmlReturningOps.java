@@ -36,11 +36,11 @@ public final class SqlDmlReturningOps {
 	private SqlDmlReturningOps() {
 	}
 
-	static List<byte[]> updateKeys(TableStore store, UpdateSql s, String pkName) {
+	static List<byte[]> updateKeys(TableStore store, UpdateSql s) {
 		if (s.rmw() != null) {
 			return List.of(store.keyBytesForPk(s.rmw().pkValue()));
 		}
-		if (s.pkColumnOrNull() != null && pkName.equalsIgnoreCase(s.pkColumnOrNull())) {
+		if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			return List.of(store.keyBytesForPk(s.pkValueOrNull()));
 		}
 		return List.copyOf(store.keysMatching(s.whereSql()));

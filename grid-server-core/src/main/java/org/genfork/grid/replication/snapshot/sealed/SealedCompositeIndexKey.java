@@ -217,15 +217,7 @@ public final class SealedCompositeIndexKey {
 
 	@VisibleForTesting
 	static int compareUnsigned(byte[] left, byte[] right) {
-		final int min = Math.min(left.length, right.length);
-		for (int i = 0; i < min; i++) {
-			final int a = Byte.toUnsignedInt(left[i]);
-			final int b = Byte.toUnsignedInt(right[i]);
-			if (a != b) {
-				return Integer.compare(a, b);
-			}
-		}
-		return Integer.compare(left.length, right.length);
+		return SealedIndexKeyOrder.compareUnsigned(left, right);
 	}
 
 	@VisibleForTesting
