@@ -46,8 +46,7 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <shadedArtifactAttached>true</shadedArtifactAttached>
-              <shadedClassifierName>dbeaver</shadedClassifierName>
+              <outputFile>${project.build.directory}/${project.build.finalName}-dbeaver.jar</outputFile>
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
                 <transformer />
@@ -64,9 +63,33 @@
                     <exclude>META-INF/*.SF</exclude>
                     <exclude>META-INF/*.DSA</exclude>
                     <exclude>META-INF/*.RSA</exclude>
+                    <exclude>org/springframework/**</exclude>
+                    <exclude>org/springframework/boot/**</exclude>
                   </excludes>
                 </filter>
               </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>attach-dbeaver-jar</id>
+            <phase>package</phase>
+            <goals>
+              <goal>attach-artifact</goal>
+            </goals>
+            <configuration>
+              <artifacts>
+                <artifact>
+                  <file>${project.build.directory}/${project.build.finalName}-dbeaver.jar</file>
+                  <type>jar</type>
+                  <classifier>dbeaver</classifier>
+                </artifact>
+              </artifacts>
             </configuration>
           </execution>
         </executions>
@@ -149,24 +172,6 @@
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-actuator</artifactId>
-      <version>3.5.14</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-registry-prometheus</artifactId>
-      <version>1.15.11</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.miaixz</groupId>
-      <artifactId>bus-core</artifactId>
-      <version>8.3.0</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
       <groupId>io.netty</groupId>
       <artifactId>netty-transport-native-kqueue</artifactId>
       <version>4.1.132.Final</version>
@@ -188,6 +193,12 @@
       <groupId>io.netty</groupId>
       <artifactId>netty-resolver-dns</artifactId>
       <version>4.1.132.Final</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.miaixz</groupId>
+      <artifactId>bus-core</artifactId>
+      <version>8.3.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>

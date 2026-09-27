@@ -1,6 +1,6 @@
 # Запуск кластера
 
-Минимальная конфигурация с высокой доступностью — два узла, `primary` и `replica`. Оба пишут на диск, оба указывают друг друга в списке соседей и каждый работает со своим каталогом данных.
+Нужны два узла, которые переживают падение одного из них. Минимальная пара — `primary` и `replica`: оба пишут на диск, оба указывают друг друга в списке соседей, у каждого свой каталог данных.
 
 ## Локальная пара 1+1
 
@@ -100,11 +100,4 @@ java -jar … --spring.profiles.active=capacity
 
 Для двух площадок включите `grid.replication.cross-dc` в режиме `ASYNC_SHIP` или `SYNC_VOTERS_ACROSS_DC`: [несколько ЦОД](../configure-and-operate/operations/multi-dc.md).
 
-## Дальше
-
-- Отказ и передача роли пишущего узла: [повышение роли узла](../configure-and-operate/operations/ha-promote.md)
-- Разгрузка чтения на реплики: [чтение с реплики](../configure-and-operate/operations/replica-reads.md)
-- Метрики и пробы: [мониторинг](../configure-and-operate/monitoring.md)
-- Резервные копии и восстановление на момент времени: [PITR](../configure-and-operate/operations/pitr.md)
-
-**Связанное:** [быстрый старт](quick-start.md), [подключение клиентов](connect-clients.md), [чек-лист перед промышленной эксплуатацией](production-checklist.md).
+Дальше: [быстрый старт](quick-start.md), [подключение клиентов](connect-clients.md), [чек-лист](production-checklist.md), [повышение роли узла](../configure-and-operate/operations/ha-promote.md), [PITR](../configure-and-operate/operations/pitr.md).

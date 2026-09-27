@@ -39,7 +39,9 @@ Password change: `ALTER USER … PASSWORD` (PBKDF2). Do not store production pas
 
 ## What is checked
 
-- Table privileges, including JOIN sides.
+- Table privileges, including JOIN sides — **after** name resolution: an unqualified object is checked in the session schema (`SET SCHEMA` / default), not via a global bare-name scan across all schemas.
+- Privilege set: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`.
+- Roles: `CREATE ROLE` / `DROP ROLE` / `GRANT ROLE … TO user`.
 - Set: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`.
 - Roles: `CREATE ROLE` / `DROP ROLE` / `GRANT ROLE … TO user`.
 

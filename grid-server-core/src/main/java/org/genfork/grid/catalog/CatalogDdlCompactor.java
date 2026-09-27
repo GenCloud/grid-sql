@@ -90,14 +90,14 @@ public final class CatalogDdlCompactor {
 				continue;
 			}
 			final String prefix = view.materialized() ? CREATE_MAT_VIEW_PREFIX : CREATE_VIEW_PREFIX;
-			lines.add(prefix + view.name() + AS_KW + view.selectSql());
+			lines.add(prefix + view.catalogKey() + AS_KW + view.selectSql());
 		}
 		return List.copyOf(lines);
 	}
 
 	private static String renderCreateTable(TableSchema schema) {
 		final StringBuilder sb = new StringBuilder(CREATE_TABLE_PREFIX);
-		sb.append(schema.tableName()).append(" (");
+		sb.append(schema.catalogKey()).append(" (");
 		boolean first = true;
 		final ArrayList<String> tablePk = new ArrayList<>();
 		for (ColumnDef col : schema.columns()) {
@@ -133,7 +133,10 @@ public final class CatalogDdlCompactor {
 	private static String renderCreateIndex(String table, IndexDef idx) {
 		final StringBuilder sb = new StringBuilder(
 				idx.kind() == IndexType.BITMAP ? CREATE_BITMAP_INDEX : CREATE_INDEX);
-		sb.append(idx.name()).append(ON_KW).append(table).append(" (");
+		sb.append(CatalogPersistUtil.sanitizeIndexName(idx.name()))
+				.append(ON_KW)
+				.append(table)
+				.append(" (");
 		final List<String> cols = idx.columns();
 		for (int i = 0; i < cols.size(); i++) {
 			if (i > 0) {

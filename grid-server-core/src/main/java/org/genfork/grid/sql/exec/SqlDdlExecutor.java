@@ -17,6 +17,7 @@ package org.genfork.grid.sql.exec;
 
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.CheckDef;
+import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.sql.ast.DdlAst.SequenceValueSql;
 import org.genfork.grid.sql.ast.DdlAst.FkSpec;
 import org.genfork.grid.sql.ast.DdlAst.DropSequenceSql;
@@ -136,11 +137,13 @@ public final class SqlDdlExecutor {
 				final String fkName = fk.nameOrNull() == null || fk.nameOrNull().isBlank()
 						? FkDef.defaultName(table, fk.childColumns())
 						: fk.nameOrNull();
-				b.foreignKey(new FkDef(
+				b.foreignKey(FkDef.of(
 						fkName,
 						table,
 						fk.childColumns(),
-						tables.resolveTable(session, fk.parentTable()),
+						CatalogQualifiedName.parse(
+								tables.resolveTable(session, fk.parentTable()),
+								session.currentSchema()),
 						fk.parentColumns(),
 						FkAction.fromToken(fk.onDeleteOrNull()),
 						FkAction.fromToken(fk.onUpdateOrNull())));
@@ -287,7 +290,7 @@ public final class SqlDdlExecutor {
 		final long epoch = catalog.nextEpoch();
 		store.addIndex(def, epoch);
 		catalog.replaceSchema(store.schema());
-		final String persist = SqlDdlRender.createIndex(s, store.schema().tableName());
+		final String persist = SqlDdlRender.createIndex(s, store.schema().catalogKey());
 		catalog.appendDdl(persist);
 		publishDdl(persist, epoch);
 		return SqlResult.ddl(SqlStatementTag.CREATE_INDEX);
@@ -309,7 +312,7 @@ public final class SqlDdlExecutor {
 		final long epoch = catalog.nextEpoch();
 		store.dropIndex(s.indexName(), epoch);
 		catalog.replaceSchema(store.schema());
-		final String persist = SqlDdlRender.dropIndex(s, store.schema().tableName());
+		final String persist = SqlDdlRender.dropIndex(s, store.schema().catalogKey());
 		catalog.appendDdl(persist);
 		publishDdl(persist, epoch);
 		return SqlResult.ddl(SqlStatementTag.DROP_INDEX);
@@ -372,11 +375,13 @@ public final class SqlDdlExecutor {
 			final String fkName = fk.nameOrNull() == null || fk.nameOrNull().isBlank()
 					? FkDef.defaultName(table, fk.childColumns())
 					: fk.nameOrNull();
-			next = store.schema().withForeignKey(new FkDef(
+			next = store.schema().withForeignKey(FkDef.of(
 					fkName,
 					table,
 					fk.childColumns(),
-					tables.resolveTable(session, fk.parentTable()),
+					CatalogQualifiedName.parse(
+							tables.resolveTable(session, fk.parentTable()),
+							session.currentSchema()),
 					fk.parentColumns(),
 					FkAction.fromToken(fk.onDeleteOrNull()),
 					FkAction.fromToken(fk.onUpdateOrNull())), epoch);

@@ -186,4 +186,4 @@ spring:
 
 Поднять 1+1 на одной машине — [запуск кластера](../getting-started/start-cluster.md). Compose-топологии — [развёртывание в Compose](../configure-and-operate/operations/deploy-compose.md).
 
-**Связанное:** [Java-клиент](java-client.md), [транзакции](transactions.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md), [долговременное хранение](../configure-and-operate/configuration/durability.md).
+Дальше: [Java-клиент](java-client.md), [транзакции](transactions.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md), [долговременное хранение](../configure-and-operate/configuration/durability.md).

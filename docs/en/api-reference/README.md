@@ -11,7 +11,7 @@ Product SPI lives in **`grid-sql-client`** (apps) and **`grid-server-core`** (en
 | AUTH / connect reject | Wrong user/pass or node not ready yet |
 | `bad frameLen` | Client hit a replication port (**5615**/**5616**), not SQL |
 | `maxTxContexts=N exhausted` (wire code 5) | More than eight open sessions on one TCP (server hard-cap **8**); Boot does not raise it from YAML — open another `Connection` or close idle `TxContext`s ([SQL server](../configure-and-operate/configuration/sql-server.md)) |
-| Stale / `applyLagStale` on replica read | Catch-up lag; `FAIL_CLOSED` — wait or read the writer ([replica reads](../configure-and-operate/operations/replica-reads.md)) |
+| Stale / `applyLagStale` on replica read | Catch-up lag; above threshold — **reject** (wait or read the writer) ([replica reads](../configure-and-operate/operations/replica-reads.md)) |
 | Write reject after role promotion | Client did not `rediscoverWriter()` — [promote](../configure-and-operate/operations/ha-promote.md) |
 | Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without rediscover |
 | TX / DML on a read URL | `readEndpoints` / `READ_REPLICA` are SELECT/EXPLAIN only; writes always go to the writer |
@@ -45,7 +45,7 @@ URL form: `grid://user:pass@host:15432[,host:15433]/schema?...`.
 | URL option | Meaning |
 |------------|---------|
 | `maxTxContexts` | Client soft cap on parallel TX / sessions on one TCP (default **256**); server hard-cap **8** |
-| `readEndpoints` / `readPreference` / `staleReadPolicy` | SELECT/EXPLAIN routing; stale = `FAIL_CLOSED` |
+| `readEndpoints` / `readPreference` / `staleReadPolicy` | SELECT/EXPLAIN routing; on lag — reject (do not serve stale) |
 | `retryMode` / `maxRetries` / `retryDelayMs` | Connect retry (`OFF` / `FIXED` / `EXPONENTIAL`); not a substitute for `rediscoverWriter()` |
 | `minConnections` / `maxConnections` | Warm-up and TCP pool ceiling on the factory |
 | `fetchWindow` | Rows per streaming FETCH |
@@ -65,7 +65,7 @@ See also: [java-client](../develop/java-client.md), [transactions](../develop/tr
 | Type | Role |
 |------|------|
 | `SqlEngine` | Parse (ANTLR) + execute; returns `SqlResult` / update counts |
-| `TableCatalog` / `TableSchema` | DDL-backed schema; domain = table name |
+| `TableCatalog` / `TableSchema` | DDL-backed schema; replication/OpLog/sealed **domain** = catalog key (`public` may stay bare table name; other schemas = `schema.table`) |
 | `SqlServer` / `SqlServerRuntime` | TCP SQL listener + runtime wiring |
 | `TableStore` | Sharded store + indexes façade |
 

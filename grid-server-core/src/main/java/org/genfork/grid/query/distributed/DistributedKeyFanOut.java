@@ -164,7 +164,7 @@ public final class DistributedKeyFanOut {
 			if (key == null) {
 				continue;
 			}
-			final byte[] value = resolveBlob(store.schema().tableName(), store, key, peerBlobFetchers);
+			final byte[] value = resolveBlob(store.schema().catalogKey(), store, key, peerBlobFetchers);
 			if (value == null) {
 				continue;
 			}
@@ -197,8 +197,7 @@ public final class DistributedKeyFanOut {
 			throw new IllegalArgumentException(
 					"distributed JOIN build requires PRIMARY KEY: " + tableName);
 		}
-		final String sql = "SELECT " + pk.name() + " FROM " + tableName;
-		final List<byte[]> keys = fanOutKeys(sql, 0, false, store, peerKeyExecutors);
+		final List<byte[]> keys = fanOutPrimaryKeys(tableName, store, peerKeyExecutors);
 		final Set<KeyWrapper> seen = new LinkedHashSet<>(
 				Math.max(FAN_IN_SET_MIN_CAPACITY, keys.size() * 2));
 		final List<byte[]> blobs = new ArrayList<>(keys.size());
@@ -243,7 +242,7 @@ public final class DistributedKeyFanOut {
 		if (peerBlobFetchers == null || peerBlobFetchers.isEmpty()) {
 			return null;
 		}
-		final String table = tableName == null ? store.schema().tableName() : tableName;
+		final String table = tableName == null ? store.schema().catalogKey() : tableName;
 		for (BiFunction<String, byte[], byte[]> fetcher : peerBlobFetchers) {
 			if (fetcher == null) {
 				continue;
@@ -259,6 +258,64 @@ public final class DistributedKeyFanOut {
 
 	private static List<byte[]> localKeys(TableStore store, String sql) {
 		return store.selectKeys(sql);
+	}
+
+	/**
+	 * Full-table PK discovery without synthesizing {@code SELECT pk FROM t}.
+	 * Peer suppliers receive the catalog table name (not a SQL string).
+	 */
+	private static List<byte[]> fanOutPrimaryKeys(
+			String tableName,
+			TableStore store,
+			List<Function<String, List<byte[]>>> peerKeyExecutors
+	) {
+		Objects.requireNonNull(store, "store");
+		final List<byte[]> local = new ArrayList<>();
+		store.forEachPrimaryKey(key -> {
+			if (key != null && key.length > 0) {
+				local.add(key);
+			}
+		});
+		if (peerKeyExecutors == null || peerKeyExecutors.isEmpty()) {
+			return local;
+		}
+		final String peerTable = tableName == null || tableName.isBlank()
+				? store.schema().catalogKey()
+				: tableName;
+		final Set<KeyWrapper> seen = new LinkedHashSet<>(
+				Math.max(FAN_IN_SET_MIN_CAPACITY, local.size() * 2));
+		final List<byte[]> merged = new ArrayList<>(local.size());
+		for (byte[] key : local) {
+			if (seen.add(new KeyWrapper(key))) {
+				merged.add(key);
+			}
+		}
+		int peerSources = 0;
+		int peerAdded = 0;
+		for (Function<String, List<byte[]>> peer : peerKeyExecutors) {
+			if (peer == null) {
+				continue;
+			}
+			peerSources++;
+			DistTxSnapshot.currentOrZero();
+			final List<byte[]> peerKeys = peer.apply(peerTable);
+			if (peerKeys == null || peerKeys.isEmpty()) {
+				continue;
+			}
+			for (byte[] key : peerKeys) {
+				if (key == null || key.length == 0) {
+					continue;
+				}
+				if (seen.add(new KeyWrapper(key))) {
+					merged.add(key);
+					peerAdded++;
+				}
+			}
+		}
+		if (peerSources > 0) {
+			DistributedQueryMetrics.recordFanIn(peerSources, peerAdded);
+		}
+		return merged;
 	}
 
 	private static List<byte[]> applyLimit(List<byte[]> keys, int limit) {

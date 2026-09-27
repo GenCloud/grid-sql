@@ -71,6 +71,8 @@ public final class TableCatalog {
 	/**
 	 * Catalog VIEW / MATERIALIZED VIEW definition (select body text).
 	 * <p>
+	 * Identity is {@link #schemaName()}+{@link #objectName()} (local), never a composite
+	 * string field. Map keys use {@link #catalogKey()} ({@code public} stays bare).
 	 * For materialized views, {@link #lastRefreshEpoch()} / {@link #schemaEpochAtRefresh()}
 	 * record staleness relative to catalog epochs (no auto-refresh on base writes).
 	 *
@@ -79,18 +81,34 @@ public final class TableCatalog {
 	 * @since: 1.0
 	 */
 	public record ViewDef(
-			String name,
+			String schemaName,
+			String objectName,
 			String selectSql,
 			boolean materialized,
 			long lastRefreshEpoch,
 			long schemaEpochAtRefresh
 	) {
-		public ViewDef(String name, String selectSql, boolean materialized) {
-			this(name, selectSql, materialized, 0L, 0L);
+		public ViewDef {
+			Objects.requireNonNull(selectSql, "selectSql");
+			final CatalogQualifiedName qn = CatalogQualifiedName.of(schemaName, objectName);
+			schemaName = qn.schemaName();
+			objectName = qn.objectName();
+		}
+
+		public ViewDef(String schemaName, String objectName, String selectSql, boolean materialized) {
+			this(schemaName, objectName, selectSql, materialized, 0L, 0L);
+		}
+
+		public CatalogQualifiedName qualifiedName() {
+			return CatalogQualifiedName.of(schemaName, objectName);
+		}
+
+		public String catalogKey() {
+			return qualifiedName().catalogKey();
 		}
 
 		public ViewDef withRefresh(long refreshEpoch, long schemaEpoch) {
-			return new ViewDef(name, selectSql, materialized, refreshEpoch, schemaEpoch);
+			return new ViewDef(schemaName, objectName, selectSql, materialized, refreshEpoch, schemaEpoch);
 		}
 	}
 
@@ -282,10 +300,10 @@ public final class TableCatalog {
 		out.add(SCHEMA_PUBLIC);
 		out.addAll(namedSchemas);
 		for (TableSchema schema : schemas.values()) {
-			out.add(CatalogPersistUtil.schemaPartOf(schema.tableName()));
+			out.add(schema.schemaName());
 		}
-		for (String viewName : views.keySet()) {
-			out.add(CatalogPersistUtil.schemaPartOf(viewName));
+		for (ViewDef view : views.values()) {
+			out.add(view.schemaName());
 		}
 		return Collections.unmodifiableSet(out);
 	}
@@ -401,7 +419,7 @@ public final class TableCatalog {
 		if (meta == null) {
 			return false;
 		}
-		final String table = meta.tableName();
+		final String table = meta.catalogKey();
 		final String schemaPart = CatalogPersistUtil.schemaPartOf(table);
 		if (!SCHEMA_PUBLIC.equals(schemaPart) && !namedSchemas.contains(schemaPart)) {
 			return false;
@@ -521,22 +539,22 @@ public final class TableCatalog {
 		Objects.requireNonNull(schema, "schema");
 		rejectFkCycle(schema);
 		rejectUnknownFkParents(schema);
-		final String key = key(schema.tableName());
+		final String key = key(schema.catalogKey());
 		if (views.containsKey(key)) {
-			throw new IllegalStateException("View already exists: " + schema.tableName());
+			throw new IllegalStateException("View already exists: " + schema.catalogKey());
 		}
 		if (schemas.containsKey(key) || creatingTables.putIfAbsent(key, Boolean.TRUE) != null) {
-			throw new IllegalStateException("Table already exists: " + schema.tableName());
+			throw new IllegalStateException("Table already exists: " + schema.catalogKey());
 		}
 		try {
 			final TableSchema prev = schemas.putIfAbsent(key, schema);
 			if (prev != null) {
-				throw new IllegalStateException("Table already exists: " + schema.tableName());
+				throw new IllegalStateException("Table already exists: " + schema.catalogKey());
 			}
 			metaCache.put(key, schema);
 			persistSchema(schema);
 			if (onCreate != null) {
-				onCreate.accept(schema.tableName(), schema);
+				onCreate.accept(schema.catalogKey(), schema);
 			}
 		} catch (RuntimeException ex) {
 			schemas.remove(key, schema);
@@ -628,11 +646,11 @@ public final class TableCatalog {
 		if (schema.foreignKeys().isEmpty()) {
 			return;
 		}
-		final String self = key(schema.tableName());
+		final String self = key(schema.catalogKey());
 		for (FkDef fk : schema.foreignKeys()) {
-			if (key(fk.parentTable()).equals(self)) {
+			if (key(fk.parentCatalogKey()).equals(self)) {
 				throw new IllegalArgumentException(
-						"cyclic FOREIGN KEY rejected for table " + schema.tableName());
+						"cyclic FOREIGN KEY rejected for table " + schema.catalogKey());
 			}
 		}
 		final Map<String, List<String>> edges = new HashMap<>();
@@ -642,19 +660,19 @@ public final class TableCatalog {
 		addFkEdges(edges, schema);
 		if (hasCycleFrom(edges, self, new LinkedHashSet<>())) {
 			throw new IllegalArgumentException(
-					"cyclic FOREIGN KEY rejected for table " + schema.tableName());
+					"cyclic FOREIGN KEY rejected for table " + schema.catalogKey());
 		}
 	}
 
 	private void rejectUnknownFkParents(TableSchema schema) {
 		for (FkDef fk : schema.foreignKeys()) {
-			final String parentKey = key(fk.parentTable());
-			if (parentKey.equals(key(schema.tableName()))) {
+			final String parentKey = key(fk.parentCatalogKey());
+			if (parentKey.equals(key(schema.catalogKey()))) {
 				continue;
 			}
 			if (!schemas.containsKey(parentKey)) {
 				throw new IllegalArgumentException(
-						"FK " + fk.name() + " references unknown table " + fk.parentTable());
+						"FK " + fk.name() + " references unknown table " + fk.parentQualifiedName().sqlQualified());
 			}
 			final TableSchema parent = schemas.get(parentKey);
 			for (String col : fk.parentColumns()) {
@@ -712,9 +730,9 @@ public final class TableCatalog {
 	}
 
 	private static void addFkEdges(Map<String, List<String>> edges, TableSchema schema) {
-		final String from = key(schema.tableName());
+		final String from = key(schema.catalogKey());
 		for (FkDef fk : schema.foreignKeys()) {
-			final String parent = key(fk.parentTable());
+			final String parent = key(fk.parentCatalogKey());
 			if (parent.equals(from)) {
 				continue;
 			}
@@ -745,7 +763,7 @@ public final class TableCatalog {
 		final String parentKey = key(parentTable);
 		for (TableSchema schema : schemas.values()) {
 			for (FkDef fk : schema.foreignKeys()) {
-				if (key(fk.parentTable()).equals(parentKey)) {
+				if (key(fk.parentCatalogKey()).equals(parentKey)) {
 					return true;
 				}
 			}
@@ -759,7 +777,7 @@ public final class TableCatalog {
 		final ArrayList<FkDef> out = new ArrayList<>();
 		for (TableSchema schema : schemas.values()) {
 			for (FkDef fk : schema.foreignKeys()) {
-				if (key(fk.parentTable()).equals(parentKey)) {
+				if (key(fk.parentCatalogKey()).equals(parentKey)) {
 					out.add(fk);
 				}
 			}
@@ -928,14 +946,21 @@ public final class TableCatalog {
 	) {
 		Objects.requireNonNull(name, "name");
 		Objects.requireNonNull(selectSql, "selectSql");
-		final String k = key(name);
+		final CatalogQualifiedName qn = CatalogQualifiedName.parse(name, CatalogPersistUtil.SCHEMA_PUBLIC);
+		final String k = key(qn.catalogKey());
 		if (!materialized && (schemas.containsKey(k) || creatingTables.containsKey(k))) {
 			throw new IllegalStateException("Table already exists: " + name);
 		}
 		if (materialized && !schemas.containsKey(k) && !creatingTables.containsKey(k)) {
 			throw new IllegalStateException("Materialized view backing table missing: " + name);
 		}
-		final ViewDef def = new ViewDef(name, selectSql, materialized, lastRefreshEpoch, schemaEpochAtRefresh);
+		final ViewDef def = new ViewDef(
+				qn.schemaName(),
+				qn.objectName(),
+				selectSql,
+				materialized,
+				lastRefreshEpoch,
+				schemaEpochAtRefresh);
 		final ViewDef prev = views.putIfAbsent(k, def);
 		if (prev != null) {
 			throw new IllegalStateException("View already exists: " + name);
@@ -1163,7 +1188,7 @@ public final class TableCatalog {
 	public Set<String> tableNames() {
 		final LinkedHashSet<String> names = new LinkedHashSet<>(schemas.size());
 		for (TableSchema schema : schemas.values()) {
-			names.add(schema.tableName());
+			names.add(schema.catalogKey());
 		}
 		return Collections.unmodifiableSet(names);
 	}
@@ -1171,9 +1196,9 @@ public final class TableCatalog {
 	/** Replace schema after CREATE/DROP INDEX / ALTER (store already bound). */
 	public void replaceSchema(TableSchema schema) {
 		Objects.requireNonNull(schema, "schema");
-		final String k = key(schema.tableName());
+		final String k = key(schema.catalogKey());
 		if (!schemas.containsKey(k)) {
-			throw new IllegalStateException("Table not found: " + schema.tableName());
+			throw new IllegalStateException("Table not found: " + schema.catalogKey());
 		}
 		schemas.put(k, schema);
 		metaCache.put(k, schema);
@@ -1339,8 +1364,9 @@ public final class TableCatalog {
 		}
 		try {
 			GridFs.createDirs(catalogDir);
-			final Path meta = catalogDir.resolve(schema.tableName().toLowerCase(Locale.ROOT) + ".meta");
+			final Path meta = catalogDir.resolve(schema.catalogKey().toLowerCase(Locale.ROOT) + ".meta");
 			final StringBuilder sb = new StringBuilder();
+			sb.append("schema=").append(schema.schemaName()).append('\n');
 			sb.append("table=").append(schema.tableName()).append('\n');
 			sb.append("epoch=").append(schema.schemaEpoch()).append('\n');
 			for (ColumnDef col : schema.columns()) {
@@ -1361,7 +1387,7 @@ public final class TableCatalog {
 			}
 			for (IndexDef idx : schema.indexes()) {
 				sb.append("idx=")
-						.append(idx.name()).append(',')
+						.append(CatalogPersistUtil.sanitizeIndexName(idx.name())).append(',')
 						.append(idx.kind().name()).append(',')
 						.append(String.join("+", idx.columns())).append('\n');
 			}
@@ -1370,6 +1396,7 @@ public final class TableCatalog {
 						.append(fk.name()).append(',')
 						.append(fk.childTable()).append(',')
 						.append(String.join("+", fk.childColumns())).append(',')
+						.append(fk.parentSchema()).append(',')
 						.append(fk.parentTable()).append(',')
 						.append(String.join("+", fk.parentColumns())).append(',')
 						.append(fk.onDelete().name()).append(',')
@@ -1385,7 +1412,7 @@ public final class TableCatalog {
 			}
 			GridFs.writeAtomic(meta, sb.toString(), StandardCharsets.UTF_8);
 		} catch (IOException e) {
-			throw new IllegalStateException("Failed to persist schema " + schema.tableName(), e);
+			throw new IllegalStateException("Failed to persist schema " + schema.catalogKey(), e);
 		}
 	}
 
@@ -1418,6 +1445,7 @@ public final class TableCatalog {
 		final String body = new String(metaBytes, StandardCharsets.UTF_8);
 		final String[] lines = body.split("\\R", -1);
 		String table = null;
+		String schemaPart = null;
 		long epoch = 1L;
 		final List<ColumnDef> cols = new ArrayList<>();
 		final List<IndexDef> idxs = new ArrayList<>();
@@ -1427,7 +1455,9 @@ public final class TableCatalog {
 			if (line.isEmpty()) {
 				continue;
 			}
-			if (line.startsWith("table=")) {
+			if (line.startsWith("schema=")) {
+				schemaPart = line.substring("schema=".length()).trim();
+			} else if (line.startsWith("table=")) {
 				table = line.substring(6);
 			} else if (line.startsWith("epoch=")) {
 				epoch = Long.parseLong(line.substring(6));
@@ -1452,20 +1482,42 @@ public final class TableCatalog {
 			} else if (line.startsWith("idx=")) {
 				final String[] p = line.substring(4).split(",", 3);
 				idxs.add(new IndexDef(
-						p[0],
+						CatalogPersistUtil.sanitizeIndexName(p[0]),
 						List.of(p[2].split("\\+")),
 						IndexType.valueOf(p[1])
 				));
 			} else if (line.startsWith("fk=")) {
 				final String[] p = line.substring(3).split(",", -1);
+				final String parentSchema;
+				final String parentTable;
+				final String parentCols;
+				final String onDelete;
+				final String onUpdate;
+				if (p.length >= 8) {
+					parentSchema = p[3];
+					parentTable = p[4];
+					parentCols = p[5];
+					onDelete = p[6];
+					onUpdate = p[7];
+				} else {
+					// Legacy: fk=name,child,cols,parentKey,parentCols,onDelete,onUpdate
+					final CatalogQualifiedName parentQn = CatalogQualifiedName.parse(
+							p[3], CatalogPersistUtil.SCHEMA_PUBLIC);
+					parentSchema = parentQn.schemaName();
+					parentTable = parentQn.objectName();
+					parentCols = p[4];
+					onDelete = p[5];
+					onUpdate = p[6];
+				}
 				fks.add(new FkDef(
 						p[0],
 						p[1],
 						List.of(p[2].split("\\+")),
-						p[3],
-						List.of(p[4].split("\\+")),
-						FkAction.valueOf(p[5]),
-						FkAction.valueOf(p[6])
+						parentSchema,
+						parentTable,
+						List.of(parentCols.split("\\+")),
+						FkAction.valueOf(onDelete),
+						FkAction.valueOf(onUpdate)
 				));
 			} else if (line.startsWith("check=")) {
 				final String[] p = line.substring("check=".length()).split(",", 2);
@@ -1477,6 +1529,12 @@ public final class TableCatalog {
 		if (table == null || cols.isEmpty()) {
 			throw new IllegalArgumentException("Invalid catalog meta: " + sourceLabel);
 		}
-		return new TableSchema(table, cols, idxs, fks, checks, epoch);
+		final String catalogTable;
+		if (schemaPart != null && !schemaPart.isBlank() && table.indexOf('.') < 0) {
+			catalogTable = CatalogQualifiedName.of(schemaPart, table).catalogKey();
+		} else {
+			catalogTable = table;
+		}
+		return new TableSchema(catalogTable, cols, idxs, fks, checks, epoch);
 	}
 }

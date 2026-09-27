@@ -284,6 +284,41 @@ public class QueryParser {
 		}
 	}
 
+	/**
+	 * Parse a WHERE / CHECK / WHEN boolean fragment (ANTLR {@code standaloneExpression}).
+	 * <p>
+	 * Must not wrap fragments in synthetic {@code SELECT … WHERE} — client SQL and DDL journal only.
+	 */
+	public static FilterCondition parseExpression(String expressionSql) {
+		if (expressionSql == null || expressionSql.isBlank()) {
+			throw new IllegalArgumentException("expression required");
+		}
+		final SimplifiedSqlLexer lexer = new SimplifiedSqlLexer(CharStreams.fromString(expressionSql.trim()));
+		final CommonTokenStream tokenStream = new CommonTokenStream(lexer);
+		final SimplifiedSqlParser parser = new SimplifiedSqlParser(tokenStream);
+		parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
+		parser.removeErrorListeners();
+		parser.setErrorHandler(new BailErrorStrategy());
+		try {
+			final SimplifiedSqlParser.StandaloneExpressionContext root = parser.standaloneExpression();
+			final SqlFilterVisitor filterVisitor = new SqlFilterVisitor();
+			final FilterCondition condition = filterVisitor.visit(root.expression());
+			return condition == null ? AlwaysTrueCondition.getInstance() : condition;
+		} catch (ParseCancellationException ex) {
+			parser.reset();
+			parser.getInterpreter().setPredictionMode(PredictionMode.LL);
+			parser.setErrorHandler(new BailErrorStrategy());
+			try {
+				final SimplifiedSqlParser.StandaloneExpressionContext root = parser.standaloneExpression();
+				final SqlFilterVisitor filterVisitor = new SqlFilterVisitor();
+				final FilterCondition condition = filterVisitor.visit(root.expression());
+				return condition == null ? AlwaysTrueCondition.getInstance() : condition;
+			} catch (ParseCancellationException retry) {
+				throw new IllegalArgumentException("invalid boolean expression: " + expressionSql, retry);
+			}
+		}
+	}
+
 	public static class SqlFilterVisitor extends SimplifiedSqlBaseVisitor<FilterCondition> {
 		private final ArrayDeque<FilterCondition> resolvedSubqueries;
 

@@ -29,6 +29,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterStandaloneExpression(SimplifiedSqlParser.StandaloneExpressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitStandaloneExpression(SimplifiedSqlParser.StandaloneExpressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterScript(SimplifiedSqlParser.ScriptContext ctx) { }
 	/**
 	 * {@inheritDoc}

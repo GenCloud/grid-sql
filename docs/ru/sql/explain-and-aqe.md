@@ -1,8 +1,6 @@
 # EXPLAIN и адаптивное исполнение (AQE)
 
-Текст EXPLAIN строит только `SqlExplainService`. Тяжёлые SELECT могут идти через Adaptive Query Execution (AQE) и параллельный map по локальным шардам.
-
-Оператору: смотрите метки в EXPLAIN, чтобы понять, **почему** запрос тяжёлый и не «сломался ли план». Корректность строк не зависит от AQE — меняется способ разбиения работы на узле.
+Запрос «тяжёлый» — почему план такой и не сломался ли он? Текст EXPLAIN строит сервис объяснения планов; для тяжёлых SELECT может включиться адаптивное исполнение (AQE) и параллельный разбор по локальным шардам. Корректность строк от AQE не зависит — меняется только способ разбиения работы на узле.
 
 Опорные цифры и пороги: [сводные результаты](../performance/results.md), [ёмкость](../performance/capacity-slo.md).
 
@@ -103,4 +101,4 @@ JVM: `--add-modules=jdk.incubator.vector`. Без модуля загрузка 
 - IT: `QueryHeavinessEstimatorIT`, `AdaptiveParallelScanIT`, `AdaptiveChunkSchedulerIT`, `ShardPartitionMapReduceIT`, `WireResidualBatchIT`
 - JMH: `QueryHeavinessEstimatorBenchmark`, `ShardPartitionMapReduceBenchmark`, `WireResidualBatchBenchmark`
 
-**Связанное:** [основы](fundamentals.md), [архитектура](../understand/architecture-overview.md), [ёмкость](../performance/capacity-slo.md).
+Дальше: [основы](fundamentals.md), [архитектура](../understand/architecture-overview.md), [ёмкость](../performance/capacity-slo.md).

@@ -154,7 +154,7 @@ public class GridCompositeIndex {
 
 	public GridCompositeIndex(TableSchema schema) {
 		this.schema = Objects.requireNonNull(schema, "schema");
-		this.tableLabel = schema.tableName();
+		this.tableLabel = schema.catalogKey();
 		this.primaryKeyColumns = pkColumnNamesOf(schema);
 		final Map<String, FieldMetaData> byName = new HashMap<>(schema.columnCount() * 2);
 		for (FieldMetaData fm : schema.fieldMetas()) {
@@ -933,6 +933,59 @@ public class GridCompositeIndex {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Execute a pre-built filter tree to PK keys (no SQL string).
+	 * <p>
+	 * Used by DML WHERE / internal probes — never synthesize {@code SELECT … WHERE}.
+	 */
+	public List<byte[]> executeFilter(FilterCondition rawCondition) {
+		Objects.requireNonNull(rawCondition, "condition");
+		final FilterCondition bitmapPreferred = QueryOptimizer.preferBitmapPredicates(property2Index, rawCondition);
+		final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(
+				compositeIndexes, property2Index, bitmapPreferred, null);
+		final FilterCondition conditionTree = optimized.conditionTree();
+		conditionTree.validate(this.schema);
+		if (conditionTree instanceof AlwaysTrueCondition) {
+			final List<byte[]> keys = new ArrayList<>();
+			streamAlwaysTruePrimaryKeys(conditionTree, null, key -> {
+				keys.add(key);
+				return true;
+			});
+			return keys;
+		}
+		final IndexOperationResult operationResult = executeFilterWithPaging(conditionTree, null, null);
+		operationResult.expandBitmapPointers();
+		Set<IndexPointerRef> filteredPointers = operationResult.getPointers();
+		if (filteredPointers == null || filteredPointers.isEmpty()) {
+			return Collections.emptyList();
+		}
+		if (rowResolver != null && needsResidualMatch(conditionTree)) {
+			final Set<IndexPointerRef> residual = new LinkedHashSet<>();
+			for (IndexPointerRef ptr : filteredPointers) {
+				final byte[] key = ptr.resolveKey();
+				if (key == null) {
+					continue;
+				}
+				final byte[] valueBytes = rowResolver.apply(key);
+				if (valueBytes != null && conditionTree.matches(valueBytes, this.schema)) {
+					residual.add(ptr);
+				}
+			}
+			filteredPointers = residual;
+			if (filteredPointers.isEmpty()) {
+				return Collections.emptyList();
+			}
+		}
+		final List<byte[]> keys = new ArrayList<>(filteredPointers.size());
+		for (IndexPointerRef ptr : filteredPointers) {
+			final byte[] key = ptr.resolveKey();
+			if (key != null) {
+				keys.add(key);
+			}
+		}
+		return keys;
 	}
 
 	public List<byte[]> executeStatement(ExplainQuery.QueryPlan queryPlan, String sql) {

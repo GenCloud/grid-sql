@@ -25,6 +25,8 @@ import java.util.function.Function;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import org.genfork.grid.catalog.CatalogDdlJournalUtil;
+import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.catalog.FunctionKind;
 import org.genfork.grid.catalog.PrivilegeCatalog;
 import org.genfork.grid.catalog.SqlPrivilege;
@@ -327,16 +329,16 @@ public final class SqlEngine {
 	 * Wire EXEC binds for {@code EXECUTE name} (no {@code USING} clause): prefer wire array.
 	 */
 	private static Stmt applyWireExecuteBinds(Stmt stmt, Object[] wireBinds) {
-		if (!(stmt instanceof ExecuteSql exec)) {
+		if (!(stmt instanceof ExecuteSql(String name, Object[] binds))) {
 			return stmt;
 		}
 		if (wireBinds == null || wireBinds.length == 0) {
 			return stmt;
 		}
-		if (exec.binds() != null && exec.binds().length > 0) {
+		if (binds != null && binds.length > 0) {
 			return stmt;
 		}
-		return new ExecuteSql(exec.name(), wireBinds);
+		return new ExecuteSql(name, wireBinds);
 	}
 
 	/**
@@ -430,8 +432,8 @@ public final class SqlEngine {
 			}
 		} else if (stmt instanceof DeleteSql value) {
 			ensureTablePrivilege(session, value.table(), SqlPrivilege.DELETE);
-		} else if (stmt instanceof TruncateSql value) {
-			ensureTablePrivilege(session, value.table(), SqlPrivilege.DELETE);
+		} else if (stmt instanceof TruncateSql(String table)) {
+			ensureTablePrivilege(session, table, SqlPrivilege.DELETE);
 		} else if (stmt instanceof MergeSql value) {
 			ensureTablePrivilege(session, value.targetTable(), SqlPrivilege.UPDATE);
 		} else if (!(stmt instanceof BeginSql) && !(stmt instanceof CommitSql)
@@ -445,10 +447,8 @@ public final class SqlEngine {
 	}
 
 	private void ensureTablePrivilege(SqlSession session, String rawTable, SqlPrivilege privilege) {
-		final int separator = rawTable.indexOf('.');
-		final String schema = separator < 0 ? session.currentSchema() : rawTable.substring(0, separator);
-		final String table = separator < 0 ? rawTable : rawTable.substring(separator + 1);
-		privileges.ensure(session.user(), schema, table, privilege);
+		final CatalogQualifiedName qn = tables.resolveQualified(session, rawTable);
+		privileges.ensure(session.user(), qn.schemaName(), qn.objectName(), privilege);
 	}
 
 	private SqlResult dispatch(SqlSession session, Stmt stmt, String sql) {
@@ -651,13 +651,8 @@ public final class SqlEngine {
 				}
 				yield query.select(session, s);
 			}
-			case SetOpSql s -> {
-				yield query.selectSetOp(session, s);
-			}
-			case RecursiveCteSql s -> {
-				yield RecursiveCteExecutor.execute(
-						session, query, tables, s, recursiveCteMaxDepth);
-			}
+			case SetOpSql s -> query.selectSetOp(session, s);
+			case RecursiveCteSql s -> RecursiveCteExecutor.execute(session, query, tables, s, recursiveCteMaxDepth);
 			case ExplainSql s -> {
 				if (s.query() instanceof SetOpSql u) {
 					yield s.analyze()
@@ -834,7 +829,7 @@ public final class SqlEngine {
 					catalog.createSchema(schemaName, true);
 				}
 			}
-			for (String line : lines) {
+			for (String line : CatalogDdlJournalUtil.sanitizeLines(lines)) {
 				if (line == null || line.isBlank()) {
 					continue;
 				}
@@ -842,10 +837,10 @@ public final class SqlEngine {
 			}
 			for (TableSchema meta : metas) {
 				if (!catalog.shouldHydrateMeta(meta)) {
-					catalog.deletePersistedTableMeta(meta.tableName());
+					catalog.deletePersistedTableMeta(meta.catalogKey());
 					continue;
 				}
-				if (catalog.exists(meta.tableName())) {
+				if (catalog.exists(meta.catalogKey())) {
 					catalog.ensureEpochAtLeast(meta.schemaEpoch());
 					continue;
 				}

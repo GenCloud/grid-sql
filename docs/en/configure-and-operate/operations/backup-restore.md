@@ -10,6 +10,7 @@ Per node, on **local** `dataDir` (never a shared NFS/SAN volume for the whole cl
 |----------|------|
 | Sealed map files (`.gmap`) | Compacted key → payload store |
 | Sealed indexes (`.sbpt` / `.sbm`) | Secondary indexes on disk |
+| Table catalog (`*.meta` under the SQL catalog) | Includes `schema=` and FK `parentSchema` — same `dataDir` as sealed |
 | OpLog (active tail + archived segments) | Ordered mutations; required for fresh commits |
 | Node config | Profiles, peers, ports, `cluster-id` — restore must match topology intent |
 | Auth catalog (`privileges.meta` under catalog root) | Users and grants — include with the same backup policy as `dataDir` |

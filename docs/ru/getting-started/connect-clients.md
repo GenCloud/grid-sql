@@ -39,6 +39,8 @@ grid://<пользователь>:<пароль>@<хост>:<порт>[,<хос�
 
 Несколько хостов в адресной части — это список кандидатов для высокой доступности, а не балансировка записи. Клиент закрепляется на узле, которому разрешено писать, и меняет его только по серверной подсказке (`ServerMeta`, `PROMOTE_NOTIFY`) — см. [повышение роли узла](../configure-and-operate/operations/ha-promote.md).
 
+Путь `/<схема>` в URL задаёт **схему сессии по умолчанию** при `SESSION_OPEN` (как `SET SCHEMA` / `connection.setSchema`). Неквалифицированные имена таблиц и последовательностей привязываются только к ней — см. [DDL](../sql/ddl.md).
+
 Часто используемые опции:
 
 | Опция | По умолчанию | Смысл |
@@ -51,7 +53,7 @@ grid://<пользователь>:<пароль>@<хост>:<порт>[,<хос�
 | `retryMode` / `maxRetries` / `retryDelayMs` | `OFF` / `0` / `200` | Повтор connect: `OFF` / `FIXED` / `EXPONENTIAL` |
 | `fetchWindow` | `64` | Число строк в одном окне потоковой выдачи |
 | `timezone` | `UTC` | Часовой пояс для временных типов |
-| `readEndpoints` / `readPreference` / `staleReadPolicy` | — / `PRIMARY` / `FAIL_CLOSED` | Маршрутизация чтения; см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md) |
+| `readEndpoints` / `readPreference` / `staleReadPolicy` | — / `PRIMARY` / reject-on-stale | Маршрутизация чтения; см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md) |
 
 На **сервере** по умолчанию канал принимает не больше **8** открытых сессий на TCP. Spring Boot **не** прокидывает `grid.sql.max-tx-contexts` в слушатель — если клиент просит больше восьми на одном сокете, откройте дополнительные `Connection` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md), [транзакции](../develop/transactions.md)).
 
@@ -97,4 +99,4 @@ DBeaver и IntelliJ Database используют тот же JDBC-драйве�
 | `readPreference=REPLICA requires readEndpoints` | Политика чтения задана без списка реплик |
 | `REPLICA_READ_STALE` | Отставание реплики выше `max-stale-lag`; клиент сменит конечную точку |
 
-**Связанное:** [Java-клиент](../develop/java-client.md), [транзакции](../develop/transactions.md), [чек-лист перед промышленной эксплуатацией](production-checklist.md), [справочник API](../api-reference/README.md).
+Дальше: [Java-клиент](../develop/java-client.md), [транзакции](../develop/transactions.md), [чек-лист перед промышленной эксплуатацией](production-checklist.md), [справочник API](../api-reference/README.md).

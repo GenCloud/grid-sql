@@ -12,7 +12,7 @@ Before traffic, always check Actuator readiness: [monitoring](../monitoring.md).
 |-------|------------|
 | Before | Readiness UP; known current writer; PITR archive on if you may need rollback; SQL (**15432**) separate from replication (**5615**) |
 | During | Do not write a foreign/damaged `dataDir`; do not rotate the next URL host; do not disable `fsync` “so it passes” |
-| After | New writer: `writerEligible` + client meta agree; replicas caught up; Multi-DC — one Active and current `regionEpoch` |
+| After | New writer: `writerEligible` + client meta agree; replicas caught up; multi-site — one Active and current `regionEpoch` |
 
 First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, `rpoEstimateMs` — [monitoring](../monitoring.md).
 

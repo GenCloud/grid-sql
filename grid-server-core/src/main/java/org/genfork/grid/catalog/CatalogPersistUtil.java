@@ -33,6 +33,9 @@ public final class CatalogPersistUtil {
 	/** On-disk table schema sidecar suffix. */
 	public static final String META_SUFFIX = ".meta";
 
+	/** Synthetic PRIMARY KEY index suffix ({@code localTable_pk}). */
+	public static final String PK_INDEX_SUFFIX = "_pk";
+
 	private static final char QUALIFIER_SEP = '.';
 
 	private CatalogPersistUtil() {
@@ -51,6 +54,38 @@ public final class CatalogPersistUtil {
 			return SCHEMA_PUBLIC;
 		}
 		return key.substring(0, dot);
+	}
+
+	/**
+	 * Local object name (segment after the last {@code .}), lower-case; whole key when unqualified.
+	 */
+	public static String objectPartOf(String qualifiedName) {
+		if (qualifiedName == null || qualifiedName.isBlank()) {
+			return "";
+		}
+		final String key = qualifiedName.toLowerCase(Locale.ROOT);
+		final int dot = key.lastIndexOf(QUALIFIER_SEP);
+		if (dot < 0 || dot + 1 >= key.length()) {
+			return key;
+		}
+		return key.substring(dot + 1);
+	}
+
+	/**
+	 * Index names must be object-local (ANTLR {@code indexName : ID} — no dots).
+	 */
+	public static String sanitizeIndexName(String indexName) {
+		if (indexName == null || indexName.isBlank()) {
+			return indexName;
+		}
+		return objectPartOf(indexName);
+	}
+
+	/**
+	 * Synthetic PRIMARY KEY index name for a table catalog key (object-local).
+	 */
+	public static String syntheticPkIndexName(String tableKey) {
+		return objectPartOf(tableKey) + PK_INDEX_SUFFIX;
 	}
 
 	/**

@@ -129,4 +129,4 @@ Ready compose topologies `multidc-async` and `multidc-sync` are in [Compose depl
 
 Incident playbook: [failures](failures.md). Current planning numbers: [capacity](../../performance/capacity-slo.md).
 
-**Related:** [promote a node](ha-promote.md), [failures](failures.md), [replication config](../configuration/replication.md), [replication network](../../understand/replication-network.md), [monitoring](../monitoring.md).
+Next: [promote a node](ha-promote.md), [failures](failures.md), [multi-site under load](cluster-multidc-highload.md), [replication config](../configuration/replication.md).

@@ -22,6 +22,7 @@ import java.util.Objects;
 /**
  * Foreign-key constraint owned by the child table.
  * <p>
+ * Parent identity is {@link #parentSchema()}+{@link #parentTable()} (local), never a composite string field.
  * Keys are compared as wire {@code byte[]} on DML / commit (not Object equality).
  *
  * @author: GenCloud
@@ -32,6 +33,7 @@ public record FkDef(
 		String name,
 		String childTable,
 		List<String> childColumns,
+		String parentSchema,
 		String parentTable,
 		List<String> parentColumns,
 		FkAction onDelete,
@@ -45,6 +47,9 @@ public record FkDef(
 		}
 		if (childTable == null || childTable.isBlank()) {
 			throw new IllegalArgumentException("childTable required");
+		}
+		if (parentSchema == null || parentSchema.isBlank()) {
+			throw new IllegalArgumentException("parentSchema required");
 		}
 		if (parentTable == null || parentTable.isBlank()) {
 			throw new IllegalArgumentException("parentTable required");
@@ -63,13 +68,47 @@ public record FkDef(
 		if (onUpdate == null) {
 			onUpdate = FkAction.RESTRICT;
 		}
+		parentSchema = parentSchema.toLowerCase(Locale.ROOT);
+		parentTable = CatalogPersistUtil.objectPartOf(parentTable);
 		childColumns = List.copyOf(childColumns);
 		parentColumns = List.copyOf(parentColumns);
 	}
 
+	public CatalogQualifiedName parentQualifiedName() {
+		return CatalogQualifiedName.of(parentSchema, parentTable);
+	}
+
+	public String parentCatalogKey() {
+		return parentQualifiedName().catalogKey();
+	}
+
+	/**
+	 * Build FK with parent resolved to schema + local table.
+	 */
+	public static FkDef of(
+			String name,
+			String childTable,
+			List<String> childColumns,
+			CatalogQualifiedName parent,
+			List<String> parentColumns,
+			FkAction onDelete,
+			FkAction onUpdate
+	) {
+		Objects.requireNonNull(parent, "parent");
+		return new FkDef(
+				name,
+				childTable,
+				childColumns,
+				parent.schemaName(),
+				parent.objectName(),
+				parentColumns,
+				onDelete,
+				onUpdate);
+	}
+
 	public static String defaultName(String childTable, List<String> childColumns) {
 		final StringBuilder sb = new StringBuilder(DEFAULT_NAME_PREFIX);
-		sb.append(childTable.toLowerCase(Locale.ROOT));
+		sb.append(CatalogPersistUtil.objectPartOf(childTable));
 		for (String col : childColumns) {
 			sb.append('_').append(col.toLowerCase(Locale.ROOT));
 		}

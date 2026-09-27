@@ -22,7 +22,7 @@ If archive was off at failure time, there is nothing to restore.
 1. **Incident.** Stop the node; do not write the damaged `dataDir`.
 2. **Base.** Have (or install) a sealed base at watermark `W ≤ T` via `SealedBaseBackupUtil` — see [backup](backup-restore.md).
 3. **Offline restore.** Empty `dataDir` → install base → `PitrRestoreMain --until-seq T` → replay archive `[W+1 … T]`.
-4. **Rejoin.** Start the node; catch up replicas. On Multi-DC respect `regionEpoch`.
+4. **Rejoin.** Start the node; catch up replicas. On multi-site respect `regionEpoch`.
 
 ```mermaid
 flowchart LR

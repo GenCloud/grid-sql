@@ -39,6 +39,8 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<options>
 
 Several hosts in the authority are HA candidates, not write load balancing. The client sticks to a writer-eligible node and moves only on a server hint (`ServerMeta`, `PROMOTE_NOTIFY`) — see [promote a node](../configure-and-operate/operations/ha-promote.md).
 
+The URL path `/<schema>` sets the **default session schema** on `SESSION_OPEN` (same as `SET SCHEMA` / `connection.setSchema`). Unqualified table and sequence names bind only to that schema — see [DDL](../sql/ddl.md).
+
 Common options:
 
 | Option | Default | Meaning |
@@ -51,7 +53,7 @@ Common options:
 | `retryMode` / `maxRetries` / `retryDelayMs` | `OFF` / `0` / `200` | Connect retry: `OFF` / `FIXED` / `EXPONENTIAL` |
 | `fetchWindow` | `64` | Rows per streaming window |
 | `timezone` | `UTC` | Zone applied to temporal types |
-| `readEndpoints` / `readPreference` / `staleReadPolicy` | — / `PRIMARY` / `FAIL_CLOSED` | Replica routing; see [replica reads](../configure-and-operate/operations/replica-reads.md) |
+| `readEndpoints` / `readPreference` / `staleReadPolicy` | — / `PRIMARY` / reject-on-stale | Replica routing; see [replica reads](../configure-and-operate/operations/replica-reads.md) |
 
 The **server** accepts at most **8** open sessions per TCP channel by default. Spring Boot does **not** forward `grid.sql.max-tx-contexts` into the listener — if the client asks for more than eight on one socket, open additional `Connection`s ([SQL server](../configure-and-operate/configuration/sql-server.md), [transactions](../develop/transactions.md)).
 

@@ -13,6 +13,8 @@ CREATE BITMAP INDEX idx_t_flag ON t (flag);          -- explicit command only
 DROP INDEX idx_t_name ON t;
 ```
 
+Index names are **object-local** (no `schema.` inside the identifier). The schema qualifier belongs on the table (`ON analytics.t`), not on the index name. On DDL journal recover, an illegal `schema.` prefix in an index name is stripped.
+
 ## Three kinds
 
 | Kind | `IndexType` | Structure | Meaning |

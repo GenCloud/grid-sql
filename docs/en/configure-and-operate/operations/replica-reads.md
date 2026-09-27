@@ -1,6 +1,6 @@
-# Replica reads — client/server methodology
+# Replica reads
 
-Optional cluster read balance (off by default): **writes stay on the phase-ranked proposer**; **autocommit reads** may target synced voters / Hold. Default remains PRIMARY-only writer pin (unchanged Jepsen / Elle contract).
+The client wants to offload SELECT from the writer. By default everything hits the writer. You can turn on routing: writes and TX stay on the writer; autocommit SELECT / EXPLAIN may go to replicas within lag policy. Better a reject on stale data than a silent old read.
 
 ## Topology (1 primary + N replicas)
 
@@ -26,7 +26,7 @@ Catch-up-only nodes and Witness never serve client SQL.
 
 ### FOR UPDATE and peer locks
 
-`FOR UPDATE` / `SKIP LOCKED` always run on the **writer** (never a read replica). Indexed wire keys are locked locally via `LockAwareKeyCursor`. When replication is on and the coordinator has peers, product Boot wiring installs Netty `DistForUpdatePeerLockAgent`s from **replication `peers`** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`), so peers take the same locks through `DistForUpdateCoordinator` (fail-closed on Netty errors). Autocommit releases statement peer leases in `finally`; open-TX leases stay until COMMIT/ROLLBACK. Prepare/commit-dec is product 2PC-lite for peer row locks — not XA. Multi-table / INNER JOIN `FOR UPDATE` is supported.
+`FOR UPDATE` / `SKIP LOCKED` always run on the **writer** (never a read replica). Indexed wire keys are locked locally via `LockAwareKeyCursor`. When replication is on and the coordinator has peers, product Boot wiring installs Netty `DistForUpdatePeerLockAgent`s from **replication `peers`** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`), so peers take the same locks through `DistForUpdateCoordinator`. A Netty error on a peer is a **reject to the client**, not a silent local-only commit. Autocommit releases statement peer leases in `finally`; open-TX leases stay until COMMIT/ROLLBACK. Prepare/commit-dec is product 2PC-lite for peer row locks — not XA. Multi-table / INNER JOIN `FOR UPDATE` is supported.
 
 With replication off or an empty peer list, locks stay **local** on the writer only. There is no separate operational YAML key to list DistForUpdate endpoints. Do not confuse this with `grid.sql.distributed-peers` (read-only SELECT/JOIN fan-out) — [SQL server](../configuration/sql-server.md).
 
@@ -70,7 +70,7 @@ Peers cross-reference under `grid.replication.transport.peers`. Per-node `dataDi
 
 ## Client configuration
 
-### Write URL (pinned proposer)
+### Write URL (writer pin)
 
 ```
 grid://user:pass@127.0.0.1:15432,127.0.0.1:15433/public?connectTimeoutMs=1000&retryMode=FIXED&maxRetries=2
@@ -89,7 +89,7 @@ grid://user:pass@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433,127.0.0.1:
 | `readEndpoints` | Comma `host:port` read ring (N≥1 required when `readPreference=REPLICA`) |
 | `readPreference` | `PRIMARY` (default) or `REPLICA` |
 | `maxReadConnections` | TCP cap for read factory (default 1) |
-| `staleReadPolicy` | v1: `FAIL_CLOSED` only |
+| `staleReadPolicy` | v1: reject-on-stale only |
 
 ### Factories
 
@@ -123,7 +123,7 @@ No `ALLOW_STALE` in v1. No read-your-writes via replica without a writer round-t
 
 | Plus | Minus / risk |
 |------|----------------|
-| Offloads SELECT from proposer | Replica lag -> FAIL_CLOSED rejects / rotate |
+| Offloads SELECT from the writer | Replica lag → reject and rotate |
 | v2 auto-route via shared ANTLR | Classifier must stay aligned with server tags |
 | Explicit API still available | Apps can still force `executeRead` |
 | Jepsen stays PRIMARY-only | `readEndpoints` in Elle URL is rejected |
@@ -137,15 +137,10 @@ No `ALLOW_STALE` in v1. No read-your-writes via replica without a writer round-t
 | `ConnectionFactory.fromUrl` + v2 ANTLR auto-route | **closed** (recommended) |
 | `createReadStatement` / `executeRead` | **closed** (explicit, still supported) |
 | `RemoteConnectionFactory.createReadFactory` | **closed** (read pool) |
-| `staleReadPolicy` | v1 **FAIL_CLOSED** only (no `ALLOW_STALE`) |
-| N `readEndpoints` + `ReadEndpointSelector` rotate on `applyLagStale` | **closed** (IT: `ReplicaReadEndpointsRotateIT`) |
+| `staleReadPolicy` | v1 reject-on-stale only (no `ALLOW_STALE`) |
+| N `readEndpoints` + `ReadEndpointSelector` rotate on `applyLagStale` | ready (`ReplicaReadEndpointsRotateIT`) |
 
-## Related
-
-- [failures.md](failures.md)
-- [ha-promote.md](ha-promote.md)
-- [cluster-ha-highload.md](cluster-ha-highload.md)
-- [replication-network.md](../../understand/replication-network.md)
+Next: [failures](failures.md), [HA promote](ha-promote.md), [replication network](../../understand/replication-network.md).
 
 ## Jepsen
 

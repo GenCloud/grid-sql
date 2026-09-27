@@ -26,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Cross-domain JOIN table resolver: catalog lookup plus explicit alias registry.
  * <p>
- * Aliases map a short name to a qualified catalog table without string SQL parse.
+ * Not a SQL schema namespace (see {@link org.genfork.grid.catalog.CatalogQualifiedName} /
+ * {@code SET SCHEMA}). Aliases map a short name to a qualified catalog table without string SQL parse.
  * Resolution order: alias registry → {@link SqlTableResolver#resolveTable}.
  *
  * @author: GenCloud

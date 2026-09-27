@@ -33,7 +33,7 @@ The `gridReadiness` component reports the following keys. Values marked `n/a` me
 | `reason` | `sql_tcp_down`, `orchid_not_synced` | Present only when the component is DOWN |
 | `writerEligible` | boolean, `n/a` | This node may accept writes |
 | `applyLagStale` | boolean, `n/a` | Apply lag exceeds `grid.replication.ha.max-stale-lag` |
-| `orchidR` | double, `n/a` | Phase order parameter |
+| `orchidR` | double, `n/a` | Order parameter `R` (phase sync share) |
 | `repairIssued` / `repairApplied` | long, `n/a` | Gap repair counters |
 | `rpoEstimateMs` | long, `n/a` | Cross-site lag estimate |
 | `swarmHint` | `KEEP`, `ATTRACT_LEARNER`, `SHED_LOAD`, `PREFER_DC`, `n/a` | Latest placement hint, by name |
@@ -50,7 +50,7 @@ Consensus and replication:
 
 | Metric | Use |
 |--------|-----|
-| `grid.replication.orchid_r` | Phase order parameter; should stay above `orchid.order-threshold` |
+| `grid.replication.orchid_r` | Order parameter `R`; should stay above `orchid.order-threshold` |
 | `grid.replication.orchid_wait_p99_ns` | Time spent waiting for phase sync and digest quorum |
 | `grid.replication.oplog_fsync_p99_ns` | Grouped journal `force` latency |
 | `grid.replication.repair_issued` / `repair_applied` | Gap repair; issued without applied means catch-up is stuck |

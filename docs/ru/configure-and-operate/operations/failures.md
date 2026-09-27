@@ -12,7 +12,7 @@
 |------|-------------|
 | До | Readiness UP; известен текущий пишущий; archive PITR включён, если нужен откат; сеть SQL (**15432**) отделена от репликации (**5615**) |
 | Во время | Не писать в чужой/`битый` `dataDir`; не крутить следующий host в URL; не отключать `fsync` «чтобы прошло» |
-| После | Новый пишущий: `writerEligible` + совпадение меты клиента; реплики догнали; при Multi-DC — один Active и актуальный `regionEpoch` |
+| После | Новый пишущий: `writerEligible` + совпадение меты клиента; реплики догнали; при нескольких ЦОД — один Active и актуальный `regionEpoch` |
 
 Метрики в первую очередь: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, `rpoEstimateMs` — [мониторинг](../monitoring.md).
 
@@ -24,7 +24,7 @@
 | `readiness` DOWN при старте с репликацией | Дождаться ORCHID sync; не слать нагрузку. Смотреть `orchidSynced`, `reason`, `orchid_r` | [мониторинг](../monitoring.md), [ORCHID](../../understand/orchid-consensus.md) |
 | Запись отклонена (`OrchidNotSyncedException` / нет допуска) | Проверить соседние узлы, сеть, порог `R`, диск/`fsync`. Не отключать fsync ради TPS — лучше отказ, чем два журнала | [репликация](../configuration/replication.md) |
 | Диск полный / OpLog не пишет | Освободить место; проверить `op-log` и archive. Сбой archive отменяет truncate — это защита | [долговременное хранение](../configuration/durability.md), [PITR](pitr.md) |
-| Клиент пишет на «старый» writer после переключения | Ждать `PROMOTE_NOTIFY` или вызвать `rediscoverWriter()`. Не крутить round-robin хостов | [повышение роли](ha-promote.md) |
+| Клиент пишет на «старый» пишущий после переключения | Ждать `PROMOTE_NOTIFY` или вызвать `rediscoverWriter()`. Не перебирать хосты в URL по кругу | [повышение роли](ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | Один Active; Hold/Witness не в URL записи. Переподключить через rediscover | [несколько ЦОД](multi-dc.md) |
 | Падение Active-ЦОД (`ASYNC_SHIP`) | Возможен RPO на Hold в пределах отставания. Новый Active через claim; клиент — rediscover | [несколько ЦОД](multi-dc.md) |
 | Падение Active-ЦОД (`SYNC_VOTERS`) | Свежие коммиты с кворумом уже на voters. Тот же claim + rediscover; цена — WAN на каждую запись | [несколько ЦОД](multi-dc.md) |
@@ -35,7 +35,7 @@
 
 ## Разбор сценариев (сигнал → проверка → эскалация)
 
-### A. Процесс writer умер, клиенты ещё подключены
+### A. Процесс пишущего умер, клиенты ещё подключены
 
 1. **Сигнал.** Запись падает или висит; readiness на старом хосте DOWN или процесса нет.
 2. **Проверка.** Нет второго процесса на том же `dataDir`. Новый writer: readiness UP и `writerEligible: true`. Мета клиента обновлена через `PROMOTE_NOTIFY` или `rediscoverWriter()` — не следующий host в URL.

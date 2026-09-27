@@ -55,6 +55,8 @@ Create the factory **once per process** (or one per peer) and reuse it; call `di
 grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<options>
 ```
 
+The `/<schema>` path is the default session schema on `SESSION_OPEN` (same as `SET SCHEMA` / `connection.setSchema`). Unqualified names bind only to it.
+
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `minConnections` | `1` | TCP sockets opened on warmup / first `obtain` (clamped to `maxConnections`) |
@@ -69,7 +71,7 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<options>
 | `fetchWindow` | `64` | Rows per FETCH during streaming delivery |
 | `readEndpoints` | — | Replica list for reads; enables routing |
 | `readPreference` | `PRIMARY` | `PRIMARY` / `REPLICA`; `REPLICA` requires `readEndpoints` |
-| `staleReadPolicy` | `FAIL_CLOSED` | On replica lag above the server gate — refuse the read (only value in v1); see [replica reads](../configure-and-operate/operations/replica-reads.md) |
+| `staleReadPolicy` | reject-on-stale | On replica lag above the server gate — refuse the read (only value in v1); see [replica reads](../configure-and-operate/operations/replica-reads.md) |
 | `maxReadConnections` | `1` | Sockets in the read pool |
 | `warmup` | `false` | If `true`, explicit `warmup()` preheats `minConnections` (does not gate `obtain`) |
 
@@ -138,7 +140,7 @@ The prepared name lives on the session (`TxContext` / connection). Another TCP s
 | Method | Role |
 |--------|------|
 | `connection.pin(table, key[, ttlMs[, qos]])` / `unpin` | Soft overlay pin — [overlay PIN](../configure-and-operate/configuration/overlay-pin.md) |
-| `connection.setSchema(schema)` | `SET SCHEMA` for the session |
+| `connection.setSchema(schema)` | `SET SCHEMA` for the session (same as the `/schema` URL path at open) |
 | `connection.setTimezone(zoneId)` | Session timezone (remote connection) |
 
 ### About `.block()`

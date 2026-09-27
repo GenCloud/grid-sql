@@ -1,8 +1,10 @@
-# Cluster HA (1-DC) + high-load
+# HA in one site under load
 
-High availability inside one data center uses ORCHID (phase sync after Kuramoto plus digest quorum). Clients speak **SQL TCP**; peers speak **replication Netty** on a different port.
+High availability inside one data center uses ORCHID: nodes sync phase and confirm writes with a digest quorum. There is no Raft-style term/vote election. The writer is the synced node with the smallest `nodeId`.
 
-## Ports (do not mix)
+Apps speak **SQL TCP**; peers speak **replication Netty** on a different port. Pointing a SQL client at the replication port yields `bad frameLen`.
+
+## Ports
 
 | Port (default) | Protocol | Used by |
 |----------------|----------|---------|
@@ -13,7 +15,7 @@ Pointing a SQL client at `5615` fails frame decode. See [replication-network.md]
 
 **Notes:** `jdbc:grid://` is the JDBC client in `grid-sql-client` (apps and DBeaver). The reactive path is `ConnectionFactory` + `grid://`. Query MapReduce resolves keys locally by default. SIMD benches need `--add-modules=jdk.incubator.vector`.
 
-## Topologies in one DC
+## Topologies in one site
 
 Quick 1+1 pair: [start a cluster](../../getting-started/start-cluster.md). Below is the three-node ring.
 
@@ -64,11 +66,11 @@ sequenceDiagram
 
 Detail: [architecture](../../understand/architecture-overview.md), [replication-network.md](../../understand/replication-network.md), [storage](../../understand/storage-sealed-gmap.md).
 
-## Failover (promoteHint)
+## Writer failover
 
 ```mermaid
 sequenceDiagram
-  participant P as Proposer_n1
+  participant P as Writer_n1
   participant S as Survivors_n2_n3
   participant W as ServerMeta_wire
   participant Cl as Client
@@ -99,14 +101,14 @@ grid://u:p@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public?connectTimeout
 
 | Knob | Why |
 |------|-----|
-| All ring peers in authority | After proposer crash, TCP failover reaches survivors |
+| All ring peers in the URL | After the writer dies, TCP failover reaches survivors |
 | `connectTimeoutMs` | Fail fast on a dead endpoint |
 | `retryMode` + `maxRetries` | Retry connect across the endpoint list |
 | `maxTxContexts` | Soft session cap on one TCP (not N sockets) |
 
 **Prod pattern:** pin from wire `ServerMeta` (`AUTH_OK` / `ERROR` / `PROMOTE_NOTIFY`) on `writerEligible` (and `regionEpoch` when region fencing is on). On orchid/stale/region fence mid-op do **not** silent-rotate the pin; call `rediscoverWriter()`. Full runbook: [ha-promote.md](ha-promote.md).
 
-## Kubernetes / Actuator probes
+## Kubernetes and Actuator probes
 
 Enable probes (`management.endpoint.health.probes.enabled: true`) and expose `health,prometheus`. Include `gridReadiness` in the readiness group (see `grid-sql-server-starter` `application.yml`).
 
@@ -117,7 +119,7 @@ Enable probes (`management.endpoint.health.probes.enabled: true`) and expose `he
 | `/prometheus` | Micrometer / Prometheus scrape |
 
 If Actuator keeps the default Spring base path, the same groups are under `/actuator/health/*` and `/actuator/prometheus`.
-## YAML recipe -- prod high-load (1-DC)
+## YAML recipe for a loaded cluster
 
 Tune for write throughput + durable group fsync. Values are a starting point; validate with Jepsen + QG on your hardware.
 
@@ -178,29 +180,30 @@ grid:
 | `durability.working-set-max-entries` + `hydrate-mode` | RAM ceiling vs sealed miss cost |
 | `swarm` / `placement-optimizer` | Load hints; production `apply-auto-cutover` default **true** (see [bio-inspired.md](../../understand/bio-inspired.md); set `false` only to suppress migrate under load) |
 
-## Validation
+## How to validate
 
 | Contour | Where |
 |---------|--------|
 | External Jepsen N=3 | [benchmarks/jepsen/README.md](../../../../benchmarks/jepsen/README.md) |
 | Chaos ITs | `index.unit.replication.chaos.**` |
 | Promote / RPO | [ha-promote.md](ha-promote.md) |
-| Wire / Cross-DC modes | [replication-network.md](../../understand/replication-network.md) |
+| Wire / Cross-site modes | [replication-network.md](../../understand/replication-network.md) |
+| Throughput floors | [capacity](../../performance/capacity-slo.md) |
 
-Multi-DC topologies: [cluster-multidc-highload.md](cluster-multidc-highload.md).
+Multi-site topologies: [cluster-multidc-highload.md](cluster-multidc-highload.md).
 
-### Replica read channels (off by default)
+### Replica reads (off by default on the server)
 
-Full methodology: [replica-reads.md](replica-reads.md).
+Full methodology: [replica reads](replica-reads.md).
 
-Writes and open TX stay on the pinned proposer URL. Autocommit reads use replica channels:
+Writes and open TX stay on the writer URL. Autocommit reads use replica channels:
 
 ```
 grid://u:p@n1:15432,n2:15433/public?readEndpoints=n2:15433&readPreference=REPLICA&maxReadConnections=2
 ```
 
 - Server: `grid.replication.ha.replicaReadsEnabled=true` (starter primary/replica profiles enable it for demos).
-- Stale policy v1: **FAIL_CLOSED**.
+- Stale policy v1: **reject** when lag exceeds the threshold (do not serve stale reads).
 - App: `ConnectionFactory.fromUrl` (auto-route when `readEndpoints`) → optional `createReadStatement` / `executeRead`.
 
-Incidents: [failures](failures.md).
+Next: [multi-site under load](cluster-multidc-highload.md), [Compose deploy](deploy-compose.md), [replica reads](replica-reads.md).

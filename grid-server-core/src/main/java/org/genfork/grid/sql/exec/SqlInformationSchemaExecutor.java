@@ -233,16 +233,14 @@ public final class SqlInformationSchemaExecutor {
 	private static List<Object[]> tablesRows(TableCatalog catalog) {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
-			final String[] parts = splitSchemaTable(schema.tableName());
-			rows.add(new Object[]{parts[0], parts[1], TABLE_TYPE_BASE});
+			rows.add(new Object[]{schema.schemaName(), schema.tableName(), TABLE_TYPE_BASE});
 		}
 		for (String viewName : catalog.viewNames()) {
 			final ViewDef view = catalog.getView(viewName);
 			if (view == null) {
 				continue;
 			}
-			final String[] parts = splitSchemaTable(viewName);
-			rows.add(new Object[]{parts[0], parts[1], TABLE_TYPE_VIEW});
+			rows.add(new Object[]{view.schemaName(), view.objectName(), TABLE_TYPE_VIEW});
 		}
 		return rows;
 	}
@@ -250,7 +248,7 @@ public final class SqlInformationSchemaExecutor {
 	private static List<Object[]> columnsRows(TableCatalog catalog) {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
-			final String[] parts = splitSchemaTable(schema.tableName());
+			final String[] parts = new String[]{schema.schemaName(), schema.tableName()};
 			for (ColumnDef col : schema.columns()) {
 				rows.add(new Object[]{
 						parts[0],
@@ -270,7 +268,7 @@ public final class SqlInformationSchemaExecutor {
 	private static List<Object[]> statisticsRows(TableCatalog catalog) {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
-			final String[] parts = splitSchemaTable(schema.tableName());
+			final String[] parts = new String[]{schema.schemaName(), schema.tableName()};
 			for (IndexDef idx : schema.indexes()) {
 				// STRICT = unique (PK mirror / UNIQUE INDEX); LAX / BITMAP = non-unique.
 				final int nonUnique = idx.kind() == IndexType.STRICT ? 0 : 1;
@@ -294,7 +292,7 @@ public final class SqlInformationSchemaExecutor {
 	private static List<Object[]> keyColumnUsageRows(TableCatalog catalog) {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
-			final String[] parts = splitSchemaTable(schema.tableName());
+			final String[] parts = new String[]{schema.schemaName(), schema.tableName()};
 			final ColumnDef pk = schema.pkColumn();
 			final String cname = PK_NAME_PREFIX + parts[1];
 			rows.add(new Object[]{
@@ -325,7 +323,7 @@ public final class SqlInformationSchemaExecutor {
 	private static List<Object[]> tableConstraintsRows(TableCatalog catalog) {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
-			final String[] parts = splitSchemaTable(schema.tableName());
+			final String[] parts = new String[]{schema.schemaName(), schema.tableName()};
 			final String cname = PK_NAME_PREFIX + parts[1];
 			rows.add(new Object[]{
 					parts[0],
@@ -350,9 +348,9 @@ public final class SqlInformationSchemaExecutor {
 	private static List<Object[]> referentialConstraintsRows(TableCatalog catalog) {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
-			final String[] childParts = splitSchemaTable(schema.tableName());
+			final String[] childParts = new String[]{schema.schemaName(), schema.tableName()};
 			for (FkDef fk : schema.foreignKeys()) {
-				final String[] parentParts = splitSchemaTable(fk.parentTable());
+				final String[] parentParts = new String[]{fk.parentSchema(), fk.parentTable()};
 				rows.add(new Object[]{
 						childParts[0],
 						fk.name(),
@@ -406,18 +404,6 @@ public final class SqlInformationSchemaExecutor {
 			});
 		}
 		return rows;
-	}
-
-	static String[] splitSchemaTable(String qualified) {
-		if (qualified == null || qualified.isBlank()) {
-			return new String[]{DEFAULT_SCHEMA, ""};
-		}
-		final String t = qualified.trim();
-		final int dot = t.indexOf('.');
-		if (dot <= 0) {
-			return new String[]{DEFAULT_SCHEMA, t};
-		}
-		return new String[]{t.substring(0, dot), t.substring(dot + 1)};
 	}
 
 	private static List<Object[]> projectRows(

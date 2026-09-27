@@ -2,7 +2,7 @@
 
 The writer is down. The client still holds the old TCP. Who accepts writes now — and how does the client learn that **without** rotating URL hosts by hand?
 
-Grid has no Raft leader election and no term/vote. The writer is the synced node with the smallest `nodeId` (phase + checksum). Role hand-off for the client goes through protocol meta: `ServerMeta` / `PROMOTE_NOTIFY` and `rediscoverWriter()`.
+Grid has no Raft leader election and no term/vote. The writer is the synced node with the smallest `nodeId` (ORCHID phase + checksum). Order parameter **`R`**: share of nodes with a consistent phase; writes are admitted when `R` is at or above threshold and digests agree. Role hand-off for the client goes through protocol meta: `ServerMeta` / `PROMOTE_NOTIFY` and `rediscoverWriter()`.
 
 ## How the client learns the writer
 
@@ -10,20 +10,7 @@ SQL wire `AUTH_OK` carries `ServerMeta`; eligible-write ERROR responses carry th
 
 Writer pin comes only from protocol meta. For orchestrator readiness use Actuator `/health/liveness` and `/health/readiness` plus Micrometer — do not mix those two contours.
 
-| Field | Meaning |
-|-------|---------|
-| `phaseRankedProposer` | Current writer id (`min(nodeId)` among synced) |
-| `isPhaseRankedProposer` | This node may propose |
-| `writerEligible` | Synced && phase-ranked && write-admission && region Active (when region fencing on) |
-| `promoteHint` | Next eligible writer if current unavailable |
-| `maxApplyLag` | Max OpLog vs applied lag |
-| `readMode` | `read_your_writes` vs `eventual_replica` |
-| `maxStaleLag` | Config threshold in journal ops: refuse stale reads when apply lag exceeds it |
-| `schemaEpoch` | Duplex schema epoch (wire `ServerMeta`) |
-| `regionEpoch` | Multi-site Active/Hold fencing epoch (`0` = region disabled / legacy) |
-| `regionRole` | Wire role: `NONE` / `ACTIVE` / `HOLD` / `WITNESS` |
-
-## Same-site RPO (async journal ship)
+In practice three fields matter: `writerEligible` (may this node accept writes), `promoteHint` (where to look if the current writer is gone), `regionEpoch` (Active/Hold hand-off across sites). Full `ServerMeta` field list: [replication state](../../understand/replication-state.md).
 
 Peers in the same site receive OpLog via async Netty push. After a writer commit, replica map visibility can lag (`maxApplyLag` / missing key) until apply — that is **expected RPO**, not Applier failure. See [replication network](../../understand/replication-network.md). Watch lag in readiness (`applyLagStale`) and metrics; lab `GET /replication/compare` is not the writer pin source.
 
@@ -74,7 +61,7 @@ grid://u:p@n1:15432,n2:15433,n3:15434/public?connectTimeoutMs=1000&retryMode=FIX
 
 `maxTxContexts` limits logical sessions on **one** TCP — client URL default **256**, server channel hard-cap **8** (Boot does not raise it from YAML). Not N sockets / Hikari-style pools.
 
-### Multi-DC
+### Multi-site
 
 | Mode | Write URL endpoints | Notes |
 |------|---------------------|-------|
@@ -92,15 +79,15 @@ grid://app:secret@a1.dc-a.example:15432,a2.dc-a.example:15433,a3.dc-a.example:15
 grid://app:secret@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435,127.0.0.1:15436/public?connectTimeoutMs=1000&retryMode=FIXED&maxRetries=2
 ```
 
-Address inventory and YAML per DC: [cluster Multi-DC high load](cluster-multidc-highload.md).
+Address inventory and YAML per site: [multi-site under load](cluster-multidc-highload.md).
 
 Putting Hold / Witness / learner endpoints in the write URL without region fencing yields live TCP + `writerEligible=false` rejects. Optional learner / Hold read path is separate and must accept abort-on-stale (`maxStaleLag` / `applyLagStale`).
 
-The client pins on `writerEligible` from protocol meta. Topologies and load: [cluster HA high load](cluster-ha-highload.md), [cluster Multi-DC high load](cluster-multidc-highload.md). Incidents: [failures](failures.md).
+The client pins on `writerEligible` from protocol meta. Topologies and load: [HA in one site](cluster-ha-highload.md), [multi-site under load](cluster-multidc-highload.md). Incidents: [failures](failures.md).
 
 ## Hold+Hold+Witness claim quorum (recipe)
 
-Topology: DC-A Active (or down) + DC-B Hold + DC-C Hold + Witness voter.  
+Topology: Active site (or down) + Hold site + second Hold site + Witness (vote only).  
 `grid.replication.region.quorumSize` must count Hold+Witness voters for majority.
 
 ```mermaid

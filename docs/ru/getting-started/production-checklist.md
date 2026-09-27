@@ -94,4 +94,4 @@
 
 Перед первой промышленной записью убедитесь: долговременное хранение включено, `fsync: true`; `dataDir` локальный и отдельный на каждый узел; пишущий узел один, клиенты закрепляются по `ServerMeta` / `PROMOTE_NOTIFY`; аутентификация включена, права выданы по минимуму; архив журнала работает, базовая копия снята, восстановление отработано; пробы живости и готовности настроены, оповещения заведены.
 
-**Связанное:** [практические советы](best-practices.md), [запуск кластера](start-cluster.md), [долговременное хранение](../configure-and-operate/configuration/durability.md), [мониторинг](../configure-and-operate/monitoring.md), [PITR](../configure-and-operate/operations/pitr.md).
+Дальше: [практические советы](best-practices.md), [запуск кластера](start-cluster.md), [мониторинг](../configure-and-operate/monitoring.md), [PITR](../configure-and-operate/operations/pitr.md).

@@ -1,6 +1,6 @@
 # Upgrade and node restart
 
-How to change the binary or restart a node without losing `dataDir` and without dual-writer. Short runbook; HA and Multi-DC details on the linked pages.
+How to change the binary or restart a node without losing `dataDir` and without dual-writer. Short runbook; HA and multi-site details on the linked pages.
 
 ## Before upgrade
 
@@ -30,6 +30,7 @@ During a rolling upgrade the ring may briefly run **two binary versions**. That 
 |-------------|------------------|-------|
 | Same major sealed/OpLog layout, two jar versions | Yes, during rolling only | Finish every node; then one version |
 | `.sbpt` VERSION 2 on some nodes, VERSION 1 on others | Not as a lasting state | VERSION 1 is rejected on read. Take PITR base before upgrade; after — reseal / `dumpDomain` on every node, then one version |
+| Table catalog: `schema=` in `*.meta`, FK with `parentSchema` | Yes on a rolling compatible binary | Legacy FK lines without `parentSchema` still load. Do not leave a mixed ring permanently |
 | Incompatible `dataDir` layout across nodes | No | Take PITR base first; migrate one layout family at a time |
 | Two processes / two binaries on one `dataDir` | Never | Incident — stop the extra process |
 

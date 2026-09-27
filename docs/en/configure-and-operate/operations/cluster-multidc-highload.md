@@ -1,12 +1,12 @@
-# Multi-DC + high-load
+# Multi-site under load
 
-Cross-DC replication builds on same-DC ORCHID. Local phase order `R` stays in the local DC by default. Across the WAN you choose either async ship or remote digest voters; phase-coupling across sites is off unless you enable it.
+Cross-site replication builds on ORCHID **inside** each site. Phase sync (order parameter **`R`**) stays in the local site by default — share of nodes with a consistent phase; writes admit when `R` is at threshold and digests agree. Across the WAN you choose either async journal ship or remote digest voters.
 
-Multi-DC write admission uses **Active / Hold / Witness** region roles plus a monotonic **`regionEpoch`** fence (see [ha-promote.md](ha-promote.md)). Only the Active region admits client SQL writes; Hold may claim after Active silence + quorum; Witness is off by default for claim majority.
+Write admission across sites uses **Active / Hold / Witness** roles plus a monotonic **`regionEpoch`**. Only Active admits client writes; Hold may claim after Active silence + quorum; Witness votes but does not write.
 
-Prerequisites: [cluster-ha-highload.md](cluster-ha-highload.md), [replication-network.md](../../understand/replication-network.md), [bio-inspired.md](../../understand/bio-inspired.md#cross-dc).
+Prerequisites: [HA in one site](cluster-ha-highload.md), [promote a node](ha-promote.md), [replication network](../../understand/replication-network.md).
 
-## Roles (Active / Hold / Witness)
+## Node roles
 
 | Role | Write admission | Typical placement |
 |------|-----------------|-------------------|
@@ -16,7 +16,7 @@ Prerequisites: [cluster-ha-highload.md](cluster-ha-highload.md), [replication-ne
 
 `regionEpoch` advances on successful Hold claim. Clients pin on `writerEligible && regionEpoch`; mid-op fence → `rediscoverWriter()` (never silent rotate). Discovery is wire `ServerMeta` / `PROMOTE_NOTIFY`.
 
-## Modes
+## Two cross-site replication modes
 
 | Mode | Commit path | Remote role | RPO / latency |
 |------|-------------|-------------|----------------|
@@ -29,7 +29,7 @@ Prerequisites: [cluster-ha-highload.md](cluster-ha-highload.md), [replication-ne
 
 Witness is **off by default**: set `grid.replication.region.role: WITNESS` on a node that should vote in claim quorum without admitting writes. ASYNC_SHIP learners without region fencing remain write-admission=false catch-up replicas.
 
-## Topology — Active + Hold clusters
+## Topology — Active + Hold
 
 Reference layout: **one Active DC** (write ring) and **one Hold DC** (warm standby). Role is per node via `grid.replication.region.role` (`ACTIVE` | `HOLD` | `WITNESS`). At bootstrap every node in a DC shares one role.
 
@@ -130,7 +130,7 @@ grid://app:secret@a1.dc-a.example:15432,a2.dc-a.example:15433,a3.dc-a.example:15
 grid://app:secret@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435,127.0.0.1:15436/public?connectTimeoutMs=1000&retryMode=FIXED&maxRetries=2
 ```
 
-After `a1` crash inside Active DC → pin / `promoteHint` → `a2`/`a3` (same `regionEpoch`). After whole Active DC loss → Hold claim advances `regionEpoch`; client `rediscoverWriter()` pins the new Active in DC-B — do not silent-rotate mid-op (see [promote a node](ha-promote.md)).
+After `a1` crashes inside the Active site → pin / `promoteHint` → `a2`/`a3` (same `regionEpoch`). After whole Active site loss → Hold claim advances `regionEpoch`; client `rediscoverWriter()` pins the new Active in the standby site — do not silent-rotate mid-op (see [promote a node](ha-promote.md)).
 
 ```mermaid
 sequenceDiagram
@@ -147,7 +147,7 @@ sequenceDiagram
   Note over A,H: "revived former Active becomes Hold not Active"
 ```
 
-## CrossDcPublisher
+## How the journal ships across sites
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +172,7 @@ sequenceDiagram
 
 `CrossDcPublisher` batches (`batch-max-ops` / `batch-max-wait-ms`), buffers open TX until `TX_COMMIT`/`TX_ABORT`, and holds multi-shard envelopes until all shards commit. Transport is always Netty ([replication-network.md](../../understand/replication-network.md)).
 
-## RPO vs WAN tax
+## What you pay for a low loss window
 
 ```mermaid
 flowchart TB
@@ -287,13 +287,13 @@ Hold nodes set `region.role: HOLD` and `write-admission: false` (never local wri
 
 Empty `voters` with `SYNC_VOTERS_ACROSS_DC` → all remote peers except `learners`.
 
-## Consistency checks
+## How to validate
 
 | Contour | Where |
 |---------|--------|
 | 1-DC Jepsen N=3 | [benchmarks/jepsen/README.md](../../../../benchmarks/jepsen/README.md) |
-| Multi-DC Jepsen (ASYNC + SYNC_VOTERS, link cut, Active-site loss) | [benchmarks/jepsen/multidc/RESULTS.md](../../../../benchmarks/jepsen/multidc/RESULTS.md) |
+| Multi-site Jepsen (ASYNC + SYNC_VOTERS, link cut, Active-site loss) | [benchmarks/jepsen/multidc/RESULTS.md](../../../../benchmarks/jepsen/multidc/RESULTS.md) |
 | Formal companion | `spec/orchid/OrchidLogMultiDc` (not a substitute for Jepsen) |
 | SYNC vs ASYNC write cost | [capacity](../../performance/capacity-slo.md), [ORCHID path](../../performance/perf-bio-consensus.md) |
 
-Size WAN timeouts from measured RTT — not from localhost latency alone. Planning load numbers: [capacity](../../performance/capacity-slo.md). Consistency results: [results](../../performance/results.md) links to Jepsen. Do not co-run consistency checks with load — [methodology](../../performance/methodology.md).
+Next: [multi-site overview](multi-dc.md), [Compose deploy](deploy-compose.md), [promote a node](ha-promote.md).
