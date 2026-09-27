@@ -97,7 +97,7 @@ public final class SelectProjectionAssembler {
 	}
 
 	public static List<SqlResult.ColumnMeta> metas(TableStore store, List<SelectItem> items, List<String> projection) {
-		final String[] parts = SqlInformationSchemaExecutor.splitSchemaTable(store.schema().tableName());
+		final String[] parts = new String[]{store.schema().schemaName(), store.schema().tableName()};
 		return metasFromColumns(store.schema().columns(), items, projection, parts[1], parts[0]);
 	}
 

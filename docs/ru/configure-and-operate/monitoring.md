@@ -67,7 +67,7 @@ Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и т�
 |---------|------------|
 | `grid.replication.map_hit_rate` | Попадания в рабочий набор |
 | `grid.replication.sealed_misses`, `grid.sealed.miss` | Чтения из запечатанных файлов |
-| `grid.sealed.window_remap` | Перекладки mmap-окон на крупных payload |
+| `grid.sealed.window_remap` | Перекладки mmap-окон на крупных полезных нагрузках |
 | `grid.sealed.index_hit` / `index_miss` | Эффективность sealed вторичных индексов |
 
 SQL и блокировки:

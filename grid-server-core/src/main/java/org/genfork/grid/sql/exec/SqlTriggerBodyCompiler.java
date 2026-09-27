@@ -33,9 +33,6 @@ import org.genfork.grid.sql.ast.Stmt;
  * @since: 1.0
  */
 public final class SqlTriggerBodyCompiler {
-	private static final String WHEN_SELECT_PREFIX = "DELETE FROM __trg_when WHERE (";
-	private static final String WHEN_SELECT_SUFFIX = ")";
-
 	private SqlTriggerBodyCompiler() {
 	}
 
@@ -52,14 +49,10 @@ public final class SqlTriggerBodyCompiler {
 		final Stmt bodyStmt = SqlStatementParser.parseTriggerBody(bodySql, ZoneOffset.UTC);
 		final boolean bodyHasRowRefs = SqlTriggerBindUtil.hasRowRefs(bodyStmt);
 		final String normalizedWhen = whenSql == null || whenSql.isBlank() ? null : whenSql.trim();
-		final boolean whenHasRowRefs;
-		if (normalizedWhen == null) {
-			whenHasRowRefs = false;
-		} else {
-			final Stmt whenStmt = SqlStatementParser.parseTriggerBody(
-					WHEN_SELECT_PREFIX + normalizedWhen + WHEN_SELECT_SUFFIX,
-					ZoneOffset.UTC);
-			whenHasRowRefs = SqlTriggerBindUtil.hasRowRefs(whenStmt);
+		final boolean whenHasRowRefs = normalizedWhen != null && SqlTriggerBindUtil.containsRefText(normalizedWhen);
+		if (normalizedWhen != null && !whenHasRowRefs) {
+			// Validate WHEN is a legal ANTLR boolean expression (no synthetic SQL wrap).
+			SqlExpressionFilterUtil.parseExpression(normalizedWhen);
 		}
 		if (granularity == TriggerGranularity.STATEMENT && (bodyHasRowRefs || whenHasRowRefs)) {
 			throw new IllegalArgumentException("STATEMENT trigger cannot reference OLD or NEW rows");

@@ -11,7 +11,7 @@
 | AUTH / отказ connect | Неверный user/pass или узел ещё не готов (`readiness` DOWN) |
 | `bad frameLen` | Клиент попал на порт репликации (**5615**/**5616**), а не SQL |
 | `maxTxContexts=N exhausted` (код кадра 5) | Больше восьми открытых сессий на одном TCP (жёсткий потолок сервера **8**); Boot не поднимает его из YAML — откройте ещё один `Connection` или закройте простаивающие `TxContext` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md)) |
-| Stale / `applyLagStale` на чтении с реплики | Отставание apply; `FAIL_CLOSED` — подождать или читать с writer ([чтение с реплики](../configure-and-operate/operations/replica-reads.md)) |
+| Stale / `applyLagStale` на чтении с реплики | Отставание apply; при превышении порога — **отказ** (подождать или читать с пишущего) ([чтение с реплики](../configure-and-operate/operations/replica-reads.md)) |
 | Отказ записи после повышения роли | Клиент не сделал `rediscoverWriter()` — [повышение роли](../configure-and-operate/operations/ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | URL записи указывает на Hold/Witness или клиент перебирает следующий адрес в URL без `rediscoverWriter()` |
 | TX / DML на read URL | `readEndpoints` / `READ_REPLICA` — только SELECT/EXPLAIN; запись всегда на writer |
@@ -45,7 +45,7 @@ URL: `grid://user:pass@host:15432[,host:15433]/schema?...`.
 | Опция URL | Смысл |
 |-----------|--------|
 | `maxTxContexts` | Мягкий потолок клиента на параллельные TX / сессии на одном TCP (по умолчанию **256**); на сервере жёсткий потолок **8** |
-| `readEndpoints` / `readPreference` / `staleReadPolicy` | Маршрутизация SELECT/EXPLAIN; stale = `FAIL_CLOSED` |
+| `readEndpoints` / `readPreference` / `staleReadPolicy` | Маршрутизация SELECT/EXPLAIN; при отставании — отказ (не отдавать устаревшее) |
 | `retryMode` / `maxRetries` / `retryDelayMs` | Повтор connect (`OFF` / `FIXED` / `EXPONENTIAL`); не замена `rediscoverWriter()` |
 | `minConnections` / `maxConnections` | Прогрев и потолок TCP в пуле фабрики |
 | `fetchWindow` | Строк за один потоковый FETCH |
@@ -65,7 +65,7 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 | Тип | Роль |
 |-----|------|
 | `SqlEngine` | Parse (ANTLR) + execute; `SqlResult` / число затронутых строк |
-| `TableCatalog` / `TableSchema` | Схема из DDL; domain = имя таблицы |
+| `TableCatalog` / `TableSchema` | Схема из DDL; домен репликации/OpLog/sealed = ключ каталога (`public` может быть голым именем таблицы; иначе `schema.table`) |
 | `SqlServer` / `SqlServerRuntime` | Слушатель TCP SQL + runtime |
 | `TableStore` | Шардированный store + индексы |
 
@@ -81,4 +81,4 @@ JDBC в `grid-sql-client` (`jdbc:grid://`, пакет `org.genfork.grid.jdbc`) �
 
 SQL **15432** / **15433** · репликация **5615** / **5616**.
 
-**Связанное:** [основы SQL](../sql/fundamentals.md), [позиционирование](../getting-started/positioning.md).
+Дальше: [основы SQL](../sql/fundamentals.md), [позиционирование](../getting-started/positioning.md).

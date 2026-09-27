@@ -1,6 +1,6 @@
 # Восстановление на момент времени (PITR)
 
-Восстановление узла на логический ORCHID seq `T` из sealed **base** и архива OpLog.
+Диск или узел «поехали» — нужно вернуть данные на логический номер операции `T` в журнале ORCHID. Для этого нужны заранее снятый sealed **base** и архив OpLog. Без архива в момент аварии восстанавливать нечего.
 
 PITR — про сохранность и откат, не про TPS. Не ослабляйте ORCHID, fsync и опорные пороги ради «быстрого» backup.
 
@@ -22,7 +22,7 @@ PITR — про сохранность и откат, не про TPS. Не ос
 1. **Инцидент.** Остановить узел; не писать в повреждённый `dataDir`.
 2. **Base.** Иметь (или установить) sealed base на watermark `W ≤ T` через `SealedBaseBackupUtil` — см. [резервное копирование](backup-restore.md).
 3. **Офлайн-восстановление.** Пустой `dataDir` → установить base → `PitrRestoreMain --until-seq T` → replay архива `[W+1 … T]`.
-4. **Вернуть в кластер.** Поднять узел; догонять реплики. При Multi-DC учитывать `regionEpoch`.
+4. **Вернуть в кластер.** Поднять узел; догонять реплики. При нескольких ЦОД учитывать `regionEpoch`.
 
 ```mermaid
 flowchart LR
@@ -110,4 +110,4 @@ java --enable-preview -cp ... org.genfork.grid.replication.pitr.PitrRestoreMain 
 | После restore «пропали» открытые TX | Ожидаемо: dirty до COMMIT не в OpLog |
 | Restore отклонён (ограждение Active) | Сайт Hold/Witness или два пишущих / два Active |
 
-**Связанное:** [долговременное хранение](../configuration/durability.md), [хранение GMAP](../../understand/storage-sealed-gmap.md), [отказы](failures.md), [обновление узла](upgrade.md).
+Дальше: [долговременное хранение](../configuration/durability.md), [хранение GMAP](../../understand/storage-sealed-gmap.md), [отказы](failures.md), [обновление узла](upgrade.md).

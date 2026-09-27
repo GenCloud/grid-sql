@@ -388,7 +388,7 @@ public final class SqlTriggerBindUtil {
 		return LogicalFieldCursor.open(schema, blob).read(col.ordinal());
 	}
 
-	private static boolean containsRefText(String sql) {
+	static boolean containsRefText(String sql) {
 		if (sql == null || sql.isEmpty()) {
 			return false;
 		}
@@ -406,6 +406,18 @@ public final class SqlTriggerBindUtil {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Replace OLD.col/NEW.col in a WHERE / WHEN boolean fragment using schema ordinals.
+	 */
+	public static String rewriteExpressionText(
+			String whereSql,
+			TableSchema schema,
+			byte[] oldBlob,
+			byte[] newBlob
+	) {
+		return rewriteWhereText(whereSql, schema, oldBlob, newBlob);
 	}
 
 	/**

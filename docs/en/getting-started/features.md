@@ -14,7 +14,7 @@ What Grid supports today: SQL, storage, transactions, cluster behaviour, and cli
 ## SQL
 
 - Queries are parsed with an ANTLR grammar: Simplified SQL, a bounded dialect — not a full SQL clone.
-- DDL for tables, indexes, and constraints.
+- DDL for tables, indexes, constraints, and schemas (`CREATE SCHEMA` / `SET SCHEMA`). An unqualified table name binds only to the session schema; for non-`public` tables the replication / OpLog / sealed domain is `schema.table`.
 - DML: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT`, and a subset of `MERGE`.
 - SELECT: filters, INNER / LEFT / RIGHT / FULL JOIN, multi-column `GROUP BY` and `PARTITION BY`, `ORDER BY`, `LIMIT`, `OFFSET`.
 - `EXISTS` / `NOT EXISTS`, CTEs (`WITH`), views, window functions, scalar and table user functions — within the dialect.
@@ -47,7 +47,7 @@ See [storage](../understand/storage-sealed-gmap.md), [durability](../configure-a
 
 - `CREATE USER` / `DROP USER` / `ALTER USER … PASSWORD`, `CREATE ROLE` / `DROP ROLE`, `GRANT` / `REVOKE`, and `GRANT ROLE … TO user`, stored in `privileges.meta` (per-node local file; replication does not ship it — apply on every SQL node apps may hit). See [security](../configure-and-operate/operations/security.md).
 - An empty catalog means open access, and the first user created becomes administrator.
-- Once users exist, AUTH on the wire is mandatory and table privileges are enforced, including both sides of a JOIN.
+- Once users exist, AUTH on the wire is mandatory and table privileges are checked **after** name resolution (session schema / qualifier), including both sides of a JOIN — not via a global bare-name scan.
 - There is no separate `REVOKE ROLE`; membership is removed with `DROP ROLE`.
 
 See [security](../configure-and-operate/operations/security.md), [DDL](../sql/ddl.md).

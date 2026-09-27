@@ -33,6 +33,7 @@ import org.springframework.util.CollectionUtils;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import org.genfork.grid.catalog.CatalogPersistUtil;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.CheckDef;
 import org.genfork.grid.catalog.IndexDef;
@@ -52,7 +53,6 @@ import org.genfork.grid.mem.stage.GridIndexWorker;
 import org.genfork.grid.mem.stage.WorkingSetBudget;
 import org.genfork.grid.overlay.OverlayStore;
 import org.genfork.grid.query.filters.FilterCondition;
-import org.genfork.grid.query.plan.QueryData;
 import org.genfork.grid.query.plan.QueryParser;
 import org.genfork.grid.query.plan.UpdatePlan;
 import org.genfork.grid.query.plan.TableRowStats;
@@ -66,6 +66,7 @@ import org.genfork.grid.serial.PrimaryKeyCodec;
 import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.serial.SqlWireUtil;
 import org.genfork.grid.serial.UpdateAssignMergeUtil;
+import org.genfork.grid.sql.exec.SqlExpressionFilterUtil;
 import org.genfork.grid.sql.tx.KeyWrapper;
 import org.genfork.grid.utils.ArrayUtil;
 import org.genfork.grid.utils.SerialUtil;
@@ -80,8 +81,6 @@ import org.genfork.grid.utils.SerialUtil;
  */
 public final class TableStore {
 	private static final int ANALYZE_HISTOGRAM_BUCKETS = 32;
-	private static final String CHECK_SELECT_PREFIX = "SELECT * FROM ";
-	private static final String CHECK_WHERE = " WHERE ";
 	private volatile TableSchema schema;
 	private final int shards;
 	private final GridEntriesProcessor[] processors;
@@ -127,7 +126,7 @@ public final class TableStore {
 
 		if (replicationCoordinator != null && replicationCoordinator.isEnabled()) {
 			final MutationRecorder recorder = replicationCoordinator.registerDomain(
-					schema.tableName(),
+					schema.catalogKey(),
 					shard -> shard >= 0 && shard < this.shards ? processors[shard] : null,
 					true
 			);
@@ -196,7 +195,7 @@ public final class TableStore {
 	 */
 	public void replaceColumnSchema(TableSchema next) {
 		Objects.requireNonNull(next, "next");
-		if (!next.tableName().equalsIgnoreCase(schema.tableName())) {
+		if (!next.catalogKey().equalsIgnoreCase(schema.catalogKey())) {
 			throw new IllegalArgumentException("table name mismatch on ALTER");
 		}
 		final TableSchema previous = this.schema;
@@ -293,7 +292,7 @@ public final class TableStore {
 		if (def.kind() != IndexType.STRICT) {
 			return false;
 		}
-		final String syntheticName = schema.tableName() + "_pk";
+		final String syntheticName = CatalogPersistUtil.syntheticPkIndexName(schema.catalogKey());
 		if (def.name().equalsIgnoreCase(syntheticName)) {
 			return true;
 		}
@@ -575,14 +574,12 @@ public final class TableStore {
 	}
 
 	/**
-	 * Keys matching WHERE without SELECT projection / SqlEngine subquery.
-	 * Uses the same index path as {@link #selectKeys}; callers mutate by key bytes.
+	 * Keys matching a WHERE boolean fragment — ANTLR expression → index filter (no synthetic SELECT).
 	 */
 	public List<byte[]> keysMatching(String whereSql) {
 		Objects.requireNonNull(whereSql, "whereSql");
-		final String sql = "SELECT " + schema.pkColumn().name() + " FROM " + schema.tableName()
-				+ " WHERE " + whereSql;
-		return selectKeys(sql);
+		ensureAllShardsHydrated();
+		return index.executeFilter(QueryParser.parseExpression(whereSql));
 	}
 
 	/** Apply mutator per matching key; avoids Object PK round-trip in the engine. */
@@ -796,7 +793,7 @@ public final class TableStore {
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		if (rejectExistingPk && getCommittedBytes(keyBytes) != null) {
 			throw new NonUniqueValueException(
-					"duplicate primary key for table " + schema.tableName());
+					"duplicate primary key for table " + schema.catalogKey());
 		}
 		validateChecks(coerced);
 		final String pkName = schema.pkColumn().name();
@@ -858,10 +855,7 @@ public final class TableStore {
 
 	private void validateEncodedChecks(byte[] valueBytes) {
 		for (CheckDef check : schema.checks()) {
-			final String sql = CHECK_SELECT_PREFIX + schema.tableName() + CHECK_WHERE + check.expressionSql();
-			final QueryData query = QueryParser.parseAndBuildCondition(null, sql, Map.of());
-			final FilterCondition condition = query.filter() == null ? null : query.filter().conditionTree();
-			if (condition != null && !condition.matches(valueBytes, schema)) {
+			if (!SqlExpressionFilterUtil.matchesExpression(check.expressionSql(), valueBytes, schema)) {
 				throw new IllegalStateException("CHECK violation: " + check.name());
 			}
 		}
@@ -886,7 +880,7 @@ public final class TableStore {
 	private GridEntriesProcessor getProcessor(byte[] key) {
 		final int shard = getShard(key);
 		if (replicationCoordinator != null) {
-			replicationCoordinator.ensureShardHydrated(schema.tableName(), shard);
+			replicationCoordinator.ensureShardHydrated(schema.catalogKey(), shard);
 		}
 		return processors[shard];
 	}
@@ -904,7 +898,7 @@ public final class TableStore {
 			return;
 		}
 		for (int shard = 0; shard < shards; shard++) {
-			replicationCoordinator.ensureShardHydrated(schema.tableName(), shard);
+			replicationCoordinator.ensureShardHydrated(schema.catalogKey(), shard);
 		}
 	}
 
@@ -1139,7 +1133,7 @@ public final class TableStore {
 		if (overlayStore == null) {
 			return;
 		}
-		overlayStore.autoPinOnHotWrite(schema.tableName(), keyBytes, autoPinTtlMs);
+		overlayStore.autoPinOnHotWrite(schema.catalogKey(), keyBytes, autoPinTtlMs);
 	}
 
 	private void maybeInjectFlushFail() {

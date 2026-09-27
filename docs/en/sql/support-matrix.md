@@ -15,7 +15,7 @@ Parsing is strict. There is no error recovery and no "best effort" execution of 
 | Prepared | `PREPARE name AS <statement>`, `EXECUTE name [USING v, …]`, `DEALLOCATE [PREPARE] name` |
 | Tables | `CREATE TABLE [IF NOT EXISTS]`, `DROP TABLE [IF EXISTS]`, `ALTER TABLE … ADD COLUMN [IF NOT EXISTS]`, `ALTER TABLE … ADD [CONSTRAINT c] CHECK (…)`, `ALTER TABLE … ADD [CONSTRAINT c] PRIMARY KEY (…)`, `ALTER TABLE … ADD [CONSTRAINT c] FOREIGN KEY (…) REFERENCES …`, `ALTER TABLE … DROP COLUMN`, `ALTER TABLE … DROP CONSTRAINT` |
 | Indexes | `CREATE [UNIQUE\|BITMAP] INDEX [IF NOT EXISTS]`, `DROP INDEX [IF EXISTS] name [ON table]` |
-| Schemas | `CREATE SCHEMA [IF NOT EXISTS] [AUTHORIZATION user]`, `DROP SCHEMA [IF EXISTS] name [RESTRICT]`, `SET SCHEMA name` | `AUTHORIZATION` ignored (no owner); `RESTRICT` optional (default); `CASCADE` rejected |
+| Schemas | `CREATE SCHEMA [IF NOT EXISTS] [AUTHORIZATION user]`, `DROP SCHEMA [IF EXISTS] name [RESTRICT]`, `SET SCHEMA name` | `AUTHORIZATION` ignored (no owner); `RESTRICT` default; `CASCADE` rejected. Unqualified names → session schema only; cross-schema needs explicit `schema.table`; non-`public` catalog/replication key = `schema.table` |
 | Views | `CREATE VIEW … AS <query>`, `CREATE MATERIALIZED VIEW … AS <query>`, `REFRESH MATERIALIZED VIEW`, `DROP VIEW [IF EXISTS]` |
 | Sequences | `CREATE SEQUENCE [IF NOT EXISTS] s [START WITH n] [INCREMENT BY n] [RECLAIM]`, `DROP SEQUENCE`, `SELECT NEXTVAL('s')`, `SELECT CURRVAL('s')` |
 | Functions | `CREATE FUNCTION f(args) RETURNS type AS CLASS 'fqcn' METHOD 'name'`, `DROP FUNCTION` |

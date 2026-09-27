@@ -14,7 +14,7 @@
 ## SQL
 
 - Запросы разбираются грамматикой ANTLR: Simplified SQL, ограниченный диалект — не полная копия «большого» SQL.
-- DDL для таблиц, индексов и ограничений.
+- DDL для таблиц, индексов, ограничений и схем (`CREATE SCHEMA` / `SET SCHEMA`). Неквалифицированное имя таблицы привязывается только к схеме сессии; в репликации / OpLog / sealed для non-`public` домен = `schema.table`.
 - DML: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT` и подмножество `MERGE`.
 - SELECT: фильтры, соединения INNER / LEFT / RIGHT / FULL JOIN, `GROUP BY` и `PARTITION BY` по нескольким колонкам, `ORDER BY`, `LIMIT`, `OFFSET`.
 - `EXISTS` / `NOT EXISTS`, обобщённые табличные выражения (`WITH`), представления, оконные функции, скалярные и табличные пользовательские функции — в пределах диалекта.
@@ -77,4 +77,4 @@
 
 Плановые цифры и пороги регресса — в [ёмкости](../performance/capacity-slo.md); полные таблицы прогонов — в [результатах](../performance/results.md). Перед заявлениями по ёмкости переснимите на спокойном хосте — этот раздел не заменяет таблицу замеров.
 
-**Связанное:** [введение](what-is-grid.md), [зачем Grid](positioning.md), [подключение клиентов](connect-clients.md).
+Дальше: [введение](what-is-grid.md), [зачем Grid](positioning.md), [подключение клиентов](connect-clients.md), [DDL](../sql/ddl.md).

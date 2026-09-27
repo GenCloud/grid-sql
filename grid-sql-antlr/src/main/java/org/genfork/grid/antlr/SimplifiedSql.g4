@@ -4,11 +4,16 @@ options {
 	caseInsensitive = true;
 }
 
-// Entry points: QueryParser uses `query`; SqlEngine uses `statement`;
-// JDBC tooling multi-statement scripts use `script`.
+// Entry points: QueryParser uses `query` / `standaloneExpression`;
+// SqlEngine uses `statement`; JDBC tooling multi-statement scripts use `script`.
 
 statement
     : executable SEMI* EOF
+    ;
+
+/** WHERE / CHECK / WHEN boolean fragment — never wrap in synthetic SELECT. */
+standaloneExpression
+    : expression EOF
     ;
 
 script

@@ -1,6 +1,6 @@
 # HA в одном ЦОД под нагрузкой
 
-Отказоустойчивость внутри одного ЦОД держится на ORCHID: узлы синхронизируют фазу (связанные осцилляторы по модели Ёсики Курамото) и подтверждают запись кворумом по digest. Выборов в духе Raft — с термами и голосованием — здесь нет.
+Отказоустойчивость внутри одного ЦОД держится на ORCHID: узлы синхронизируют фазу и подтверждают запись кворумом по контрольной сумме. Выборов в духе Raft — с термами и голосованием — здесь нет. Пишущий узел — среди синхронизированных тот, у кого минимальный `nodeId`.
 
 Приложения ходят по **SQL TCP**, узлы между собой — по **отдельному порту репликации**. Это разные каналы: клиент на порту репликации получит `bad frameLen`.
 
@@ -75,7 +75,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-  participant P as Proposer_n1
+  participant P as Writer_n1
   participant S as Survivors_n2_n3
   participant W as Meta_protokola
   participant Cl as Client
@@ -106,7 +106,7 @@ grid://u:p@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public?connectTimeout
 
 | Параметр | Зачем нужен |
 |----------|-------------|
-| Все узлы кольца в списке адресов | После падения proposer клиент переедет на выживших |
+| Все узлы кольца в списке адресов | После падения пишущего клиент переедет на выживших |
 | `connectTimeoutMs` | Быстрее отказаться от мёртвого узла |
 | `retryMode` и `maxRetries` | Повторы подключения по списку адресов |
 | `maxTxContexts` | потолок логических сессий на **одном** TCP, а не пул из N сокетов |
@@ -211,7 +211,7 @@ grid://u:p@n1:15432,n2:15433/public?readEndpoints=n2:15433&readPreference=REPLIC
 ```
 
 - Сервер: `grid.replication.ha.replicaReadsEnabled=true` (профили starter primary/replica включают для демо).
-- Политика отставания v1: **FAIL_CLOSED**.
+- Политика отставания v1: при превышении порога — **отказ** (не отдавать устаревшее чтение).
 - Приложение: `ConnectionFactory.fromUrl` (автомаршрут при `readEndpoints`) → при необходимости `createReadStatement` / `executeRead`.
 
-**Связанное:** [несколько ЦОД под нагрузкой](cluster-multidc-highload.md), [Compose-развёртывание](deploy-compose.md), [чтение с реплики](replica-reads.md), [отказы](failures.md).
+Дальше: [несколько ЦОД под нагрузкой](cluster-multidc-highload.md), [Compose-развёртывание](deploy-compose.md), [чтение с реплики](replica-reads.md).

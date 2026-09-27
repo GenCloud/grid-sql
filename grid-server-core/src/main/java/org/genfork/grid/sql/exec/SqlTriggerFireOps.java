@@ -16,7 +16,6 @@
 package org.genfork.grid.sql.exec;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 import org.genfork.grid.catalog.TableSchema;
@@ -24,13 +23,8 @@ import org.genfork.grid.catalog.TriggerDef;
 import org.genfork.grid.catalog.TriggerEvent;
 import org.genfork.grid.catalog.TriggerGranularity;
 import org.genfork.grid.catalog.TriggerTiming;
-import org.genfork.grid.query.filters.FilterCondition;
-import org.genfork.grid.query.plan.QueryData;
-import org.genfork.grid.query.plan.QueryParser;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlSession;
-import org.genfork.grid.sql.SqlStatementParser;
-import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.sql.ast.Stmt;
 import org.genfork.grid.store.TableStore;
 
@@ -44,9 +38,6 @@ import org.genfork.grid.store.TableStore;
 public final class SqlTriggerFireOps {
 	static final int MAX_TRIGGER_NESTING = 8;
 	private static final String AUTO_SAVEPOINT_PREFIX = "__trg_";
-	private static final String CHECK_SELECT_PREFIX = "SELECT * FROM ";
-	private static final String CHECK_WHERE = " WHERE (";
-	private static final String CHECK_SUFFIX = ")";
 	private static final String SQL_TRUE = "TRUE";
 	private static final String SQL_FALSE = "FALSE";
 	private static final String ONE = "1";
@@ -176,15 +167,8 @@ public final class SqlTriggerFireOps {
 			throw new IllegalArgumentException("STATEMENT trigger WHEN must be a constant expression");
 		}
 		final byte[] probe = newBlob != null ? newBlob : oldBlob;
-		final String sql = CHECK_SELECT_PREFIX + schema.tableName() + CHECK_WHERE + substituted + CHECK_SUFFIX;
-		final Stmt parsed = SqlStatementParser.parseTriggerBody(sql, session.timezone());
-		final Stmt bound = SqlTriggerBindUtil.bindTrigger(parsed, schema, oldBlob, newBlob);
-		if (!(bound instanceof SelectSql select)) {
-			throw new IllegalStateException("trigger WHEN did not compile to SELECT");
-		}
-		final QueryData query = QueryParser.parseAndBuildCondition(null, select.sql(), Map.of());
-		final FilterCondition condition = query.filter() == null ? null : query.filter().conditionTree();
-		return condition == null || condition.matches(probe, schema);
+		final String boundExpr = SqlTriggerBindUtil.rewriteExpressionText(substituted, schema, oldBlob, newBlob);
+		return SqlExpressionFilterUtil.matchesExpression(boundExpr, probe, schema);
 	}
 
 	private static void enterNesting(SqlSession session) {

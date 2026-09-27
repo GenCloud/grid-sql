@@ -162,7 +162,9 @@ DROP SCHEMA analytics;
 DROP SCHEMA reporting RESTRICT;
 ```
 
-A table name may be qualified: `analytics.orders`. `DROP SCHEMA` defaults to RESTRICT when the keyword is omitted; `CASCADE` is rejected. `AUTHORIZATION` on `CREATE SCHEMA` is accepted and ignored (no schema owner).
+A table name may be qualified: `analytics.orders`. Unqualified names bind only to the session schema (`SET SCHEMA` / connection default) — never a silent lookup in another schema. The same local table name may exist in two schemas (`a.t` and `b.t` are distinct). Cross-schema `SELECT` / `JOIN` / `FOREIGN KEY … REFERENCES` require an **explicit** `schema.table` qualifier; privileges are checked per schema after name resolution. For schema `public` the catalog key may stay bare `t` (compat). Index and identity sequence names are object-local (no `schema.` prefix inside the index identifier). `DROP SCHEMA` defaults to RESTRICT when the keyword is omitted; `CASCADE` is rejected. `AUTHORIZATION` on `CREATE SCHEMA` is accepted and ignored (no schema owner).
+
+Replication / OpLog / sealed domain for a non-`public` table is `schema.table` (`catalogKey`), not the bare local name alone.
 
 ## Sequences
 
@@ -179,6 +181,8 @@ DROP SEQUENCE IF EXISTS order_seq;
 
 The `RECLAIM` modifier allows freed values to be reused — useful where identifier density matters more than strict monotonicity.
 
+Unqualified names in `NEXTVAL` / `CURRVAL` / `CREATE SEQUENCE` also bind to the session schema — same rule as tables.
+
 ## Views
 
 ```sql
@@ -193,7 +197,7 @@ REFRESH MATERIALIZED VIEW daily_totals;
 DROP VIEW IF EXISTS active_orders;
 ```
 
-A plain view is inlined into the query. A materialized view stores the result and is updated by `REFRESH`; there is no automatic refresh.
+A plain view is inlined into the query. A materialized view stores the result and is updated by `REFRESH`; there is no automatic refresh. View identity is schema + local object name (same QName rules as tables); `information_schema.tables` exposes those fields without reverse-parsing a dotted string.
 
 ## Functions and triggers
 

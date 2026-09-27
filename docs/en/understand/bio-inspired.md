@@ -22,7 +22,7 @@ Phase coupling follows Yoshiki Kuramoto’s coupled-oscillator model (the author
 1. Peers exchange `ORCHID_PHASE`: phase, ω, last committed seq, optional propose digest.
 2. Order parameter `R` measures sync among **seen live** peers, by default inside the local data center. Writes need `R ≥ order-threshold`.
 3. Solo write is allowed only when configured `N = 1` (empty peer list) — not after partition or `forgetPeer`.
-4. The proposer is phase-ranked (`min(nodeId)` among self and seen); competing proposes get NACK.
+4. The writer is phase-ranked (`min(nodeId)` among self and reachable peers); competing proposes get NACK.
 5. `ORCHID_PROPOSE` carries the previous op seq. Majority on one digest commits. Journal confirm happens before commit broadcast.
 6. Last committed seq is stored under the node’s `orchid/` directory.
 

@@ -55,6 +55,8 @@ ConnectionFactory factory = new RemoteConnectionFactory(
 grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<опции>
 ```
 
+Путь `/<schema>` — схема сессии по умолчанию при `SESSION_OPEN` (то же, что `SET SCHEMA` / `connection.setSchema`). Неквалифицированные имена привязываются только к ней.
+
 | Опция | По умолчанию | Смысл |
 |-------|--------------|-------|
 | `minConnections` | `1` | TCP, открываемые на прогрев / первом `obtain` (clamp до `maxConnections`) |
@@ -69,7 +71,7 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<опции>
 | `fetchWindow` | `64` | Строк за один FETCH при потоковой выдаче |
 | `readEndpoints` | — | Список реплик для чтения; включает маршрутизацию |
 | `readPreference` | `PRIMARY` | `PRIMARY` / `REPLICA`; `REPLICA` требует `readEndpoints` |
-| `staleReadPolicy` | `FAIL_CLOSED` | При отставании реплики выше порога сервера — отказ чтения (в v1 единственное значение); см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md) |
+| `staleReadPolicy` | отказ при отставании | При отставании реплики выше порога сервера — отказ чтения (в v1 единственное значение); см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md) |
 | `maxReadConnections` | `1` | Сокеты фабрики чтения к репликам |
 | `warmup` | `false` | Если `true`, явный `warmup()` прогревает `minConnections` (не блокирует `obtain`) |
 
@@ -138,7 +140,7 @@ Mono<Long> once = connection.prepare("upd_bal",
 | Метод | Роль |
 |-------|------|
 | `connection.pin(table, key[, ttlMs[, qos]])` / `unpin` | Мягкое закрепление в overlay — [Overlay PIN](../configure-and-operate/configuration/overlay-pin.md) |
-| `connection.setSchema(schema)` | `SET SCHEMA` для сессии |
+| `connection.setSchema(schema)` | `SET SCHEMA` для сессии (то же, что путь `/schema` в URL при открытии) |
 | `connection.setTimezone(zoneId)` | Часовой пояс сессии (удалённое соединение) |
 
 ### Про `.block()`
@@ -212,4 +214,4 @@ grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:1
 
 Примеры `grid-sql-client` лежат в [`examples/`](../../../examples/). Опциональный `factory.warmup()` при `?warmup=true` прогревает `minConnections` (сразу отказ при ошибке connect/AUTH) — см. `examples-warmup`. Канал берётся через `factory.obtain()`. Остальные модули: connect, session, TX, batch, PREPARE, savepoints, потоковая выдача, parallel TX, чтение с реплики, HA URL, DML, indexes, JOIN/agg, EXPLAIN, `FOR UPDATE`, PIN. `GRID_URL` — на живой SQL-порт (`capacity` или `examples/compose/1dc-n2`). См. [`examples/README.ru.md`](../../../examples/README.ru.md).
 
-**Связанное:** [транзакции](transactions.md), [Spring Boot](spring-boot.md), [потоковая выдача](wire-streaming.md), [подключение клиентов](../getting-started/connect-clients.md), [справочник API](../api-reference/README.md).
+Дальше: [транзакции](transactions.md), [Spring Boot](spring-boot.md), [потоковая выдача](wire-streaming.md), [подключение клиентов](../getting-started/connect-clients.md), [справочник API](../api-reference/README.md).

@@ -20,7 +20,7 @@ Override: `GRID_IMAGE=my-registry/grid-sql:tag` in the env file or shell.
 
 ## Topology-matched knobs
 
-YAML under each topology matches the reference Jepsen / HA load / multi-DC stands:
+YAML under each topology matches the reference Jepsen / HA load / multi-site stands:
 
 | Knob | Value | Source |
 |------|-------|--------|
@@ -61,8 +61,8 @@ Edit peers / ports / `cluster-id` in those files — they define the lab.
 |---------|----------|------------|---------|
 | `1dc-n2` | N=2 primary + replica | JMeter Load / WRITE·READ | [start a cluster](../../getting-started/start-cluster.md) |
 | `1dc-n3` | N=3 same DC | Everyday HA, writer hand-off | [HA in one DC](cluster-ha-highload.md) |
-| `multidc-async` | 3+2+w1 ASYNC_SHIP | Cross-DC RPO / ship lag | [Multi-DC ASYNC](cluster-multidc-highload.md) |
-| `multidc-sync` | 3+2+w1 SYNC_VOTERS | Cross-DC commit latency cost | [Multi-DC SYNC](cluster-multidc-highload.md) |
+| `multidc-async` | 3+2+w1 ASYNC_SHIP | Cross-site RPO / ship lag | [Multi-site ASYNC](cluster-multidc-highload.md) |
+| `multidc-sync` | 3+2+w1 SYNC_VOTERS | Cross-site commit latency cost | [Multi-site SYNC](cluster-multidc-highload.md) |
 
 Client pin and Witness (quorum for role capture; does not serve app read/write): [promote a node](ha-promote.md).
 

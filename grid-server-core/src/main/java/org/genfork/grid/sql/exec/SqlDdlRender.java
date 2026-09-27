@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.sql.exec;
 
+import org.genfork.grid.catalog.CatalogPersistUtil;
 import org.genfork.grid.mem.index.IndexType;
 import org.genfork.grid.sql.ast.DdlAst.AlterTableSql;
 import org.genfork.grid.sql.ast.DdlAst.ColumnSpec;
@@ -167,7 +168,8 @@ public final class SqlDdlRender {
 		if (s.ifNotExists()) {
 			sb.append("IF NOT EXISTS ");
 		}
-		sb.append(s.indexName()).append(" ON ").append(resolvedTable).append(" (");
+		sb.append(CatalogPersistUtil.sanitizeIndexName(s.indexName()))
+				.append(" ON ").append(resolvedTable).append(" (");
 		final List<String> cols = s.columns();
 		for (int i = 0; i < cols.size(); i++) {
 			if (i > 0) {

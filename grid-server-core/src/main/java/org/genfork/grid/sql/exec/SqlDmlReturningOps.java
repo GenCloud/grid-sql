@@ -82,7 +82,7 @@ public final class SqlDmlReturningOps {
 			final ColumnDef column = store.schema().requireColumn(name);
 			columns.add(SqlResult.ColumnMeta.ofCatalog(
 					column.name(), column.type(), column.nullable(),
-					store.schema().tableName(), null));
+					store.schema().catalogKey(), null));
 		}
 		final List<Object[]> rows = new ArrayList<>(values.size());
 		for (byte[] value : values) {

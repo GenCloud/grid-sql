@@ -91,8 +91,8 @@ public class SqlDistributedRemoteBlobIT {
 		final AtomicInteger blobCalls = new AtomicInteger();
 
 		engine.setDistributedPeerKeyExecutors(List.of(sql -> {
-			final String upper = sql.toUpperCase(Locale.ROOT);
-			if (upper.contains("FROM ITEMS")) {
+			final String lower = sql.toLowerCase(Locale.ROOT);
+			if (lower.contains("items")) {
 				return List.of(remoteKey);
 			}
 			return List.of();

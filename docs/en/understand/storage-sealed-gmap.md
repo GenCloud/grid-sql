@@ -6,7 +6,7 @@ Ordering is fixed: journal first, then seal a group of changes into files, and o
 
 ## How data is divided
 
-A key belongs to exactly one shard of its table: `shard = fastHash(key) % shards`. The shard is the unit of almost everything else — journal streams are per `(domain, shard)`, sealed files are per shard and node, commit units are marked on `table#shard`, and placement moves ownership one shard at a time.
+A key belongs to exactly one shard of its table: `shard = fastHash(key) % shards`. The shard is the unit of almost everything else — journal streams are per `(domain, shard)`, sealed files are per shard and node, commit units are marked on `table#shard`, and placement moves ownership one shard at a time. **Domain** in file names and OpLog is the `catalogKey`: for schema `public` it may stay the bare table name; otherwise `schema.table`.
 
 Inside a shard, a row is a packed binary record with an offset table at the end. Nothing in the storage layer knows about columns as Java fields; it knows offsets, lengths and the catalog that maps a column name to one of them.
 

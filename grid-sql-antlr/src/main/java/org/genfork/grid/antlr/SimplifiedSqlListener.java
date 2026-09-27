@@ -18,6 +18,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitStatement(SimplifiedSqlParser.StatementContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#standaloneExpression}.
+	 * @param ctx the parse tree
+	 */
+	void enterStandaloneExpression(SimplifiedSqlParser.StandaloneExpressionContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#standaloneExpression}.
+	 * @param ctx the parse tree
+	 */
+	void exitStandaloneExpression(SimplifiedSqlParser.StandaloneExpressionContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#script}.
 	 * @param ctx the parse tree
 	 */

@@ -50,8 +50,8 @@ public record SequenceDef(
 		return new SequenceDef(name, startValue, increment, reclaim, table, column);
 	}
 
-	/** Default IDENTITY / SERIAL backing sequence name: {@code table_column_seq}. */
+	/** Default IDENTITY / SERIAL backing sequence name: {@code localTable_column_seq}. */
 	public static String identityName(String table, String column) {
-		return table + "_" + column + "_seq";
+		return CatalogPersistUtil.objectPartOf(table) + "_" + column + "_seq";
 	}
 }

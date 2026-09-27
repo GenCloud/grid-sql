@@ -65,7 +65,7 @@ The sequence is: sealed map files (plus `.sbpt` / `.sbm`) → replay the OpLog f
 
 What does **not** come back is uncommitted state: a transaction that never reached `COMMIT` was never in the journal, so after a restart it is simply gone. That is expected, not data loss.
 
-## Fail-closed ordering
+## Commit order (no silent success)
 
 ORCHID commit happens **before** the map put. The OpLog append is followed by `confirmPersisted` — by `MutationRecorder` on the writer and by `ReplicaApplier` on a peer. The ship path blocks on a flow permit rather than queueing without bound.
 
@@ -90,7 +90,7 @@ The rules that protect against divergence during a partition:
 - A solo write is allowed **only** when the configured peer list is empty (`peerIds.isEmpty()`, bootstrap with `N = 1`).
 - With `N ≥ 2` configured and `livePeerCount() == 0` after a partition, the node is **not** considered synced. An empty live view does not grant the right to write.
 - `forgetPeer` clears the live view but **does not shrink** the configured quorum.
-- The proposer is phase-ranked: `min(nodeId)` among self and seen peers.
+- The writer is phase-ranked: `min(nodeId)` among self and seen peers.
 - A peer is promoted back to voter once its `APPLY_ACK` has caught up; a HELLO with the same `clusterId` adds it back via `addPeer`.
 
 ## Repair and placement readiness

@@ -25,6 +25,13 @@ public class SimplifiedSqlBaseVisitor<T> extends AbstractParseTreeVisitor<T> imp
 	 * <p>The default implementation returns the result of calling
 	 * {@link #visitChildren} on {@code ctx}.</p>
 	 */
+	@Override public T visitStandaloneExpression(SimplifiedSqlParser.StandaloneExpressionContext ctx) { return visitChildren(ctx); }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation returns the result of calling
+	 * {@link #visitChildren} on {@code ctx}.</p>
+	 */
 	@Override public T visitScript(SimplifiedSqlParser.ScriptContext ctx) { return visitChildren(ctx); }
 	/**
 	 * {@inheritDoc}

@@ -139,7 +139,7 @@ public final class CatalogMetaCache {
 	public static long fingerprint(TableSchema schema) {
 		Objects.requireNonNull(schema, "schema");
 		final CRC32 crc = new CRC32();
-		final String header = schema.tableName()
+		final String header = schema.catalogKey()
 				+ "|" + schema.schemaEpoch()
 				+ "|" + schema.columns().size()
 				+ "|" + schema.indexes().size()

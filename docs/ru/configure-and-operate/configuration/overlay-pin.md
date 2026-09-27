@@ -155,4 +155,4 @@ grid:
 
 Механика размещения: [overlay и роевое размещение](../../understand/overlay-and-swarm.md).
 
-**Связанное:** [репликация](replication.md), [мониторинг](../monitoring.md), [передача роли писателя](../operations/ha-promote.md), [отказы](../operations/failures.md).
+Дальше: [репликация](replication.md), [мониторинг](../monitoring.md), [повышение роли узла](../operations/ha-promote.md), [отказы](../operations/failures.md).

@@ -38,7 +38,9 @@ import java.util.Objects;
  * @since: 1.0
  */
 public final class TableSchema {
+	private final String schemaName;
 	private final String tableName;
+	private final String catalogKey;
 	private final List<ColumnDef> columns;
 	private final Map<String, ColumnDef> byName;
 	private final ColumnDef pkColumn;
@@ -92,7 +94,10 @@ public final class TableSchema {
 		if (columns.isEmpty()) {
 			throw new IllegalArgumentException("columns empty");
 		}
-		this.tableName = tableName;
+		final CatalogQualifiedName qn = CatalogQualifiedName.parse(tableName, CatalogPersistUtil.SCHEMA_PUBLIC);
+		this.schemaName = qn.schemaName();
+		this.tableName = qn.objectName();
+		this.catalogKey = qn.catalogKey();
 		this.columns = List.copyOf(columns);
 		final List<IndexDef> inputIndexes = indexes == null ? List.of() : List.copyOf(indexes);
 		this.foreignKeys = foreignKeys == null ? List.of() : List.copyOf(foreignKeys);
@@ -152,7 +157,7 @@ public final class TableSchema {
 		}
 		if (!hasPkIndex) {
 			effectiveIndexes.add(0, new IndexDef(
-					tableName + "_pk",
+					CatalogPersistUtil.syntheticPkIndexName(this.catalogKey),
 					primaryKeys.stream().map(ColumnDef::name).toList(),
 					IndexType.STRICT));
 		}
@@ -160,7 +165,7 @@ public final class TableSchema {
 		for (FkDef fk : this.foreignKeys) {
 			if (!hasCoveringIndex(effectiveIndexes, fk.childColumns())) {
 				effectiveIndexes.add(new IndexDef(
-						fk.name() + FK_CHILD_INDEX_SUFFIX,
+						CatalogPersistUtil.sanitizeIndexName(fk.name()) + FK_CHILD_INDEX_SUFFIX,
 						List.copyOf(fk.childColumns()),
 						IndexType.LAX));
 			}
@@ -187,8 +192,28 @@ public final class TableSchema {
 		return false;
 	}
 
+	/**
+	 * Local table name within {@link #schemaName()} (never contains {@code .}).
+	 */
 	public String tableName() {
 		return tableName;
+	}
+
+	/** SQL schema namespace for this table. */
+	public String schemaName() {
+		return schemaName;
+	}
+
+	/**
+	 * Catalog / store / replication map key ({@code t} for public, {@code schema.t} otherwise).
+	 */
+	public String catalogKey() {
+		return catalogKey;
+	}
+
+	/** Qualified name view of this table. */
+	public CatalogQualifiedName qualifiedName() {
+		return CatalogQualifiedName.of(schemaName, tableName);
 	}
 
 	public List<ColumnDef> columns() {
@@ -230,7 +255,7 @@ public final class TableSchema {
 		final List<ColumnDef> next = new ArrayList<>(columns.size() + 1);
 		next.addAll(columns);
 		next.add(new ColumnDef(name, type, nullable, columns.size(), false, false));
-		return new TableSchema(tableName, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy with trailing column and optional DEFAULT expression. */
@@ -254,7 +279,7 @@ public final class TableSchema {
 		next.addAll(columns);
 		next.add(new ColumnDef(
 				name, type, nullable, columns.size(), false, false, false, null, defaultExprOrNull));
-		return new TableSchema(tableName, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy without a non-PK column (new schema epoch). */
@@ -285,7 +310,7 @@ public final class TableSchema {
 			}
 			next.add(copyColumn(col, ord++));
 		}
-		return new TableSchema(tableName, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy with an added secondary index and new epoch. */
@@ -302,7 +327,7 @@ public final class TableSchema {
 		final List<IndexDef> next = new ArrayList<>(indexes.size() + 1);
 		next.addAll(indexes);
 		next.add(indexDef);
-		return new TableSchema(tableName, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy without named index (not the synthetic PK index). */
@@ -322,7 +347,7 @@ public final class TableSchema {
 		if (!found) {
 			throw new IllegalStateException("Index not found: " + indexName);
 		}
-		return new TableSchema(tableName, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy with an added FK (new schema epoch). */
@@ -339,7 +364,7 @@ public final class TableSchema {
 		final List<FkDef> next = new ArrayList<>(foreignKeys.size() + 1);
 		next.addAll(foreignKeys);
 		next.add(fk);
-		return new TableSchema(tableName, columns, indexes, next, checks, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, columns, indexes, next, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy without named FK (and its auto child covering index when present). */
@@ -368,7 +393,7 @@ public final class TableSchema {
 			}
 			nextIdx.add(idx);
 		}
-		return new TableSchema(tableName, columns, nextIdx, nextFks, checks, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, columns, nextIdx, nextFks, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy without named CHECK. */
@@ -388,7 +413,7 @@ public final class TableSchema {
 		if (!found) {
 			throw new IllegalStateException("CHECK constraint not found: " + constraintName);
 		}
-		return new TableSchema(tableName, columns, indexes, foreignKeys, next, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, columns, indexes, foreignKeys, next, newEpoch, primaryKeyNames());
 	}
 
 	/**
@@ -422,7 +447,7 @@ public final class TableSchema {
 		for (String name : pkColumns) {
 			requireColumn(name);
 		}
-		return new TableSchema(tableName, next, indexes, foreignKeys, checks, newEpoch, List.copyOf(pkColumns));
+		return new TableSchema(catalogKey, next, indexes, foreignKeys, checks, newEpoch, List.copyOf(pkColumns));
 	}
 
 	/** Immutable copy with an added CHECK constraint. */
@@ -435,7 +460,7 @@ public final class TableSchema {
 		}
 		final List<CheckDef> next = new ArrayList<>(checks);
 		next.add(check);
-		return new TableSchema(tableName, columns, indexes, foreignKeys, next, newEpoch, primaryKeyNames());
+		return new TableSchema(catalogKey, columns, indexes, foreignKeys, next, newEpoch, primaryKeyNames());
 	}
 
 	public IndexDef findIndex(String indexName) {
@@ -514,7 +539,8 @@ public final class TableSchema {
 
 	private void validateForeignKeys() {
 		for (FkDef fk : foreignKeys) {
-			if (!fk.childTable().equalsIgnoreCase(tableName)) {
+			if (!fk.childTable().equalsIgnoreCase(catalogKey)
+					&& !fk.childTable().equalsIgnoreCase(tableName)) {
 				throw new IllegalArgumentException(
 						"FK " + fk.name() + " childTable mismatch: " + fk.childTable());
 			}

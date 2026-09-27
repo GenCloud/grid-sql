@@ -1,6 +1,6 @@
 # Чтение с реплики
 
-По умолчанию выключено: все запросы идут на primary. Можно явно включить маршрутизацию: запись — на пишущий узел; autocommit SELECT и EXPLAIN — на синхронные реплики (и Hold при допустимом отставании).
+Клиент хочет разгрузить пишущий узел SELECT-ами. По умолчанию всё идёт на пишущий. Можно явно включить: запись и TX — на пишущий; autocommit SELECT / EXPLAIN — на реплики с допустимым отставанием. Лучше отказ при устаревших данных, чем «тихо прочитать старое».
 
 ## Топология
 
@@ -26,7 +26,7 @@ flowchart TB
 
 ### FOR UPDATE и блокировки на пирах
 
-`FOR UPDATE` / `SKIP LOCKED` выполняются только на **пишущем** узле (не на реплике только для чтения). Индексные ключи в сериализованных байтах блокируются локально (`LockAwareKeyCursor`). При включённой репликации и непустом списке пиров Boot ставит Netty-агенты из **`peers` репликации** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`); пиры берут те же блокировки через `DistForUpdateCoordinator`. Ошибка Netty на пире — отказ при ошибке. В autocommit аренда блокировки на пире снимается после оператора; в открытой TX — до COMMIT/ROLLBACK. Prepare/commit-dec — облегчённый обмен голосами по блокировкам в кадрах продукта, не XA. Поддерживаются multi-table и INNER JOIN.
+`FOR UPDATE` / `SKIP LOCKED` выполняются только на **пишущем** узле (не на реплике только для чтения). Индексные ключи в сериализованных байтах блокируются локально (`LockAwareKeyCursor`). При включённой репликации и непустом списке пиров Boot ставит Netty-агенты из **`peers` репликации** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`); пиры берут те же блокировки через `DistForUpdateCoordinator`. Ошибка Netty на соседнем узле — **отказ клиенту**, не тихий только-локальный commit. В autocommit аренда блокировки на соседе снимается после оператора; в открытой TX — до COMMIT/ROLLBACK. Prepare/commit-dec — 2PC-lite по блокировкам в кадрах продукта, не внешний XA. Поддерживаются multi-table и INNER JOIN.
 
 Без репликации или при пустом списке peers блокировки только локальные. Отдельного YAML-ключа со списком DistForUpdate endpoints нет. Не путать с `grid.sql.distributed-peers` (разлёт только чтения SELECT/JOIN) — [SQL-сервер](../configuration/sql-server.md).
 
@@ -41,6 +41,8 @@ flowchart TB
 
 ## Конфиг сервера
 
+### Включить чтение с реплики
+
 ```yaml
 grid:
   durability:
@@ -52,6 +54,8 @@ grid:
       max-stale-lag: 10000
       replica-reads-enabled: true
 ```
+
+### Primary + одна реплика (локально)
 
 Профили starter `application-primary.yml` / `application-replica.yml` включают чтение с реплики для локального стенда 1+1. В library по умолчанию `replica-reads-enabled: false`.
 
@@ -132,12 +136,7 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 | `staleReadPolicy` | v1 только отказ при stale |
 | N `readEndpoints` + ротация на `applyLagStale` | готово (`ReplicaReadEndpointsRotateIT`) |
 
-## Связанное
-
-- [отказы](failures.md)
-- [повышение роли узла](ha-promote.md)
-- [HA под нагрузкой](cluster-ha-highload.md)
-- [сеть репликации](../../understand/replication-network.md)
+Дальше: [отказы](failures.md), [повышение роли узла](ha-promote.md), [сеть репликации](../../understand/replication-network.md).
 
 ## Jepsen
 

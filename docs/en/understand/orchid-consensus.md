@@ -11,7 +11,7 @@ Recovery after failure is re-sync of phases plus checksum agreement — not a ne
 | Concept | Meaning |
 |---------|---------|
 | Order parameter `R` | How close node phases are. Writes are admitted when `R ≥ order-threshold` |
-| Writer node | Among synced nodes, the one with minimal `nodeId`. Only it assigns the next operation number (*phase-ranked proposer*) |
+| Writer node | Among synced nodes, the one with minimal `nodeId`. Only it assigns the next operation number (*phase-ranked writer*) |
 | Checksum agreement | A majority from the **configuration** confirms **the same** checksum before a commit becomes visible |
 | `OrchidNotSyncedException` | Write refused: either `R` is below threshold, or there is no checksum agreement |
 | Solo mode | A node writes alone only if the peer list was empty from the start (`N = 1`) |

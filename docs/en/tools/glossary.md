@@ -7,7 +7,7 @@ Short definitions for the terms used across the operations and architecture page
 | ORCHID | Node agreement: phase synchronization (after Yoshiki Kuramoto) plus a digest quorum |
 | Order parameter `R` | How closely phases agree among the live peers a node sees (local site by default) |
 | Digest quorum | Majority agreement on one propose digest before a commit becomes visible |
-| Phase-ranked proposer | The single active writer among synced nodes (`min(nodeId)` among self and seen peers) |
+| Phase-ranked writer | The single active writer among synced nodes (`min(nodeId)` among self and reachable peers) |
 | OpLog | Append-only journal of mutations |
 | Sealed GMAP | On-disk `.gmap` files; together with OpLog they are the durable store |
 | `.sbpt` / `.sbm` | Sealed secondary B+ tree and bitmap index |
@@ -32,11 +32,13 @@ Short definitions for the terms used across the operations and architecture page
 | SparseCatchUp | Catching a lagging node up with an OpLog range instead of shipping the whole journal |
 | Run id | Name of one calm-host load or JMH run in its JSON and in `SUMMARY.md` |
 | Write admission | The ORCHID condition — phase `R` and digest quorum — under which a commit becomes visible |
-| Writer (`proposer`) | The node that currently accepts writes, phase-ranked among synced peers |
+| Writer | The node that currently accepts writes, phase-ranked among synced peers |
 | Witness | Cross-site witness node: joins the claim quorum, serves neither writes nor reads |
 | Region isolation | `grid.replication.region.enabled`: Active / Hold / Witness roles and `regionEpoch` instead of a fixed primary site |
 | Catch-up | Bringing a lagging node forward (SparseCatchUp, HomologousRepair) rather than reinstalling it |
 | Health readiness | Actuator probe: SQL is listening and, with replication on, ORCHID is synced; otherwise do not send traffic |
+| `catalogKey` | Catalog / replication / sealed domain key: for `public` may stay bare table name `t`; otherwise `schema.table` |
+| Fan-out | SELECT/JOIN ship to remote SQL peers (`grid.sql.distributed-peers`); not Dist FOR UPDATE from replication `peers` |
 
 ## Do not confuse
 

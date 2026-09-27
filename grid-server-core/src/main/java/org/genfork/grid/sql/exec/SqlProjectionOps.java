@@ -273,7 +273,7 @@ public final class SqlProjectionOps {
 	}
 
 	static List<SqlResult.ColumnMeta> columnMetas(TableStore store, List<String> projection) {
-		final String[] parts = SqlInformationSchemaExecutor.splitSchemaTable(store.schema().tableName());
+		final String[] parts = new String[]{store.schema().schemaName(), store.schema().tableName()};
 		final String schema = parts[0];
 		final String table = parts[1];
 		if (projection.size() == 1 && "*".equals(projection.getFirst())) {

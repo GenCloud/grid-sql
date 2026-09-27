@@ -15,6 +15,8 @@
  */
 package org.genfork.grid.sql.exec;
 
+import org.genfork.grid.catalog.CatalogPersistUtil;
+import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.catalog.TableAnalyzeStats;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableSchema;
@@ -25,7 +27,6 @@ import org.genfork.grid.sql.tx.DistForUpdatePeerLockAgent;
 import org.genfork.grid.store.TableStore;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -37,10 +38,6 @@ import java.util.function.Function;
  * @since: 1.0
  */
 public final class SqlTableResolver {
-	/** Default / public schema; catalog stores these tables unqualified. */
-	private static final String PUBLIC_SCHEMA = "public";
-	private static final char SCHEMA_TABLE_SEP = '.';
-
 	private final TableCatalog catalog;
 	private final ReplicationCoordinator replicationCoordinator;
 	private final int defaultShards;
@@ -168,44 +165,25 @@ public final class SqlTableResolver {
 	/**
 	 * Normalize a table ref to the catalog key.
 	 * <p>
-	 * Unqualified names in {@code public} (and {@code public.t}) map to {@code t}.
-	 * Non-public schemas keep {@code schema.t}. Matches {@code information_schema}
-	 * (reports public + bare name) so DBeaver {@code SELECT … FROM public.t} resolves.
+	 * Unqualified names bind only to {@code session.currentSchema()} — never silent other-schema lookup.
+	 * {@code public} is a normal schema ({@link CatalogQualifiedName#catalogKey()} may stay bare for volume compat).
 	 */
 	public String resolveTable(SqlSession session, String tableRef) {
-		if (tableRef == null || tableRef.isBlank()) {
-			throw new IllegalArgumentException("table required");
-		}
-		final String t = tableRef.trim().toLowerCase(Locale.ROOT);
-		final int dot = t.indexOf(SCHEMA_TABLE_SEP);
-		if (dot > 0) {
-			final String schema = t.substring(0, dot);
-			final String name = t.substring(dot + 1);
-			if (name.isBlank()) {
-				throw new IllegalArgumentException("table required");
-			}
-			if (PUBLIC_SCHEMA.equals(schema)) {
-				return name;
-			}
-			return t;
-		}
-		final String sch = session == null ? PUBLIC_SCHEMA : session.currentSchema();
-		if (PUBLIC_SCHEMA.equals(sch)) {
-			return t;
-		}
-		return sch + SCHEMA_TABLE_SEP + t;
+		final String current = session == null
+				? CatalogPersistUtil.SCHEMA_PUBLIC
+				: session.currentSchema();
+		return CatalogQualifiedName.parse(tableRef, current).catalogKey();
+	}
+
+	public CatalogQualifiedName resolveQualified(SqlSession session, String tableRef) {
+		final String current = session == null
+				? CatalogPersistUtil.SCHEMA_PUBLIC
+				: session.currentSchema();
+		return CatalogQualifiedName.parse(tableRef, current);
 	}
 
 	public TableStore requireStore(String table) {
-		TableStore store = catalog.getStore(table);
-		if (store == null && table != null) {
-			final int dot = table.indexOf(SCHEMA_TABLE_SEP);
-			if (dot > 0 && PUBLIC_SCHEMA.equals(table.substring(0, dot))) {
-				store = catalog.getStore(table.substring(dot + 1));
-			} else if (dot < 0) {
-				store = catalog.getStore(PUBLIC_SCHEMA + SCHEMA_TABLE_SEP + table);
-			}
-		}
+		final TableStore store = catalog.getStore(table);
 		if (store == null) {
 			throw new IllegalArgumentException("Unknown table: " + table);
 		}
@@ -213,10 +191,10 @@ public final class SqlTableResolver {
 	}
 
 	public void ensureStore(TableSchema schema) {
-		if (catalog.getStore(schema.tableName()) != null) {
+		if (catalog.getStore(schema.catalogKey()) != null) {
 			return;
 		}
-		openStore(schema.tableName(), schema);
+		openStore(schema.catalogKey(), schema);
 	}
 
 	private void openStore(String tableName, TableSchema schema) {

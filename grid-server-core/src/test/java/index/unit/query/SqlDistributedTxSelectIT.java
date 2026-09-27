@@ -75,9 +75,10 @@ public class SqlDistributedTxSelectIT {
 		final AtomicInteger peerCalls = new AtomicInteger();
 		engine.setDistributedPeerKeyExecutors(List.of(sql -> {
 			peerCalls.incrementAndGet();
-			final String upper = sql.toUpperCase(Locale.ROOT);
-			assertTrue(upper.contains("FROM ORDERS") || upper.contains("FROM CUSTOMERS"));
-			if (upper.contains("FROM ORDERS")) {
+			final String lower = sql.toLowerCase(Locale.ROOT);
+			assertTrue(lower.contains("orders") || lower.contains("customers"),
+					"peer sees catalog table name, got: " + sql);
+			if (lower.contains("orders")) {
 				return List.of(SqlWireUtil.toGenericArray(10), SqlWireUtil.toGenericArray(20));
 			}
 			return List.of(SqlWireUtil.toGenericArray(1), SqlWireUtil.toGenericArray(2));

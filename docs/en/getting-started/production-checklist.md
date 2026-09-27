@@ -21,7 +21,7 @@ Full reference: [durability](../configure-and-operate/configuration/durability.m
 |-------|---------|-----|
 | Durability and replication decided separately | `grid.durability.enabled`, `grid.replication.enabled` | A solo durable node is a supported mode; replication adds peer shipping, quorum, and catch-up on top |
 | `node-id`, `cluster-id`, `transport`, and `peers` set per node | node YAML | Starter profiles are demos; a foreign `cluster-id` blocks catch-up |
-| Exactly one writer | — | The phase-ranked proposer is the only writer; there is no dual-master merge |
+| Exactly one writer | — | The phase-ranked writer is the only writer; there is no dual-master merge |
 | Clients pin the writer from protocol metadata | `ServerMeta`, `PROMOTE_NOTIFY` | HTTP health is for orchestrators, not for writer discovery |
 | SQL and replication ports kept distinct | SQL **15432** / **15433**, replication **5615** / **5616** | A client that lands on a replication port gets `bad frameLen …` |
 | Region roles and quorum reviewed for multi-site | `grid.replication.region.*` | Active/Hold fencing and the claim quorum decide who may write after a site is lost |

@@ -53,7 +53,7 @@ Shipping happens **asynchronously** after the write has been confirmed on the wr
 
 | Layer | Guarantee |
 |-------|-----------|
-| Writer (phase-ranked proposer) | ORCHID plus OpLog **before** map visibility, so a session reads its own writes |
+| Writer (phase-ranked) | ORCHID plus OpLog **before** map visibility, so a session reads its own writes |
 | Local peer (replica) | Asynchronous ship then apply; read mode `eventual_replica` |
 | RPO | Non-zero while operations are in flight or not yet applied: sub-millisecond to tens of milliseconds on a calm host, larger under load or peer lag |
 | Empty replica at boot | Expected until catch-up completes; bootstrap data loading runs on the primary profile only |

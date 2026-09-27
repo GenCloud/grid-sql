@@ -30,10 +30,10 @@ public record GridTableEditContext(String schema, String table, String pkColumn,
         this.pkIndex = pkIndex;
     }
 
+    /**
+     * Always {@code schema.table} — {@code public} is a normal schema (no bare-name special case).
+     */
     public String qualifiedTable() {
-        if ("public".equalsIgnoreCase(schema)) {
-            return table;
-        }
         return schema + "." + table;
     }
 }

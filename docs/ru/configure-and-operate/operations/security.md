@@ -1,6 +1,6 @@
 # Безопасность и полномочия
 
-Как устроены пользователи, AUTH на кадрах и GRANT в SQL. Это операторская страница: что включить до допуска приложений и чего продукт **не** делает сам.
+К SQL-порту может достучаться кто угодно в сети — кого пускать и какие GRANT выдавать, пока приложения ещё не в проде. AUTH на кадрах и каталог `privileges.meta` — ниже. Чего продукт **не** делает сам — тоже.
 
 Подробный синтаксис DDL: [DDL](../../sql/ddl.md). Порт и readiness: [SQL-сервер](../configuration/sql-server.md).
 
@@ -28,18 +28,18 @@ AUTH **не** является 2PC и не решает, можно ли зак�
 jdbc:grid://grid:grid@127.0.0.1:15432/public
 ```
 
-Дальше под master (или после `ALTER USER`):
+Дальше под администратором (или после `ALTER USER`):
 
 ```sql
 CREATE USER app PASSWORD '…';
 GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA public TO app;
 ```
 
-Смена пароля: `ALTER USER … PASSWORD` (PBKDF2). Не храните production-пароли в общем конфиге репозитория.
+Смена пароля: `ALTER USER … PASSWORD` (PBKDF2). Не храните боевые пароли в общем конфиге репозитория.
 
 ## Что проверяется
 
-- Привилегии на таблицы, включая стороны JOIN.
+- Привилегии на таблицы, включая стороны JOIN — **после** разрешения имени: неквалифицированный объект проверяется в схеме сессии (`SET SCHEMA` / default), не глобальным поиском по голому имени во всех схемах.
 - Набор: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`.
 - Роли: `CREATE ROLE` / `DROP ROLE` / `GRANT ROLE … TO user`.
 
@@ -106,4 +106,4 @@ GRANT SELECT ON SCHEMA public TO app;
 3. Не путайте порт SQL (**15432**) с репликацией (**5615**).
 4. Readiness UP не заменяет AUTH: канал может быть готов, а кадр без логина — отклонён.
 
-**Связанное:** [отказы](failures.md), [SQL-сервер](../configuration/sql-server.md), [подключение клиентов](../../getting-started/connect-clients.md).
+Дальше: [отказы](failures.md), [DDL](../../sql/ddl.md) (GRANT / SCHEMA), [резервное копирование](backup-restore.md) (privileges.meta).

@@ -139,4 +139,4 @@ jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.
 
 Нужна консоль вместо IDE — есть [SQL CLI](../tools/sql-cli.md). Reactive-путь: [Java-клиент](java-client.md).
 
-**Связанное:** [Java-клиент](java-client.md), [подключение клиентов](../getting-started/connect-clients.md), [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md), [DBeaver README](../../tools/dbeaver/README.md).
+Дальше: [Java-клиент](java-client.md), [подключение клиентов](../getting-started/connect-clients.md), [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md), [DBeaver README](../../tools/dbeaver/README.md).

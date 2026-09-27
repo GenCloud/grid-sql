@@ -122,14 +122,14 @@ public final class SqlDmlExecutor {
 	}
 
 	private Object resolveInsertValue(SqlSession session, Object raw) {
-		if (raw instanceof SequenceCallExpr call) {
-			final String seq = tables.resolveTable(session, call.sequenceName());
-			if (call.nextVal()) {
+		if (raw instanceof SequenceCallExpr(boolean nextVal, String sequenceName)) {
+			final String seq = tables.resolveTable(session, sequenceName);
+			if (nextVal) {
 				final long v = tables.catalog().nextVal(seq);
 				session.rememberSequenceValue(seq, v);
-				return Long.valueOf(v);
+				return v;
 			}
-			return Long.valueOf(session.currval(seq));
+			return session.currval(seq);
 		}
 		if (raw instanceof ClockExpr || raw instanceof CoalesceExpr || raw instanceof ColumnRef
 				|| raw instanceof ExcludedRef) {
@@ -156,13 +156,13 @@ public final class SqlDmlExecutor {
 			}
 			final String seq = col.identitySequence() != null
 					? col.identitySequence()
-					: SequenceDef.identityName(schema.tableName(), col.name());
+					: SequenceDef.identityName(schema.catalogKey(), col.name());
 			final long v = tables.catalog().nextVal(seq);
 			session.rememberSequenceValue(seq, v);
 			if (col.type() == SqlType.INT) {
-				named.put(col.name(), Integer.valueOf((int) v));
+				named.put(col.name(), (int) v);
 			} else {
-				named.put(col.name(), Long.valueOf(v));
+				named.put(col.name(), v);
 			}
 		}
 	}
@@ -203,7 +203,7 @@ public final class SqlDmlExecutor {
 			if (anyNull) {
 				continue;
 			}
-			final TableStore parent = tables.requireStore(fk.parentTable());
+			final TableStore parent = tables.requireStore(fk.parentCatalogKey());
 			final List<String> parentPkColumns =
 					parent.schema().pkColumns().stream().map(ColumnDef::name).toList();
 			final byte[] parentKey = SqlMergeMatchOps.columnsEqualIgnoreCase(parentPkColumns, fk.parentColumns())
@@ -211,7 +211,7 @@ public final class SqlDmlExecutor {
 							? childValues.getFirst()
 							: childValues.toArray())
 					: SqlMergeMatchOps.resolveMatchKey(parent, fk.parentColumns(), childValues);
-			if (SqlDmlLockOps.existingBytes(session, fk.parentTable(), parent, parentKey) == null) {
+			if (SqlDmlLockOps.existingBytes(session, fk.parentCatalogKey(), parent, parentKey) == null) {
 				throw new IllegalStateException("FOREIGN KEY violation: parent key not found (" + fk.name() + ")");
 			}
 		}

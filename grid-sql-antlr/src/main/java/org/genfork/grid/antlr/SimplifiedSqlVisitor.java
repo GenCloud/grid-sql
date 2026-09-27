@@ -17,6 +17,12 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitStatement(SimplifiedSqlParser.StatementContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#standaloneExpression}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitStandaloneExpression(SimplifiedSqlParser.StandaloneExpressionContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#script}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
