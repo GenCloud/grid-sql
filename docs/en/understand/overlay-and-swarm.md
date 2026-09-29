@@ -147,6 +147,6 @@ What to check after setting an annotation:
 
 The swarm side is visible through the `swarm_hint` gauge and the readiness details. Metrics and dashboards: [monitoring](../configure-and-operate/monitoring.md).
 
-## Related
+## Next
 
 [replication network](replication-network.md), [replication state](replication-state.md), [claim boundaries](bio-inspired.md), [overlay and PIN](../configure-and-operate/configuration/overlay-pin.md), [replication configuration](../configure-and-operate/configuration/replication.md).

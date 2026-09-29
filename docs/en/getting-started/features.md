@@ -77,4 +77,4 @@ See [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling
 
 Planning numbers and regression floors live in [capacity](../performance/capacity-slo.md); full run tables in [results](../performance/results.md). Re-measure on a calm host before capacity claims — this page is not a live scoreboard.
 
-**Related:** [introduction](what-is-grid.md), [why Grid](positioning.md), [connect clients](connect-clients.md).
+Next: [introduction](what-is-grid.md), [why Grid](positioning.md), [connect clients](connect-clients.md).

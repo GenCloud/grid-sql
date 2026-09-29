@@ -155,11 +155,20 @@ export JAVA_TOOL_OPTIONS="--enable-preview -Xmx2g"
 cd /jepsen/jamoa
 export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=15432,15433,15434
 export JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0
+export JEPSEN_UNCLEAN_REVIVE=${env:JEPSEN_UNCLEAN_REVIVE}
+export JEPSEN_UNCLEAN_DOWN_SEC=${env:JEPSEN_UNCLEAN_DOWN_SEC}
 command -v lein
 command -v git
+# Never co-run workloads: leftover lein/clojure from a prior hang races store symlinks + Knossos.
+pkill -9 -f 'jamoa-jepsen.core' 2>/dev/null || true
+pkill -9 -f 'lein run -m jamoa-jepsen' 2>/dev/null || true
+sleep 1
 lein run -m jamoa-jepsen.core test --workload $Workload --time-limit $TimeLimit
 echo LEIN_EXIT=`$?
 "@
+  # Expand host env into bash exports (keep empty when unset).
+  $body = $body.Replace('${env:JEPSEN_UNCLEAN_REVIVE}', $(if ($env:JEPSEN_UNCLEAN_REVIVE) { $env:JEPSEN_UNCLEAN_REVIVE } else { '' }))
+  $body = $body.Replace('${env:JEPSEN_UNCLEAN_DOWN_SEC}', $(if ($env:JEPSEN_UNCLEAN_DOWN_SEC) { $env:JEPSEN_UNCLEAN_DOWN_SEC } else { '15' }))
   $enc = New-Object System.Text.UTF8Encoding $false
   [System.IO.File]::WriteAllText($hostScript, ($body -replace "`r`n", "`n"), $enc)
   $out = docker compose --profile control exec -T jepsen bash /jepsen/scripts/$scriptName 2>&1
@@ -182,21 +191,38 @@ echo LEIN_EXIT=`$?
   return $(if ($null -eq $code) { 1 } else { $code })
 }
 
-Install-SqlClient
-Ensure-Cluster
-Write-Host "=== Jepsen workload: register (Knossos) ==="
-$regCode = Run-Workload register
-$REGISTER_OUTCOME = if ($regCode -eq 0) { "PASS" } else { "FAIL" }
-
-Ensure-Cluster
-Write-Host "=== Jepsen workload: append (Elle) ==="
-$appCode = Run-Workload append
-$APPEND_OUTCOME = if ($appCode -eq 0) { "PASS" } else { "FAIL" }
-
-$NOTES = "register=$REGISTER_OUTCOME; append=$APPEND_OUTCOME"
-if ($REGISTER_OUTCOME -eq "PASS" -and $APPEND_OUTCOME -eq "PASS") {
-  Stamp-Outcome "PASS" $NOTES
-  exit 0
+function Release-JepsenPorts {
+  Write-Host "Releasing Jepsen host ports (1dc+multidc compose down)..."
+  $purge = Join-Path $PSScriptRoot "jepsen-purge.ps1"
+  if (Test-Path $purge) {
+    & $purge -Scope "all"
+  } else {
+    docker compose down -v --remove-orphans 2>$null
+  }
 }
-Stamp-Outcome "FAIL" $NOTES
-exit 1
+
+$script:ExitCode = 1
+try {
+  Install-SqlClient
+  Ensure-Cluster
+  Write-Host "=== Jepsen workload: register (Knossos) ==="
+  $regCode = Run-Workload register
+  $REGISTER_OUTCOME = if ($regCode -eq 0) { "PASS" } else { "FAIL" }
+
+  Ensure-Cluster
+  Write-Host "=== Jepsen workload: append (Elle) ==="
+  $appCode = Run-Workload append
+  $APPEND_OUTCOME = if ($appCode -eq 0) { "PASS" } else { "FAIL" }
+
+  $NOTES = "register=$REGISTER_OUTCOME; append=$APPEND_OUTCOME"
+  if ($REGISTER_OUTCOME -eq "PASS" -and $APPEND_OUTCOME -eq "PASS") {
+    Stamp-Outcome "PASS" $NOTES
+    $script:ExitCode = 0
+  } else {
+    Stamp-Outcome "FAIL" $NOTES
+    $script:ExitCode = 1
+  }
+} finally {
+  Release-JepsenPorts
+}
+exit $script:ExitCode

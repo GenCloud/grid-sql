@@ -102,7 +102,7 @@ Site fencing (`grid.replication.region.enabled`, default `false`) separates Acti
 
 | Symptom | Cause | Action |
 |---------|-------|--------|
-| Readiness DOWN with `reason: orchid_not_synced` | Peers unreachable, or phase order still below threshold | Check peer connectivity and `grid.replication.connect_failures`; do not send load yet |
+| Readiness DOWN with `reason: orchid_not_synced` | Peers unreachable, or order parameter `R` still below threshold | Check peer connectivity and `grid.replication.connect_failures`; do not send load yet |
 | Writes rejected with a not-synced error | Quorum unavailable | Restore peer connectivity or disk; never lower `fsync` or the threshold to push traffic through |
 | `enabled: true` with an empty peer list on a multi-node cluster | Configuration mistake | Fill `transport.peers`; do not use `forgetPeer` to shrink the quorum |
 | `bad frameLen` on a client connection | Client pointed at the replication port | Use the SQL port (15432 by default) |

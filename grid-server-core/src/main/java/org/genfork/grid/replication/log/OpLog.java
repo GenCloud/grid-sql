@@ -22,6 +22,7 @@ import org.genfork.grid.replication.codec.ReplicationOp;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -30,6 +31,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Append-only op log keyed by (domain, shard). Always on-disk under {@code dataDir/oplog/}.
@@ -41,6 +43,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class OpLog implements AutoCloseable {
 	private final Map<String, NavigableMap<Long, Long>> offsetIndex = new ConcurrentHashMap<>();
+	/** Tip seq per stream — avoids ConcurrentSkipListMap.lastKey on every read admission. */
+	private final ConcurrentHashMap<String, AtomicLong> lastSeqByStream = new ConcurrentHashMap<>();
 	private final Map<String, FileDurableOpStore> stores = new ConcurrentHashMap<>();
 	private final Path dataDir;
 	private final boolean fsync;
@@ -64,9 +68,23 @@ public class OpLog implements AutoCloseable {
 		return Integer.toHexString(domainType.hashCode()) + "_" + shard;
 	}
 
-	/** Loaded {@code domain#shard} keys (for watermark seed). */
+	/** Loaded {@code domain#shard} keys (for watermark seed). Live view — no per-call copy. */
 	public Set<String> streamKeys() {
-		return Set.copyOf(offsetIndex.keySet());
+		return Collections.unmodifiableSet(offsetIndex.keySet());
+	}
+
+	private void noteLastSeq(String streamKey, long seq) {
+		lastSeqByStream.computeIfAbsent(streamKey, ignored -> new AtomicLong(0L))
+				.accumulateAndGet(seq, Math::max);
+	}
+
+	private void refreshLastSeq(String streamKey, NavigableMap<Long, Long> offsets) {
+		if (offsets == null || offsets.isEmpty()) {
+			lastSeqByStream.remove(streamKey);
+			return;
+		}
+		lastSeqByStream.computeIfAbsent(streamKey, ignored -> new AtomicLong(0L))
+				.set(offsets.lastKey());
 	}
 
 	/**
@@ -87,6 +105,7 @@ public class OpLog implements AutoCloseable {
 		try {
 			final long offset = storeFor(op.domainType(), op.shard()).append(op);
 			offsets.put(op.opSeq(), offset);
+			noteLastSeq(k, op.opSeq());
 		} catch (IOException e) {
 			throw new IllegalStateException("OpLog append failed", e);
 		}
@@ -110,6 +129,7 @@ public class OpLog implements AutoCloseable {
 		try {
 			final long offset = storeFor(op.domainType(), op.shard()).appendDeferred(op);
 			offsets.put(op.opSeq(), offset);
+			noteLastSeq(k, op.opSeq());
 		} catch (IOException e) {
 			throw new IllegalStateException("OpLog appendDeferred failed", e);
 		}
@@ -134,8 +154,16 @@ public class OpLog implements AutoCloseable {
 		final NavigableMap<Long, Long> offsets = offsetIndex.computeIfAbsent(k, ignored -> new ConcurrentSkipListMap<>());
 		try {
 			final long[] fileOff = storeFor(first.domainType(), first.shard()).appendBatch(ops);
+			long tip = 0L;
 			for (int i = 0; i < ops.size(); i++) {
-				offsets.put(ops.get(i).opSeq(), fileOff[i]);
+				final long seq = ops.get(i).opSeq();
+				offsets.put(seq, fileOff[i]);
+				if (seq > tip) {
+					tip = seq;
+				}
+			}
+			if (tip > 0L) {
+				noteLastSeq(k, tip);
 			}
 		} catch (IOException e) {
 			throw new IllegalStateException("OpLog appendBatch failed", e);
@@ -178,6 +206,7 @@ public class OpLog implements AutoCloseable {
 		final NavigableMap<Long, Long> offsets = offsetIndex.get(k);
 		if (offsets != null) {
 			offsets.headMap(inclusiveMaxSeq, true).clear();
+			refreshLastSeq(k, offsets);
 		}
 		try {
 			storeFor(domainType, shard).setTruncatedThrough(inclusiveMaxSeq);
@@ -199,11 +228,18 @@ public class OpLog implements AutoCloseable {
 	}
 
 	public long lastSeq(String domainType, int shard) {
-		final NavigableMap<Long, Long> offsets = offsetIndex.get(key(domainType, shard));
+		final String k = key(domainType, shard);
+		final AtomicLong tip = lastSeqByStream.get(k);
+		if (tip != null) {
+			return tip.get();
+		}
+		final NavigableMap<Long, Long> offsets = offsetIndex.get(k);
 		if (offsets == null || offsets.isEmpty()) {
 			return 0L;
 		}
-		return offsets.lastKey();
+		final long last = offsets.lastKey();
+		noteLastSeq(k, last);
+		return last;
 	}
 
 	/** True if this stream already indexed {@code seq} (for ordered-append waiters). */
@@ -254,6 +290,7 @@ public class OpLog implements AutoCloseable {
 								stores.put(k, store);
 								offsetIndex.computeIfAbsent(k, ignored -> new ConcurrentSkipListMap<>())
 										.put(rec.op().opSeq(), rec.offset());
+								noteLastSeq(k, rec.op().opSeq());
 							}
 						} catch (IOException e) {
 							throw new IllegalStateException("Failed replaying " + path, e);

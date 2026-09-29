@@ -44,7 +44,7 @@ stateDiagram-v2
 |---------|-----------|
 | Ключ закрепления | `writerEligible` и `regionEpoch` (`regionEpoch=0` → только `writerEligible`) |
 | Живой канал | `PROMOTE_NOTIFY` / AUTH / ERROR обновляют мету закрепления |
-| Отказ посреди операции | Orchid reject или несовпадение `regionEpoch` → `rediscoverWriter()`; **не** молча крутить адрес (риск двух writer) |
+| Отказ посреди операции | Orchid reject или несовпадение `regionEpoch` → `rediscoverWriter()`; **не** молча крутить адрес (риск двух пишущих) |
 | Источник | Только мета протокола `ServerMeta` |
 
 ### Один ЦОД
@@ -56,7 +56,7 @@ grid://u:p@n1:15432,n2:15433,n3:15434/public?connectTimeoutMs=1000&retryMode=FIX
 | Слой | Поведение |
 |------|-----------|
 | `RemoteConnectionFactory` multi-host | TCP с закреплением; при connect / смерти канала пробует следующий `host:port` |
-| Обнаружение writer | `PROMOTE_NOTIFY` обновляет мету закрепления; AUTH / ERROR — тот же `ServerMeta` при reconnect |
+| Обнаружение пишущего | `PROMOTE_NOTIFY` обновляет мету закрепления; AUTH / ERROR — тот же `ServerMeta` при reconnect |
 | Отказ ORCHID / отставание / несовпадение площадки | **Не** переключать закрепление посреди операции. Вызывать `rediscoverWriter()`, когда прежнее закрепление теряет `writerEligible` или не совпадает `regionEpoch` |
 
 `maxTxContexts` — потолок логических сессий на **одном** TCP: у клиента по умолчанию **256**, на сервере жёсткий потолок канала **8** (Boot не поднимает из YAML). Это не пул из N сокетов.
@@ -114,7 +114,7 @@ flowchart TB
 
 Инциденты: [отказы](failures.md).
 
-## Связанные поверхности
+## Дальше
 
 Опциональное чтение с реплики (выкл. по умолчанию): [чтение с реплики](replica-reads.md). Поля readiness Actuator (`writerEligible`, `applyLagStale`, …): [мониторинг](../monitoring.md).
 

@@ -120,10 +120,24 @@ try {
   Pop-Location
 }
 
-Ensure-Cluster
-Write-Host "=== no-chaos register ==="
-Run-Workload register
-Ensure-Cluster
-Write-Host "=== no-chaos append ==="
-Run-Workload append
-Write-Host "no-chaos done; parse latency with scripts/latency-from-history.ps1 on store/*/history.edn"
+function Release-JepsenPorts {
+  Write-Host "Releasing Jepsen host ports (1dc+multidc compose down)..."
+  $purge = Join-Path $PSScriptRoot "jepsen-purge.ps1"
+  if (Test-Path $purge) {
+    & $purge -Scope "all"
+  } else {
+    docker compose down -v --remove-orphans 2>$null
+  }
+}
+
+try {
+  Ensure-Cluster
+  Write-Host "=== no-chaos register ==="
+  Run-Workload register
+  Ensure-Cluster
+  Write-Host "=== no-chaos append ==="
+  Run-Workload append
+  Write-Host "no-chaos done; parse latency with scripts/latency-from-history.ps1 on store/*/history.edn"
+} finally {
+  Release-JepsenPorts
+}

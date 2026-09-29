@@ -48,7 +48,7 @@ Short definitions for the terms used across the operations and architecture page
 
 Terms not listed here are defined on the section page. Current load planning figures: [capacity](../performance/capacity-slo.md).
 
-## Related
+## Next
 
 - [Introduction](../getting-started/what-is-grid.md)
 - [Architecture overview](../understand/architecture-overview.md)

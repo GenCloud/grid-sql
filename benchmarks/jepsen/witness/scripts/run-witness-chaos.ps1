@@ -50,15 +50,16 @@ function Stamp-Witness {
   try { $Git = (git -C $ROOT rev-parse --short HEAD 2>$null) } catch { $Git = "unknown" }
   if (-not $Git) { $Git = "unknown" }
   $Date = Get-Date -Format "o"
-  $Stamp = "2026-09-21-witness-chaos"
+  $Stamp = if ($env:STAMP -and $env:STAMP -ne "") { $env:STAMP } else { (Get-Date -Format "yyyy-MM-dd") + "-witness-chaos" }
   $ChaosNote = if ($NoNemesis) { "no-nemesis" } else { "dc-link+kill-dc-a+revive (Witness overlay)" }
-  $histLine = "| ``$Stamp`` | $Reg | $App | $Outcome | $Notes |"
+  $tick = [char]96
+  $histLine = "| " + $tick + $tick + $Stamp + $tick + $tick + " | $Reg | $App | $Outcome | $Notes |"
   $priorHist = New-Object System.Collections.Generic.List[string]
   if (Test-Path $ResultsPath) {
     $prev = [System.IO.File]::ReadAllText($ResultsPath, $Utf8)
     foreach ($line in ($prev -split "`n")) {
       $t = $line.TrimEnd([char]13)
-      if ($t.StartsWith("| ``") -and $t.Contains("|")) {
+      if ($t.StartsWith("| ") -and $t.Contains($tick) -and $t.Contains("|")) {
         if ($t.Contains($Stamp)) { continue }
         if ($t.Contains("pending-witness")) { continue }
         [void]$priorHist.Add($t)
@@ -69,23 +70,23 @@ function Stamp-Witness {
   $sb = New-Object System.Text.StringBuilder
   [void]$sb.AppendLine("# Witness Jepsen RESULTS")
   [void]$sb.AppendLine("")
-  [void]$sb.AppendLine("Honest PASS/FAIL after Docker+lein Witness overlay (never invent ``:valid? true``).")
+  [void]$sb.AppendLine("Honest PASS/FAIL after Docker+lein Witness overlay (never invent :valid? true).")
   [void]$sb.AppendLine("")
   [void]$sb.AppendLine("## Latest stamp")
   [void]$sb.AppendLine("")
   [void]$sb.AppendLine("| Field | Value |")
   [void]$sb.AppendLine("|-------|--------|")
-  [void]$sb.AppendLine("| stamp | ``$Stamp`` |")
+  [void]$sb.AppendLine("| stamp | " + $tick + $tick + $Stamp + $tick + $tick + " |")
   [void]$sb.AppendLine("| date | $Date |")
   [void]$sb.AppendLine("| git | $Git |")
   [void]$sb.AppendLine("| host | $($env:COMPUTERNAME) |")
   [void]$sb.AppendLine("| topology | Active+Hold+Hold+Witness (async Multi-DC + w1) |")
-  [void]$sb.AppendLine("| outcome | ``$Outcome`` |")
+  [void]$sb.AppendLine("| outcome | " + $tick + $tick + $Outcome + $tick + $tick + " |")
   [void]$sb.AppendLine("| register | $Reg |")
   [void]$sb.AppendLine("| append | $App |")
   [void]$sb.AppendLine("| chaos | $ChaosNote |")
-  [void]$sb.AppendLine("| multi-host SQL | ``$GridUrl`` |")
-  [void]$sb.AppendLine("| health | ``/health/liveness`` (Actuator base-path ``/``) |")
+  [void]$sb.AppendLine("| multi-host SQL | " + $tick + $tick + $GridUrl + $tick + $tick + " |")
+  [void]$sb.AppendLine("| health | /health/liveness (Actuator base-path /) |")
   [void]$sb.AppendLine("| latency (ok-ops, warmup 10s) | $Lat |")
   [void]$sb.AppendLine("| notes | $Notes |")
   [void]$sb.AppendLine("")
@@ -128,13 +129,21 @@ function Ensure-SqlClient {
   Push-Location $ROOT
   try { mvn -B -pl grid-sql-client -am install "-DskipTests"; if ($LASTEXITCODE -ne 0) { throw "mvn install failed" } } finally { Pop-Location }
 }
+function Release-JepsenPorts {
+  Write-Host "Releasing Jepsen host ports (1dc+multidc+witness compose down)..."
+  $purge = Join-Path $JEPSEN_DIR "scripts\jepsen-purge.ps1"
+  if (Test-Path $purge) {
+    & $purge -Scope "all"
+  }
+}
+
 function Ensure-Cluster {
   Write-Host "Starting Multi-DC + Witness cluster..."
   Ensure-Image
-  Write-Host "Fresh cluster: purge multidc (+ witness) data volumes..."
+  Write-Host "Fresh cluster: purge all (+ witness) - free host ports..."
   $purge = Join-Path $JEPSEN_DIR "scripts\jepsen-purge.ps1"
   if (Test-Path $purge) {
-    & $purge -Scope "multidc"
+    & $purge -Scope "all"
   }
   docker compose -f docker-compose.yml -f $Overlay stop a1 a2 a3 b1 b2 w1 2>$null
   docker compose -f docker-compose.yml -f $Overlay rm -f a1 a2 a3 b1 b2 w1 2>$null
@@ -181,7 +190,7 @@ function Ensure-Control {
 function Fetch-Store {
   $hostStore = Join-Path $JEPSEN_DIR "clojure\store"
   New-Item -ItemType Directory -Force -Path $hostStore | Out-Null
-  docker exec $ControlName bash -lc "cd /jepsen/jamoa && tar --exclude=current -cf /tmp/jepsen-store.tar store 2>/dev/null" | Out-Null
+  docker exec $ControlName bash -lc 'cd /jepsen/jamoa && tar --exclude=current -cf /tmp/jepsen-store.tar store 2>/dev/null' | Out-Null
   docker cp "${ControlName}:/tmp/jepsen-store.tar" (Join-Path $hostStore "jepsen-store.tar") 2>$null
   $tar = Join-Path $hostStore "jepsen-store.tar"
   if (Test-Path $tar) {
@@ -230,8 +239,10 @@ function Latency-Line([string]$Workload) {
   if (-not (Test-Path $hist)) { return "$Workload`: no history.edn" }
   $latScript = Join-Path $JEPSEN_DIR "scripts\latency-from-history.ps1"
   $lines = & $latScript -HistoryEdn $hist -Workload $Workload -WarmupSeconds 10 2>&1
-  return (($lines | Out-String).Trim() -replace "`r?`n", " | ")
+  $joined = ($lines | Out-String).Trim()
+  return ($joined -replace "[\r\n]+", " | ")
 }
+$script:ExitCode = 2
 try {
   Ensure-SqlClient
   Ensure-Cluster
@@ -246,11 +257,13 @@ try {
   $NOTES = "register=$REGISTER_OUTCOME; append=$APPEND_OUTCOME; time-limit=$TimeLimit; Witness w1 overlay"
   $Outcome = if ($reg.code -eq 0 -and $app.code -eq 0) { "PASS" } else { "FAIL" }
   Stamp-Witness -Outcome $Outcome -Notes $NOTES -Reg $REGISTER_OUTCOME -App $APPEND_OUTCOME -Lat $Lat
-  if ($Outcome -eq "PASS") { exit 0 }
-  exit 1
+  $script:ExitCode = if ($Outcome -eq "PASS") { 0 } else { 1 }
 } catch {
   $msg = $_.Exception.Message
   Write-Host "ERROR: $msg"
   Stamp-Witness -Outcome "FAIL" -Notes ("BLOCKED/ERROR: " + $msg) -Reg "-" -App "-" -Lat "n/a"
-  exit 2
+  $script:ExitCode = 2
+} finally {
+  Release-JepsenPorts
 }
+exit $script:ExitCode

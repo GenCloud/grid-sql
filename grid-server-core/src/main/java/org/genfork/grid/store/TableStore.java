@@ -616,14 +616,10 @@ public final class TableStore {
 		final Object lock = fieldModifyLocks.computeIfAbsent(keyLock, k -> new Object());
 		synchronized (lock) {
 			byte[] existing = processor.getCommitted(keyBytes);
-			final Object[] values;
-			if (existing != null && LogicalFieldCursor.canOpen(schema, existing)) {
-				values = RowEncoder.decode(schema, existing);
-			} else {
-				values = new Object[schema.columnCount()];
-				values[schema.pkColumn().ordinal()] =
-						SerialUtil.readPrimitives(keyBytes, 0, schema.pkColumn().javaType());
+			if (existing == null || !LogicalFieldCursor.canOpen(schema, existing)) {
+				return 0L;
 			}
+			final Object[] values = RowEncoder.decode(schema, existing);
 			for (Map.Entry<String, Object> e : sets.entrySet()) {
 				final ColumnDef col = schema.requireColumn(e.getKey());
 				values[col.ordinal()] = RowEncoder.coerce(col, e.getValue());
@@ -696,9 +692,8 @@ public final class TableStore {
 		synchronized (lock) {
 			byte[] existing = processor.getCommitted(keyArray);
 			if (existing == null) {
-				final Object[] seed = new Object[schema.columnCount()];
-				seed[schema.pkColumn().ordinal()] = keyObj;
-				existing = RowEncoder.encode(schema, coerceRow(seed));
+				// UPDATE must not invent rows; callers that need upsert use installEncodedUpsert.
+				return 0L;
 			}
 			merged = BlobFieldModifier.apply(schema, existing, assigns);
 			validateEncodedChecks(merged);

@@ -144,13 +144,24 @@ function Ensure-SqlClient {
   Push-Location $ROOT
   try { mvn -B -pl grid-sql-client -am install "-DskipTests"; if ($LASTEXITCODE -ne 0) { throw "mvn install failed" } } finally { Pop-Location }
 }
+function Release-JepsenPorts {
+  Write-Host "Releasing Jepsen host ports (1dc+multidc compose down)..."
+  $purge = Join-Path $JEPSEN_DIR "scripts\jepsen-purge.ps1"
+  if (Test-Path $purge) {
+    & $purge -Scope "all"
+  } else {
+    docker compose down -v --remove-orphans 2>$null
+  }
+}
+
 function Ensure-Cluster {
   Write-Host "Starting Multi-DC cluster..."
   Ensure-Image
-  Write-Host "Fresh cluster: jepsen-purge multidc data volumes (keep control m2)..."
+  # Scope=all: free leftover 1-DC binds (15432+) before Multi-DC up.
+  Write-Host "Fresh cluster: jepsen-purge all (free host ports; keep control m2)..."
   $purge = Join-Path $JEPSEN_DIR "scripts\jepsen-purge.ps1"
   if (Test-Path $purge) {
-    & $purge -Scope "multidc"
+    & $purge -Scope "all"
   } else {
     docker compose stop a1 a2 a3 b1 b2 2>$null
     docker compose rm -f a1 a2 a3 b1 b2 2>$null
@@ -292,6 +303,7 @@ function Latency-Line([string]$Workload) {
   $lines = & $latScript -HistoryEdn $hist -Workload $Workload -WarmupSeconds 10 2>&1
   return (($lines | Out-String).Trim() -replace "`r?`n", " | ")
 }
+$script:ExitCode = 2
 try {
   Ensure-SqlClient
   Ensure-Cluster
@@ -306,11 +318,13 @@ try {
   $NOTES = "register=$REGISTER_OUTCOME; append=$APPEND_OUTCOME; time-limit=$TimeLimit"
   $Outcome = if ($reg.code -eq 0 -and $app.code -eq 0) { "PASS" } else { "FAIL" }
   Stamp-Multidc -Outcome $Outcome -Notes $NOTES -Reg $REGISTER_OUTCOME -App $APPEND_OUTCOME -Lat $Lat
-  if ($Outcome -eq "PASS") { exit 0 }
-  exit 1
+  $script:ExitCode = if ($Outcome -eq "PASS") { 0 } else { 1 }
 } catch {
   $msg = $_.Exception.Message
   Write-Host "ERROR: $msg"
   Stamp-Multidc -Outcome "FAIL" -Notes ("BLOCKED/ERROR: " + $msg) -Reg "-" -App "-" -Lat "n/a"
-  exit 2
+  $script:ExitCode = 2
+} finally {
+  Release-JepsenPorts
 }
+exit $script:ExitCode

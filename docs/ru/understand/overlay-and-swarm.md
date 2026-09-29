@@ -147,6 +147,6 @@ grid.replication.placement-optimizer:
 
 Сторону swarm видно через датчик `swarm_hint` и детали проверки готовности. Метрики и дашборды: [мониторинг](../configure-and-operate/monitoring.md).
 
-## Связанное
+## Дальше
 
 [сеть репликации](replication-network.md), [состояние репликации](replication-state.md), [границы утверждений](bio-inspired.md), [overlay и PIN](../configure-and-operate/configuration/overlay-pin.md), [настройка репликации](../configure-and-operate/configuration/replication.md).

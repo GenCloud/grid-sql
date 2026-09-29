@@ -114,7 +114,7 @@ On Active loss: claim quorum (`RegionClaimQuorum`) picks a single winner among H
 
 Incidents: [failures](failures.md).
 
-## Related surfaces
+## Next
 
 Optional replica reads (off by default): [replica reads](replica-reads.md). Actuator readiness fields (`writerEligible`, `applyLagStale`, …): [monitoring](../monitoring.md).
 

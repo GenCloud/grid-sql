@@ -155,4 +155,4 @@ This is only appropriate for a uniformly hot key distribution. Under bulk ingest
 
 Placement mechanics: [overlay and swarm](../../understand/overlay-and-swarm.md).
 
-**Related:** [replication](replication.md), [monitoring](../monitoring.md), [role promotion](../operations/ha-promote.md), [failures](../operations/failures.md).
+Next: [replication](replication.md), [monitoring](../monitoring.md), [role promotion](../operations/ha-promote.md), [failures](../operations/failures.md).

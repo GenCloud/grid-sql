@@ -140,7 +140,7 @@ grid.replication.placement-optimizer:
 - Пространства настроек `hdcrm.*`.
 - Связывания фаз через WAN как основного пути согласованности между дата-центрами.
 
-## Связанное
+## Дальше
 
 [ORCHID](orchid-consensus.md), [состояние репликации](replication-state.md), [сеть репликации](replication-network.md), [обзор архитектуры](architecture-overview.md).
 

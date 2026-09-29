@@ -141,6 +141,16 @@ run_workload() {
 install_sql_client
 ensure_cluster
 
+release_jepsen_ports() {
+  echo "Releasing Jepsen host ports (1dc+multidc compose down)..."
+  if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
+    bash "$JEPSEN_DIR/scripts/jepsen-purge.sh" all || true
+  else
+    docker compose down -v --remove-orphans || true
+  fi
+}
+trap release_jepsen_ports EXIT
+
 echo "=== Jepsen workload: register (Knossos) ==="
 if run_workload register; then
   REGISTER_OUTCOME=PASS

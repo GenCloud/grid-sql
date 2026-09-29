@@ -79,6 +79,12 @@ public final class SqlNamedQueryExpand {
 		if (sql == null || sql.isBlank()) {
 			return sql;
 		}
+		// Capacity / ad-hoc EQ: no VIEW catalog and no WITH → identity (skip ANTLR expand pass).
+		// WITH still needs expandUncached; VIEW names need named-map rewrite.
+		final boolean noViews = catalogViews == null || catalogViews.isEmpty();
+		if (noViews && !startsWithWith(sql)) {
+			return sql;
+		}
 		final String cacheKey = cacheKey(sql, catalogViews);
 		final String cached = EXPAND_CACHE.get(cacheKey);
 		if (cached != null) {

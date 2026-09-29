@@ -115,21 +115,28 @@ public final class RegionClaimService {
 		if (!regionAllowsWrites()) {
 			return false;
 		}
+		refreshRegionTipCatchUp();
 		if (regionTipCatchUpPending.get()) {
-			refreshRegionTipCatchUp();
-			if (regionTipCatchUpPending.get()) {
-				return false;
-			}
+			return false;
 		}
 		return nodeState.isSynced() && orchidNode.isPhaseRankedProposer();
 	}
 
 	private void refreshRegionTipCatchUp() {
-		if (orchidNode == null || !regionTipCatchUpPending.get()) {
+		if (orchidNode == null) {
 			return;
 		}
 		final long peerTip = orchidNode.maxSeenPeerCommittedSeq();
-		if (peerTip <= orchidNode.getLastCommittedSeq()) {
+		final long localTip = orchidNode.getLastCommittedSeq();
+		// Behind peers: must catch up before propose (unclean revive / tip fence).
+		// Do NOT fence when merely ahead of a live follower — that serializes HA writes to
+		// apply lag and breaks concurrent Load (phase-ranked spam). Quorum/NACK still
+		// back-pressures propose without denying writerEligible.
+		if (peerTip > localTip) {
+			regionTipCatchUpPending.set(true);
+			return;
+		}
+		if (regionTipCatchUpPending.get()) {
 			regionTipCatchUpPending.set(false);
 		}
 	}

@@ -53,7 +53,7 @@ GUI mode needs JDK **25** with `--enable-preview`, and `ResultCollector` must ha
 - JDBC and the IDE driver are not used for load.
 - Figures belong to the lab host described in capacity; another topology needs its own run.
 
-## Related
+## Next
 
 - [Capacity and thresholds](../performance/capacity-slo.md) — tables, bands, planning figures
 - [Methodology](../performance/methodology.md) — check order and abort rules

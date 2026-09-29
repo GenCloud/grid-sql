@@ -27,12 +27,22 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
  * Event-driven drain of {@link GridEntriesProcessor} queue (no 100ms floor on busy path).
+ * <p>
+ * One wake never overlaps {@code process()} on the same shard (stale LWW). Work per wake is
+ * capped so a busy shard cannot monopolize the shared {@code grid-sched-*} pool (size 2)
+ * and starve orchid / peer-shard drains (WRITE p99).
  *
  * @author: GenCloud
  * @date: 2026/02
  * @since: 1.0
  */
 public class GridEntriesWorker implements Runnable {
+	/**
+	 * Max {@code drainTo}+{@code process} rounds per scheduled wake before yielding the
+	 * sched thread and re-arming via {@link #signal()}.
+	 */
+	private static final int MAX_DRAIN_BATCHES_PER_WAKE = 8;
+
 	private final GridEntriesProcessor gridEntriesProcessor;
 	private final AtomicBoolean running = new AtomicBoolean();
 	private final AtomicBoolean scheduled = new AtomicBoolean();
@@ -69,32 +79,33 @@ public class GridEntriesWorker implements Runnable {
 
 	@Override
 	public void run() {
-		scheduled.set(false);
 		if (!running.get()) {
+			scheduled.set(false);
 			return;
 		}
 
 		try {
-			final List<Entry> entries = new ArrayList<>();
-			gridEntriesProcessor.getQueue().drainTo(entries);
-			if (!CollectionUtils.isEmpty(entries)) {
+			// Hold scheduled=true while processing so signal() cannot start a second
+			// process() on this shard (overlapping coalesce → stale last-write-wins).
+			int batches = 0;
+			while (running.get() && batches < MAX_DRAIN_BATCHES_PER_WAKE) {
+				final List<Entry> entries = new ArrayList<>();
+				gridEntriesProcessor.getQueue().drainTo(entries);
+				if (CollectionUtils.isEmpty(entries)) {
+					break;
+				}
 				gridEntriesProcessor.process(entries);
+				batches++;
+			}
+			if (running.get() && !gridEntriesProcessor.isIdle()) {
+				gridEntriesProcessor.reclaimCommittedStaging();
 			}
 		} finally {
+			scheduled.set(false);
 			if (running.get()) {
-				if (gridEntriesProcessor.getQueue().size() > 0) {
+				if (gridEntriesProcessor.getQueue().size() > 0
+						|| !gridEntriesProcessor.isIdle()) {
 					signal();
-				} else if (!gridEntriesProcessor.isIdle()) {
-					gridEntriesProcessor.reclaimCommittedStaging();
-					if (!gridEntriesProcessor.isIdle()) {
-						// Orphan staging with pending commit should not happen; re-wake briefly.
-						if (scheduled.compareAndSet(false, true)) {
-							ThreadService.getScheduledExecutor().schedule(() -> {
-								scheduled.set(false);
-								signal();
-							}, 1, MILLISECONDS);
-						}
-					}
 				}
 			}
 		}

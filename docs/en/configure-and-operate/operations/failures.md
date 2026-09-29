@@ -89,6 +89,10 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 | After failover clients still write the old host | Application bug (no rediscover) — fix the client, not the server |
 | Need “rollback one hour” but archive was off | No archive data — only peers/sealed; enable archive before the next load |
 
+## Consistency drill contours
+
+Jepsen unclean-revive (dirty node restart with local `dataDir`) — PASS on stamp `2026-09-29-jepsen-unclean-revive`; scenarios and coverage: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md), [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md).
+
 ## Do not
 
 - Shared `dataDir` / NFS across the cluster.

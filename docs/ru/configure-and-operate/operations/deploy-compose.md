@@ -58,9 +58,9 @@ volumes:
 | Compose | Топология | Когда применять | Схема |
 |---------|-----------|-----------------|-------|
 | `1dc-n2` | N=2 primary + replica | JMeter Load / WRITE·READ | [запуск кластера](../../getting-started/start-cluster.md) |
-| `1dc-n3` | N=3 один ЦОД | повседневный HA, смена writer | [HA в одном ЦОД](cluster-ha-highload.md) |
+| `1dc-n3` | N=3 один ЦОД | повседневный HA, смена пишущего | [HA в одном ЦОД](cluster-ha-highload.md) |
 | `multidc-async` | 3+2+w1 ASYNC_SHIP | RPO / отставание доставки между ЦОД | [несколько ЦОД — ASYNC](cluster-multidc-highload.md) |
-| `multidc-sync` | 3+2+w1 SYNC_VOTERS | стоимость коммита cross-DC | [несколько ЦОД — SYNC](cluster-multidc-highload.md) |
+| `multidc-sync` | 3+2+w1 SYNC_VOTERS | стоимость коммита между ЦОД | [несколько ЦОД — SYNC](cluster-multidc-highload.md) |
 
 Закрепление клиента и узел-свидетель (Witness — участвует в кворуме смены роли, сам не пишет и не читает приложение): [повышение роли узла](ha-promote.md).
 
@@ -69,7 +69,7 @@ volumes:
 ```powershell
 cd examples\compose\1dc-n2
 docker compose --env-file env\mid.env up -d
-# Writer: grid://grid:grid@127.0.0.1:15432/public
+# Пишущий: grid://grid:grid@127.0.0.1:15432/public
 # Reads:  grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433
 
 cd examples\compose\1dc-n3

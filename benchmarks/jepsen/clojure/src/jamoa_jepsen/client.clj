@@ -77,6 +77,11 @@
   [result]
   (and (= :fail (:type result)) (= :connect (:error result))))
 
+(defn- connect-miss?
+  "Register/Knossos: retry on :fail or :info :connect (single-key write; avoids Knossos blow-up)."
+  [result]
+  (and (#{:fail :info} (:type result)) (= :connect (:error result))))
+
 (declare client-for! close-client!)
 
 (defn- writer-eligible?
@@ -110,8 +115,8 @@
   @sticky-proposer)
 
 (defn- discover-proposer
-  "Pin all workers to the cluster phaseRankedProposer (promoteHint), not merely the first
-  writerEligible probe target — avoids dual-writer append forks after failover flaps."
+  "Pin all workers to sticky (if still eligible) or cluster promoteHint.
+  Never falls back to first writerEligible — that dual-pins after failover flaps (G0)."
   [clients]
   (let [sticky @sticky-proposer]
     (when (and sticky (not (writer-eligible? clients sticky)))
@@ -127,8 +132,16 @@
                        (all-nodes))]
         (when hint
           (remember-proposer! hint)
-          hint))
-      (first (filter #(writer-eligible? clients %) (all-nodes)))))
+          hint))))
+
+(defn- txn-has-append?
+  "True when the Jepsen :txn value contains an :append mop (mutative)."
+  [value]
+  (some (fn [mop]
+          (and (sequential? mop)
+               (let [op (first mop)]
+                 (or (= :append op) (= "append" (str op))))))
+        (if (sequential? value) value [])))
 
 (defn- keywordize-type
   [t]
@@ -217,55 +230,95 @@
     (catch SocketTimeoutException _
       {:type :info :error :timeout})
     (catch ConnectException _
-      ;; Ambiguous: request may have applied before the socket died.
+      ;; Pre-flight / socket never established — definite :fail so sticky can rediscover.
+      ;; Mid-flight close is classified inside JepsenSqlClient by afterDispatch (:info only
+      ;; when a mutate may already have left the client).
       (close-client! clients node)
-      {:type :info :error :connect})
+      {:type :fail :error :connect})
     (catch Exception e
       (warn e "sql client error")
-      (when (or (instance? java.net.ConnectException (ex-cause e))
-                (str/includes? (or (.getMessage e) "") "connect"))
-        (close-client! clients node))
-      {:type :info :error (.getMessage e)})))
+      (let [connectish? (or (instance? java.net.ConnectException (ex-cause e))
+                            (str/includes? (or (.getMessage e) "") "connect"))]
+        (when connectish?
+          (close-client! clients node))
+        (if connectish?
+          {:type :fail :error :connect}
+          {:type :info :error (.getMessage e)})))))
+
+(defn- no-proposer-fail
+  "Elle-safe fail when sticky/promoteHint has no writer-eligible node."
+  [value]
+  {:type :fail :error :no-proposer :value value})
 
 (defn- invoke-with-sticky!
-  "Route to sticky/eligible proposer; retry once on connect fail or orchid/region fence
-  when wire meta proves sticky is no longer writer-eligible (Elle-safe epoch move)."
+  "Append/Elle path: route only to sticky/promoteHint — never assigned-node fallback
+  (cross-worker pins caused G-nonadjacent after unclean-revive).
+  No transparent read retry on orchid fence (stale mid-history :ok).
+  Mutative orchid fence stays :fail. Connect-fail may retry once via discover only."
+  [clients _assigned-node f value]
+  (let [primary (discover-proposer clients)]
+    (if (nil? primary)
+      (no-proposer-fail value)
+      (let [first-try (invoke-sql! clients primary f value)]
+        (cond
+          (= :ok (:type first-try))
+          (do (remember-proposer! primary) first-try)
+
+          (connect-fail? first-try)
+          (do
+            (clear-proposer!)
+            (close-client! clients primary)
+            (let [second-node (discover-proposer clients)
+                  second-try (when (and second-node (not= second-node primary))
+                               (invoke-sql! clients second-node f value))]
+              (cond
+                (nil? second-try) first-try
+                (= :ok (:type second-try))
+                (do (remember-proposer! second-node) second-try)
+                :else second-try)))
+
+          (orchid-not-synced? first-try)
+          (do
+            (close-client! clients primary)
+            (when-not (writer-eligible? clients primary)
+              (clear-proposer!))
+            (assoc first-try :type :fail))
+
+          :else first-try)))))
+
+(defn- invoke-register!
+  "Register/Knossos path: sticky first, then assigned-node fallback on connect miss.
+  Safe for single-key CAS (Elle G-nonadjacent is append-only)."
   [clients assigned-node f value]
-  (let [primary (or (discover-proposer clients) assigned-node "n1")
-        first-try (invoke-sql! clients primary f value)]
+  (let [primary (discover-proposer clients)
+        target (or primary assigned-node)
+        first-try (invoke-sql! clients target f value)]
     (cond
       (= :ok (:type first-try))
-      (do (remember-proposer! primary) first-try)
+      (do (when primary (remember-proposer! primary)) first-try)
 
-      (connect-fail? first-try)
+      (connect-miss? first-try)
       (do
         (clear-proposer!)
-        (close-client! clients primary)
-        (let [second-node (or (discover-proposer clients)
-                              (first (filter #(writer-eligible? clients %)
-                                             (remove #(= % primary) (all-nodes)))))
-              second-try (when (and second-node (not= second-node primary))
-                           (invoke-sql! clients second-node f value))]
+        (close-client! clients target)
+        (let [second (or (discover-proposer clients)
+                         (when (not= assigned-node target) assigned-node))
+              second-try (when (and second (not= second target))
+                           (invoke-sql! clients second f value))]
           (cond
             (nil? second-try) first-try
             (= :ok (:type second-try))
-            (do (remember-proposer! second-node) second-try)
-            :else second-try)))
+            (do (remember-proposer! second) second-try)
+            ;; Prefer definitive :fail over lingering :info connect for Knossos.
+            (connect-fail? second-try) second-try
+            :else first-try)))
 
-      ;; Transparent one retry when sticky lost writerEligible (claim / fence).
       (orchid-not-synced? first-try)
       (do
-        (close-client! clients primary)
-        (when-not (writer-eligible? clients primary)
+        (close-client! clients target)
+        (when-not (writer-eligible? clients target)
           (clear-proposer!))
-        (let [second-node (or (discover-proposer clients) assigned-node)
-              second-try (when second-node
-                           (invoke-sql! clients second-node f value))]
-          (cond
-            (nil? second-try) first-try
-            (= :ok (:type second-try))
-            (do (remember-proposer! second-node) second-try)
-            :else second-try)))
+        (assoc first-try :type :fail))
 
       :else first-try)))
 
@@ -276,7 +329,11 @@
   (setup! [_ _])
   (invoke! [this _test op]
     (let [assigned (or node "n1")
-          result (invoke-with-sticky! clients assigned (:f op) (:value op))]
+          f (:f op)
+          ;; :txn/:append → sticky-only (Elle). :read/:write → register fallback (Knossos).
+          result (if (or (= :txn f) (= :append f))
+                   (invoke-with-sticky! clients assigned f (:value op))
+                   (invoke-register! clients assigned f (:value op)))]
       (merge op (select-keys result [:type :value :error]))))
   (teardown! [_ _])
   (close! [_ _]

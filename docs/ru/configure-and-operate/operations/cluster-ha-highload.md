@@ -71,11 +71,11 @@ sequenceDiagram
 
 Как это устроено внутри: [обзор архитектуры](../../understand/architecture-overview.md), [путь записи](../../understand/write-path-staging.md), [хранение GMAP](../../understand/storage-sealed-gmap.md).
 
-## Переключение writer при отказе
+## Переключение пишущего при отказе
 
 ```mermaid
 sequenceDiagram
-  participant P as Writer_n1
+  participant P as пишущий_n1
   participant S as Survivors_n2_n3
   participant W as Meta_protokola
   participant Cl as Client
@@ -111,7 +111,7 @@ grid://u:p@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public?connectTimeout
 | `retryMode` и `maxRetries` | Повторы подключения по списку адресов |
 | `maxTxContexts` | потолок логических сессий на **одном** TCP, а не пул из N сокетов |
 
-**Как это делать в продакшене.** Выбор writer берётся из `ServerMeta`, который приходит по протоколу в `AUTH_OK`, в `ERROR` и в асинхронном `PROMOTE_NOTIFY`: клиент закрепляется на узле с `writerEligible` и, если включена изоляция площадок, с совпадающим `regionEpoch`. Если посреди операции узел отклонил запись из-за рассинхронизации, отставания или несовпадения epoch, не переключайте соединение молча: вызывайте `rediscoverWriter()`. Полный сценарий: [повышение роли узла](ha-promote.md).
+**Как это делать в эксплуатации.** Выбор пишущего берётся из `ServerMeta`, который приходит по протоколу в `AUTH_OK`, в `ERROR` и в асинхронном `PROMOTE_NOTIFY`: клиент закрепляется на узле с `writerEligible` и, если включена изоляция площадок, с совпадающим `regionEpoch`. Если посреди операции узел отклонил запись из-за рассинхронизации, отставания или несовпадения epoch, не переключайте соединение молча: вызывайте `rediscoverWriter()`. Полный сценарий: [повышение роли узла](ha-promote.md).
 
 ## Kubernetes и пробы Actuator
 
@@ -194,7 +194,7 @@ grid:
 |--------|-----|
 | Внешний Jepsen N=3 | [benchmarks/jepsen/README.md](../../../../benchmarks/jepsen/README.md) |
 | Chaos-тесты | `index.unit.replication.chaos.**` |
-| Переключение writer и окно потерь | [повышение роли узла](ha-promote.md) |
+| Переключение пишущего и окно потерь | [повышение роли узла](ha-promote.md) |
 | Протокол и репликация между ЦОД | [сеть репликации](../../understand/replication-network.md) |
 | Пороги пропускной способности | [ёмкость и пороги](../../performance/capacity-slo.md) |
 

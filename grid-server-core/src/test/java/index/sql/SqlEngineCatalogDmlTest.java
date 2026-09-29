@@ -65,12 +65,14 @@ public class SqlEngineCatalogDmlTest {
 	}
 
 	@Test
-	void updateMissingPkSeedsRow() {
+	void updateMissingPkDoesNotSeedRow() {
+		// Product contract (Elle G-single-item): UPDATE must not invent a row for a missing PK.
 		engine.execute("CREATE TABLE a (id INT PRIMARY KEY, number VARCHAR, status VARCHAR)");
-		engine.execute("UPDATE a SET number = number || ' ' || 't0' WHERE id = 2");
-		SqlResult sel = engine.execute("SELECT number FROM a WHERE id = 2");
-		assertEquals(1, sel.rows().size());
-		assertEquals(" t0", sel.rows().getFirst()[0]);
+		final SqlResult upd = engine.execute(
+				"UPDATE a SET number = number || ' ' || 't0' WHERE id = 2");
+		assertEquals(0L, upd.rowsAffected());
+		final SqlResult sel = engine.execute("SELECT number FROM a WHERE id = 2");
+		assertTrue(sel.rows().isEmpty());
 	}
 	@Test
 	void createInsertSelectUpdateDelete() {

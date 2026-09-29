@@ -58,7 +58,7 @@ HA helpers on `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()
 - TX: `connection.begin()` → statements on `TxContext` → `commit()` / `rollback()`
 - Parallel TX = N `begin()` on one `Connection` (client `maxTxContexts`; server stops at **8**)
 
-See also: [java-client](../develop/java-client.md), [transactions](../develop/transactions.md).
+Next: [java-client](../develop/java-client.md), [transactions](../develop/transactions.md).
 
 ## Server SPI (`grid-server-core`)
 
@@ -81,4 +81,4 @@ JDBC in `grid-sql-client` (`jdbc:grid://`, package `org.genfork.grid.jdbc`) is a
 
 SQL **15432** / **15433** · replication **5615** / **5616**.
 
-**Related:** [sql fundamentals](../sql/fundamentals.md), [positioning](../getting-started/positioning.md).
+Next: [sql fundamentals](../sql/fundamentals.md), [positioning](../getting-started/positioning.md).

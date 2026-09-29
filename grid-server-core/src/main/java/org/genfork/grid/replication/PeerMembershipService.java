@@ -28,9 +28,11 @@ import org.genfork.grid.replication.netty.NettyReplicationTransport;
 import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.region.RegionRole;
 import org.genfork.grid.replication.repair.HomologousRepair;
+import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationPeer;
 import org.genfork.grid.replication.transport.ReplicationPublisher;
+import org.genfork.grid.replication.util.HelloSealedCatchUpUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +60,8 @@ public final class PeerMembershipService {
 	private final CrossDcPublisher crossDcPublisher;
 	private final List<ReplicationPeer> peers;
 	private final RegionClaimService regionClaimService;
+	/** Optional sealed source for HELLO catch-up past OpLog truncate (set after ctor). */
+	private volatile SealedGridMapService sealedGridMapService;
 
 	public PeerMembershipService(
 			boolean enabled,
@@ -87,6 +91,13 @@ public final class PeerMembershipService {
 		this.crossDcPublisher = crossDcPublisher;
 		this.peers = peers;
 		this.regionClaimService = regionClaimService;
+	}
+
+	/**
+	 * Bind sealed GridMap service for HELLO rejoin past truncate watermark.
+	 */
+	public void setSealedGridMapService(SealedGridMapService sealedGridMapService) {
+		this.sealedGridMapService = sealedGridMapService;
 	}
 
 	public synchronized void addPeer(ReplicationPeer peer) {
@@ -180,6 +191,11 @@ public final class PeerMembershipService {
 			final String domain = parsed.domain();
 			final int shard = parsed.shard();
 			final long peerWm = nodeState.peerAck(peerId, domain, shard);
+			// Past truncate: OpLog cannot ship retired seqs — push sealed baseline first.
+			if (HelloSealedCatchUpUtil.needsSealedBaseline(opLog, domain, shard, peerWm)) {
+				HelloSealedCatchUpUtil.shipSealedBaseline(
+						sealedGridMapService, nettyTransport, peerId, domain, shard);
+			}
 			sparseCatchUp.catchUpAndShip(domain, shard, peerWm, (pid, ops) -> {
 				if (ops.isEmpty()) {
 					return;

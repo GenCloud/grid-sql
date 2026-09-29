@@ -37,6 +37,12 @@ import java.util.function.BiConsumer;
  * @since: 1.0
  */
 public final class WorkingSetBudget {
+	/** Delay CLOCK scan until well over cap (amortize ConcurrentHashMap walks). */
+	private static final int DRAIN_HYSTERESIS = 4_096;
+	/** Victims per drain call — next touch continues if still over cap. */
+	private static final int DRAIN_BATCH = 1_024;
+	private static final int DRAIN_GUARD_BASE = 16;
+
 	private final AtomicInteger maxEntries;
 	private final ConcurrentHashMap<KeyRef, Meta> entries;
 	private final AtomicInteger size = new AtomicInteger();
@@ -95,7 +101,7 @@ public final class WorkingSetBudget {
 			return;
 		}
 		final int n = size.incrementAndGet();
-		if (n > cap) {
+		if (n > cap + DRAIN_HYSTERESIS) {
 			drainOverflow();
 		}
 	}
@@ -119,25 +125,28 @@ public final class WorkingSetBudget {
 		if (handler == null) {
 			return;
 		}
-		final List<Victim> victims = new ArrayList<>();
+		final List<Victim> victims = new ArrayList<>(DRAIN_BATCH);
 		int guard = 0;
-		while (size.get() > cap && guard++ < cap * 4 + 16) {
-			boolean progressed = false;
+		final int guardLimit = DRAIN_BATCH * 4 + DRAIN_GUARD_BASE;
+		while (size.get() > cap && victims.size() < DRAIN_BATCH && guard++ < guardLimit) {
+			boolean clearedRef = false;
+			boolean evicted = false;
 			for (Map.Entry<KeyRef, Meta> e : entries.entrySet()) {
-				if (size.get() <= cap) {
+				if (size.get() <= cap || victims.size() >= DRAIN_BATCH) {
 					break;
 				}
 				final Meta meta = e.getValue();
 				if (meta.referenced.compareAndSet(true, false)) {
+					clearedRef = true;
 					continue;
 				}
 				if (entries.remove(e.getKey(), meta)) {
 					size.decrementAndGet();
 					victims.add(new Victim(meta.shard, e.getKey().key));
-					progressed = true;
+					evicted = true;
 				}
 			}
-			if (!progressed) {
+			if (!evicted && !clearedRef) {
 				break;
 			}
 		}

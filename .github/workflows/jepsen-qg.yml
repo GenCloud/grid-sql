@@ -1,5 +1,6 @@
 # Jepsen QG lab gate — separate from unit CI (never co-run with Load/JMH/OSS).
-# Matrix: 1dc-chaos, 1dc-nochao(+qg-gate), multidc-async, multidc-sync, witness.
+# Full matrix: see benchmarks/jepsen/COVERAGE.md (A–I).
+# Triggers: workflow_dispatch, nightly, push main/master; PR only with label jepsen.
 name: Jepsen QG
 
 on:
@@ -11,7 +12,6 @@ on:
         default: "60"
         type: string
   schedule:
-    # Nightly UTC
     - cron: "0 3 * * *"
   push:
     branches: [main, master]
@@ -34,7 +34,6 @@ env:
     -Dfile.encoding=UTF-8
 
 jobs:
-  # Skip expensive work on PRs unless labeled `jepsen` (or manual dispatch).
   build-image:
     name: Build Jepsen image
     runs-on: ubuntu-latest
@@ -89,10 +88,14 @@ jobs:
       matrix:
         config:
           - 1dc-chaos
+          - 1dc-unclean-revive
           - 1dc-nochao
-          - multidc-async
-          - multidc-sync
-          - witness
+          - multidc-async-chaos
+          - multidc-sync-chaos
+          - multidc-async-nochao
+          - multidc-sync-nochao
+          - witness-chaos
+          - multidc-unclean-revive
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -103,22 +106,6 @@ jobs:
           distribution: temurin
           java-version: "25"
           cache: maven
-
-      - name: Install PowerShell (qg-gate / witness)
-        if: matrix.config == '1dc-nochao' || matrix.config == 'witness'
-        shell: bash
-        run: |
-          if command -v pwsh >/dev/null 2>&1; then
-            pwsh -NoProfile -Command '$PSVersionTable.PSVersion'
-            exit 0
-          fi
-          sudo apt-get update
-          sudo apt-get install -y wget apt-transport-https software-properties-common
-          wget -q "https://packages.microsoft.com/config/ubuntu/$(. /etc/os-release && echo $VERSION_ID)/packages-microsoft-prod.deb"
-          sudo dpkg -i packages-microsoft-prod.deb
-          sudo apt-get update
-          sudo apt-get install -y powershell
-          pwsh -NoProfile -Command '$PSVersionTable.PSVersion'
 
       - name: Download Jepsen image
         uses: actions/download-artifact@v4
@@ -134,13 +121,19 @@ jobs:
       - name: Install grid-sql-client (control classpath)
         run: mvn -B -ntp -pl grid-sql-client -am install -DskipTests
 
+      - name: Make scripts executable
+        run: |
+          chmod +x benchmarks/jepsen/scripts/*.sh \
+            benchmarks/jepsen/multidc/scripts/*.sh \
+            benchmarks/jepsen/witness/scripts/*.sh || true
+
       - name: Purge Jepsen volumes
         env:
           CONFIG: ${{ matrix.config }}
         run: |
           case "$CONFIG" in
-            1dc-chaos|1dc-nochao) SCOPE=1dc ;;
-            multidc-async|multidc-sync|witness) SCOPE=multidc ;;
+            1dc-chaos|1dc-unclean-revive|1dc-nochao) SCOPE=1dc ;;
+            multidc-*|witness-chaos) SCOPE=multidc ;;
             *) SCOPE=all ;;
           esac
           bash benchmarks/jepsen/scripts/jepsen-purge.sh "$SCOPE"
@@ -151,13 +144,21 @@ jobs:
           JEPSEN_M2: /home/runner/.m2
         run: bash benchmarks/jepsen/scripts/run-jepsen.sh
 
+      - name: Run 1dc-unclean-revive
+        if: matrix.config == '1dc-unclean-revive'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+          JEPSEN_UNCLEAN_REVIVE: "1"
+          JEPSEN_UNCLEAN_DOWN_SEC: "15"
+        run: bash benchmarks/jepsen/scripts/run-jepsen-unclean-revive.sh
+
       - name: Run 1dc-nochao
         if: matrix.config == '1dc-nochao'
         env:
           JEPSEN_M2: /home/runner/.m2
         run: bash benchmarks/jepsen/scripts/run-jepsen-nochao.sh
 
-      # Ref B p95 living floor = calm host. On GITHUB_ACTIONS qg-gate is CI_ADVISORY (p50 hard, p95 advisory).
+      # Ref B p95 living floor = calm host. On GITHUB_ACTIONS qg-gate is CI_ADVISORY.
       - name: qg-gate (nochao latency)
         if: matrix.config == '1dc-nochao'
         shell: bash
@@ -176,35 +177,59 @@ jobs:
             exit 1
           fi
           echo "qg-gate register=$REGISTER_HISTORY append=$APPEND_HISTORY"
-          pwsh -NoProfile -File benchmarks/jepsen/scripts/qg-gate.ps1 \
+          bash benchmarks/jepsen/scripts/qg-gate.sh \
             -RegisterHistory "$REGISTER_HISTORY" \
             -AppendHistory "$APPEND_HISTORY"
 
-      - name: Run multidc-async
-        if: matrix.config == 'multidc-async'
+      - name: Run multidc-async-chaos
+        if: matrix.config == 'multidc-async-chaos'
         env:
           JEPSEN_M2: /home/runner/.m2
           MULTIDC_FULL: "1"
           MULTIDC_SKIP_REBUILD: "1"
-        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-async.sh
+        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-chaos.sh async
 
-      - name: Run multidc-sync
-        if: matrix.config == 'multidc-sync'
+      - name: Run multidc-sync-chaos
+        if: matrix.config == 'multidc-sync-chaos'
         env:
           JEPSEN_M2: /home/runner/.m2
           MULTIDC_FULL: "1"
           MULTIDC_SKIP_REBUILD: "1"
-        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-sync-voters.sh
+        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-chaos.sh sync-voters
 
-      - name: Run witness
-        if: matrix.config == 'witness'
+      - name: Run multidc-async-nochao
+        if: matrix.config == 'multidc-async-nochao'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+          MULTIDC_FULL: "1"
+          MULTIDC_SKIP_REBUILD: "1"
+        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-nochao.sh async
+
+      - name: Run multidc-sync-nochao
+        if: matrix.config == 'multidc-sync-nochao'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+          MULTIDC_FULL: "1"
+          MULTIDC_SKIP_REBUILD: "1"
+        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-nochao.sh sync-voters
+
+      - name: Run witness-chaos
+        if: matrix.config == 'witness-chaos'
         env:
           JEPSEN_M2: /home/runner/.m2
           JEPSEN_TIME_LIMIT: ${{ env.JEPSEN_TIME_LIMIT }}
-        run: >
-          pwsh -NoProfile -File benchmarks/jepsen/witness/scripts/run-witness-chaos.ps1
-          -TimeLimit ${{ env.JEPSEN_TIME_LIMIT }}
-          -SkipRebuild
+          MULTIDC_SKIP_REBUILD: "1"
+        run: bash benchmarks/jepsen/witness/scripts/run-witness-chaos.sh
+
+      - name: Run multidc-unclean-revive
+        if: matrix.config == 'multidc-unclean-revive'
+        env:
+          JEPSEN_M2: /home/runner/.m2
+          MULTIDC_FULL: "1"
+          MULTIDC_SKIP_REBUILD: "1"
+          JEPSEN_UNCLEAN_REVIVE: "1"
+          JEPSEN_UNCLEAN_DOWN_SEC: "15"
+        run: bash benchmarks/jepsen/multidc/scripts/run-multidc-unclean-revive.sh
 
       - name: Upload RESULTS + histories
         if: always()
@@ -212,6 +237,7 @@ jobs:
         with:
           name: jepsen-${{ matrix.config }}-artifacts
           path: |
+            benchmarks/jepsen/COVERAGE.md
             benchmarks/jepsen/RESULTS.md
             benchmarks/jepsen/ARTIFACTS.txt
             benchmarks/jepsen/clojure/store/**/results.edn

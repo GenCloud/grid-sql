@@ -98,7 +98,7 @@ Until every row that applies to your topology passes, do not call the restore su
 - Do not keep writing into a live damaged directory — copy first, then PITR.
 - Do not admit traffic before readiness is UP.
 
-## Related
+## Next
 
 - [PITR](pitr.md)
 - [Upgrade](upgrade.md)

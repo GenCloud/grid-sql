@@ -30,7 +30,7 @@ Checker: **Elle** `list-append` (`elle.list-append/check`, no Graphviz directory
 
 SQL listen ports (Compose): n1 `15432`, n2 `15433`, n3 `15434` (`JEPSEN_SQL_PORTS`).
 
-**Latency gate (algorithm):** `--no-nemesis` / `run-jepsen-nochao.*` -> `qg-gate.ps1` (hard p50+p95 vs Ref B*1.05; soft p99*1.15; n>=200). Prefer median of 3x 60s runs. Chaos p50/p95/p99 is contour only.
+**Latency gate (algorithm):** `--no-nemesis` / `run-jepsen-nochao.*` -> `qg-gate.sh` (hard p50+p95 vs Ref B*1.05; soft p99*1.15; n>=200). Prefer median of 3x 60s runs. Chaos p50/p95/p99 is contour only.
 
 Latency contour for the living consistency stamp: see [RESULTS.md](RESULTS.md).
 
@@ -66,3 +66,9 @@ See `clojure/src/jamoa_jepsen/core.clj`:
 ## Client URL
 
 grid://…?maxConnections=1&maxTxContexts=64 — soft session cap (concurrent autocommit needs headroom above worker count).
+
+
+## FAQ: `[:r k nil]` in logs
+
+Elle mop `[:r k nil]` on `:invoke` is a **read placeholder**, not a NULL row or consensus bug.
+See [COVERAGE.md](COVERAGE.md). Full Multi-DC CI runs use **nemesis ON** for `*-chaos` cells (`MULTIDC_NEMESIS=1`); `*-nochao` is topology-only.

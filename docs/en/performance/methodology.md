@@ -8,7 +8,7 @@ Load, QG, Jepsen and JMH never run together on one host. After a hot-path change
 
 1. QG summary;
 2. Jepsen, full 1-DC;
-3. Multi-DC, if replication or cross-site shipping was touched;
+3. Multi-site, if replication or cross-site shipping was touched;
 4. JMH latency tracks (`scripts/run-jmh-latency`);
 5. load: WRITE_ONLY, READ_ONLY, Capacity.
 

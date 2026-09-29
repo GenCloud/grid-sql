@@ -29,6 +29,8 @@ package org.genfork.grid.common;
 public final class WriterFenceSignals {
 
 	public static final String ORCHID_NOT_SYNCED = "OrchidNotSynced";
+	public static final String ORCHID_NACK = "ORCHID NACK";
+	public static final String PREV_OP_SEQ_MISMATCH = "prevOpSeq mismatch";
 	public static final String PHASE_RANKED = "phase-ranked";
 	public static final String WRITER_ELIGIBLE = "writerEligible";
 	public static final String WRITE_REQUIRES_PHASE_RANKED = "write requires phase-ranked";
@@ -55,6 +57,8 @@ public final class WriterFenceSignals {
 		final String msg = root.getMessage() == null ? "" : root.getMessage();
 		return name.contains(ORCHID_NOT_SYNCED)
 				|| msg.contains(ORCHID_NOT_SYNCED)
+				|| msg.contains(ORCHID_NACK)
+				|| msg.contains(PREV_OP_SEQ_MISMATCH)
 				|| msg.contains(PHASE_RANKED)
 				|| msg.contains(WRITER_ELIGIBLE)
 				|| msg.contains(WRITE_REQUIRES_PHASE_RANKED)

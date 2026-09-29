@@ -124,7 +124,7 @@ Prefer `UPSERT` / `INSERT … ON CONFLICT … DO UPDATE SET col = EXCLUDED.col` 
 | `ALTER TABLE … ALTER COLUMN TYPE`, renames | Add a column and migrate in the application |
 | Foreign SQL wire protocol | `grid://` and `jdbc:grid://` only |
 
-## Related
+## Next
 
 - [Fundamentals](fundamentals.md) — how a statement travels through the server.
 - [DDL](ddl.md) and [DML](dml.md) — the same forms with worked examples.

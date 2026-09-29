@@ -14,7 +14,7 @@
 | Stale / `applyLagStale` на чтении с реплики | Отставание apply; при превышении порога — **отказ** (подождать или читать с пишущего) ([чтение с реплики](../configure-and-operate/operations/replica-reads.md)) |
 | Отказ записи после повышения роли | Клиент не сделал `rediscoverWriter()` — [повышение роли](../configure-and-operate/operations/ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | URL записи указывает на Hold/Witness или клиент перебирает следующий адрес в URL без `rediscoverWriter()` |
-| TX / DML на read URL | `readEndpoints` / `READ_REPLICA` — только SELECT/EXPLAIN; запись всегда на writer |
+| TX / DML на read URL | `readEndpoints` / `READ_REPLICA` — только SELECT/EXPLAIN; запись всегда на пишущий узел |
 | Готовность DOWN при старте | ORCHID ещё не синхронизирован — ожидаемо; не слать трафик |
 
 ## Клиентский SPI (`grid-sql-client`)
@@ -27,7 +27,7 @@
 | `Statement` | SQL; `execute` / `executeUpdate`; возвращает клиентский `Result` |
 | `Result` / `Row` | Набор строк или счётчик изменений на границе клиентского SPI |
 | `SqlResult` | Тип движка / commons на сервере — не то, что приложение получает из `Statement` |
-| `ServerMeta` | Метаданные закрепления writer (`writerEligible`, `promoteHint`, `regionEpoch`, …); `lastServerMeta()` на фабрике |
+| `ServerMeta` | Метаданные закрепления пишущий (`writerEligible`, `promoteHint`, `regionEpoch`, …); `lastServerMeta()` на фабрике |
 | `PreparedHandle` | Именованный PREPARE на сессии (`prepare` / `bind` / `execute` / `deallocate`) |
 
 ### ConnectionFactory
@@ -36,7 +36,7 @@
 ConnectionFactory f = new RemoteConnectionFactory(
     "127.0.0.1", 15432, "user", "pass", 32);
 Mono<Connection> c = f.obtain();
-// после смены writer: ((RemoteConnectionFactory) f).rediscoverWriter();
+// после смены пишущего: ((RemoteConnectionFactory) f).rediscoverWriter();
 // f.dispose();
 ```
 

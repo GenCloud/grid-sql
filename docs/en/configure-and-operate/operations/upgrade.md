@@ -79,7 +79,7 @@ After each node comes back:
 - Upgrade every node at once without catch-up.
 - Disable replication / fsync “for the upgrade window” without an explicit loss window.
 
-**Related:** [failures](failures.md), [PITR](pitr.md), [durability](../configuration/durability.md), [Compose](deploy-compose.md).
+Next: [failures](failures.md), [PITR](pitr.md), [durability](../configuration/durability.md), [Compose](deploy-compose.md).
 
 ## Common failures during upgrade
 

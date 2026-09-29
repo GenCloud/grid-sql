@@ -35,8 +35,10 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
 import javax.crypto.SecretKeyFactory;
@@ -77,6 +79,11 @@ public final class PrivilegeCatalog {
 	private final Map<String, Set<SqlPrivilege>> roleGrants = new ConcurrentHashMap<>();
 	private final SecureRandom random = new SecureRandom();
 	private final ReentrantLock mutationLock = new ReentrantLock();
+	/**
+	 * Last successful AUTH credentials (plain password match). Avoids repeating PBKDF2-120k on
+	 * reconnect storms; cleared on any user/role mutation. Does not weaken first-factor KDF.
+	 */
+	private final AtomicReference<CachedAuth> authSuccessCache = new AtomicReference<>();
 	private final Path metaFile;
 
 	public PrivilegeCatalog() {
@@ -241,9 +248,23 @@ public final class PrivilegeCatalog {
 		if (isOpen()) {
 			return true;
 		}
-		final UserRecord record = users.get(normalize(user));
-		return record != null && password != null
+		if (password == null) {
+			return false;
+		}
+		final String normalized = normalize(user);
+		final CachedAuth cached = authSuccessCache.get();
+		if (cached != null
+				&& cached.user().equals(normalized)
+				&& Objects.equals(cached.password(), password)) {
+			return true;
+		}
+		final UserRecord record = users.get(normalized);
+		final boolean ok = record != null
 				&& MessageDigest.isEqual(record.passwordHash(), hashFor(record, password));
+		if (ok) {
+			authSuccessCache.set(new CachedAuth(normalized, password));
+		}
+		return ok;
 	}
 
 	public boolean userExists(String user) {
@@ -550,6 +571,7 @@ public final class PrivilegeCatalog {
 			memberships.putAll(loadedMemberships);
 			roleGrants.clear();
 			roleGrants.putAll(loadedRoleGrants);
+			authSuccessCache.set(null);
 		} catch (IOException ex) {
 			throw new IllegalStateException("privilege snapshot decode failed", ex);
 		}
@@ -561,6 +583,7 @@ public final class PrivilegeCatalog {
 			final byte[] previous = toSnapshotBytes();
 			try {
 				mutation.run();
+				authSuccessCache.set(null);
 				persist();
 			} catch (RuntimeException ex) {
 				replaceSnapshotBytes(previous);
@@ -661,6 +684,16 @@ public final class PrivilegeCatalog {
 		final int length = in.readInt();
 		final byte[] raw = in.readNBytes(length);
 		return new String(raw, StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * Memo of last successful AUTH (normalized user + password text).
+	 *
+	 * @author: GenCloud
+	 * @date: 2025/07
+	 * @since: 1.0
+	 */
+	private record CachedAuth(String user, String password) {
 	}
 
 	/**

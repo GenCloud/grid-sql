@@ -6,9 +6,10 @@ Curated Grid measurements from the lab host: JMH latency tracks, the sealed quer
 
 | Profile | Band (lab host, `fsync: true`) |
 |---------|--------------------------------|
-| HA write (WRITE_ONLY) | ≈**4922**/s |
-| HA read (READ_ONLY) | ≈**52261…59430**/s |
-| Mixed Capacity QG | ≈**8772…11352**/s |
+| HA write (WRITE_ONLY) | ≈**6371**/s |
+| HA read (READ_ONLY) | ≈**52261…59430**/s (living ≈**54013**/s) |
+| Mixed Capacity QG | ≈**8772…11519**/s |
+| HA mix sizing | ≈**9896**/s |
 
 Conditions and the ~95% regression floors: [capacity](capacity-slo.md). Measurement files: [`SUMMARY.md`](../../../grid-server-core/benchmarks/results/SUMMARY.md).
 
@@ -101,7 +102,7 @@ When a plan goes parallel: [EXPLAIN and AQE](../sql/explain-and-aqe.md).
 - Multi-DC: [`benchmarks/jepsen/multidc/RESULTS.md`](../../../benchmarks/jepsen/multidc/RESULTS.md)
 - TLC model check: [ORCHID TLA+](../internal/orchid-tla.md)
 
-## Related
+## Next
 
 - [Methodology](methodology.md)
 - [Capacity and thresholds](capacity-slo.md)

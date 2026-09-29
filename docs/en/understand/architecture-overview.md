@@ -111,7 +111,7 @@ They are easy to confuse, so it is worth keeping the distinction in mind:
 
 When replication is enabled, transactions additionally write lifecycle markers (`TX_BEGIN`, `TX_COMMIT`, `TX_ABORT`) into the OpLog — through ORCHID, by the same path. Markers do not replace the rows themselves: data changes still go through the full chain. On a peer a transaction is applied in one piece, so a reader never sees a partially applied transaction.
 
-Multi-shard transactions are assembled by `MultiShardCommitBarrier`: it waits for the streams of all touched tables and lays a single `TX_BEGIN` → operations → `TX_COMMIT` block into the OpLog. This is a local commit-flush barrier on the proposer, not distributed two-phase commit over foreign resource managers.
+Multi-shard transactions are assembled by `MultiShardCommitBarrier`: it waits for the streams of all touched tables and lays a single `TX_BEGIN` → operations → `TX_COMMIT` block into the OpLog. This is a local commit-flush barrier on the writer, not distributed two-phase commit over foreign resource managers.
 
 Step-by-step breakdown: [the write path](write-path-staging.md), [visibility and concurrency](concurrency-and-visibility.md).
 

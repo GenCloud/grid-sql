@@ -390,6 +390,7 @@ public class ReplicationCoordinator {
 		this.sparseCatchUp = new SparseCatchUp(nodeState, opLog, orchidNode);
 		this.regionClaimService = new RegionClaimService(enabled, peerTransportEnabled, crossDcEnabled, writeAdmission, replicaReadsEnabled, maxStaleLag, nodeState, opLog, orchidNode, nettyTransport, regionCoordinator);
 		this.peerMembershipService = new PeerMembershipService(enabled, crossDcEnabled, repairEnabled, nodeState, opLog, orchidNode, nettyTransport, sparseCatchUp, homologousRepair, publisher, crossDcPublisher, peers, regionClaimService);
+		this.peerMembershipService.setSealedGridMapService(sealedGridMapService);
 		this.txMarkerService = new TxMarkerService(enabled, crossDcEnabled, nodeState, opLog, streamOpLogAppender, orchidNode, publisher, crossDcPublisher, homologousRepair);
 		this.sealedHydrateService = new SealedHydrateService(enabled, hydrateMode, workingSetMaxEntries, adaptiveDiskFirstController, nodeState, opLog, snapshotService, indexCheckpointService, sealedGridMapService, homologousRepair, appliers);
 		publisher.setPeers(peers);

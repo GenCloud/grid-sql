@@ -236,6 +236,7 @@ $jmeterArgs = @(
   "-JPASSWORD=$Password",
   "-JKEY_SPACE=$KeySpace",
   "-JOP_TIMEOUT_MS=$(if ($OpTimeoutMs -gt 0) { $OpTimeoutMs } else { 30000 })",
+  "-JCONNECT_TIMEOUT_MS=30000",
   "-JMIX_PROFILE=$MixProfile",
   "-JWRITE_BATCH_SIZE=$WriteBatchSize",
   "-JREPORT_DIR=$($ReportDir -replace '\\','/')"
@@ -321,6 +322,8 @@ try {
     if ($parts.Length -lt 8) { continue }
     $label = $parts[2]
     if ($label -eq "grid-sql-setup" -or $label -like "*SETUP*") { continue }
+    # Open/AUTH is session bootstrap, not capacity ops — excludes PBKDF2 connect from living TPS/pNN.
+    if ($label -eq "grid-sql-open" -or $label -like "*OPEN*") { continue }
     $total++
     $elapsed = 0.0
     [void][double]::TryParse($parts[1], [ref]$elapsed)

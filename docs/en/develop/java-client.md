@@ -214,4 +214,4 @@ For a **sync application that does not want JDBC**, use `SyncConnectionFactory.f
 
 Runnable `grid-sql-client` cases live under [`examples/`](../../../examples/). Optional `factory.warmup()` when `?warmup=true` preheats `minConnections` (fail-fast connect/AUTH) — see `examples-warmup`. Borrow a channel with `factory.obtain()`. Other modules cover connect, session, TX, batch, PREPARE, savepoints, streaming, parallel TX, replica reads, HA URL, DML, indexes, JOIN/agg, EXPLAIN, `FOR UPDATE`, PIN. Point `GRID_URL` at a live SQL port (`capacity` or `examples/compose/1dc-n2`). See [`examples/README.md`](../../../examples/README.md).
 
-**Related:** [transactions](transactions.md), [Spring Boot](spring-boot.md), [wire streaming](wire-streaming.md), [connecting clients](../getting-started/connect-clients.md), [API reference](../api-reference/README.md).
+Next: [transactions](transactions.md), [Spring Boot](spring-boot.md), [wire streaming](wire-streaming.md), [connecting clients](../getting-started/connect-clients.md), [API reference](../api-reference/README.md).

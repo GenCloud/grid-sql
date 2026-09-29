@@ -11,4 +11,4 @@ export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=1
 export JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0
 command -v lein
 command -v git
-lein run -m jamoa-jepsen.core test --workload register --time-limit 30 --no-nemesis
+lein run -m jamoa-jepsen.core test --workload register --time-limit 60 --no-nemesis

@@ -343,6 +343,12 @@ public final class SealedHydrateService {
 			sealedGridMapService.unpackShardArtifacts(msg.packed());
 			log.debug("Unpacked sealed shard pack from={} domain={} shard={} bytes={}",
 					msg.fromNodeId(), msg.domainType(), msg.shard(), msg.packed().length);
+			// Unpack alone leaves map cold — hydrate sealed (+ OpLog tail) so rejoin after
+			// truncate sees pre-watermark keys without waiting for miss path.
+			final ReplicaApplier applier = appliers.get(msg.domainType());
+			if (applier != null) {
+				hydrateDomainFull(msg.domainType(), applier);
+			}
 		} catch (IOException failure) {
 			log.warn("Failed to unpack sealed shard pack from={} domain={} shard={}: {}",
 					msg.fromNodeId(), msg.domainType(), msg.shard(), failure.toString());

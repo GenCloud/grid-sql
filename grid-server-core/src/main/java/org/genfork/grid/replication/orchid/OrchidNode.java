@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.replication.orchid;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
@@ -117,6 +118,11 @@ public class OrchidNode {
 	 */
 	private final ConcurrentHashMap<Long, OrchidCommitMessage> commitHoldback = new ConcurrentHashMap<>();
 	private static final int COMMIT_HOLDBACK_CAP_FACTOR = 4;
+	/**
+	 * Fail-closed local digest wait: without this, a mid-failover flap can leave an admitted
+	 * propose wedged forever ({@code future.join} never completes — Elle-unsafe hang).
+	 */
+	private static final long LOCAL_PROPOSE_DIGEST_TIMEOUT_MS = 5_000L;
 	/**
 	 * FIFO propose wire queue: concurrent {@link #appendAndAdmit} must not reorder
 	 * {@code sendPropose} on the Netty channel (else peers NACK prevOpSeq gaps).
@@ -396,12 +402,18 @@ public class OrchidNode {
 	/**
 	 * Phase-ranked proposer: lexicographically smallest nodeId among self and seen phase peers.
 	 * Requires phase sync when local peers (or coupled remotes) are configured.
+	 * <p>
+	 * Also requires a majority-sized live cluster view so asymmetric {@code seen} after a kill
+	 * cannot mint two concurrent proposers (Elle list-append dual-writer / G0).
 	 */
 	public boolean isPhaseRankedProposer() {
 		if (peerIds.isEmpty() && !(multiDc().phaseCoupling() && multiDc().hasRemoteVoters())) {
 			return true;
 		}
 		if (!isSynced()) {
+			return false;
+		}
+		if (!hasMajorityLiveClusterView()) {
 			return false;
 		}
 		String best = nodeId;
@@ -414,6 +426,20 @@ public class OrchidNode {
 	}
 
 	/**
+	 * {@code self + seen local peers} must cover a majority of the configured local cluster.
+	 * Prevents split-brain phase-rank when each survivor briefly sees a disjoint peer set.
+	 */
+	private boolean hasMajorityLiveClusterView() {
+		if (peerIds.isEmpty()) {
+			return true;
+		}
+		final int configuredClusterSize = peerIds.size() + 1;
+		final int majority = configuredClusterSize / 2 + 1;
+		final int liveClusterSize = 1 + liveLocalPeerCount();
+		return liveClusterSize >= majority;
+	}
+
+	/**
 	 * Current phase-ranked proposer id (self or seen peer); null if not synced.
 	 * Lock-free metric / admission helper (no monitors).
 	 */
@@ -422,6 +448,9 @@ public class OrchidNode {
 			return nodeId;
 		}
 		if (!isSynced()) {
+			return null;
+		}
+		if (!hasMajorityLiveClusterView()) {
 			return null;
 		}
 		String best = nodeId;
@@ -478,11 +507,11 @@ public class OrchidNode {
 		}
 		final long peerTip = maxSeenPeerCommittedSeq();
 		final long localTip = lastCommittedSeq;
-		if (localTip == 0L && peerTip > 0L) {
-			return AdmittedPropose.failed(new OrchidNotSyncedException(OrchidTipPersistSupport.tipBehindMessage(localTip, peerTip)));
-		}
-		if (peerTip > localTip + maxProposeInFlight) {
-			return AdmittedPropose.failed(new OrchidNotSyncedException(OrchidTipPersistSupport.tipBehindMessage(localTip, peerTip)));
+		// Strict tip fence: never propose while any seen peer advertises a higher committed seq.
+		// maxProposeInFlight remains the pipeline semaphore only — not a tip-behind allowance.
+		if (peerTip > localTip) {
+			return AdmittedPropose.failed(new OrchidNotSyncedException(
+					OrchidTipPersistSupport.tipBehindMessage(localTip, peerTip)));
 		}
 		try {
 			proposeFlight.acquire();
@@ -706,6 +735,44 @@ public class OrchidNode {
 	}
 
 	/**
+	 * Lowest tip among seen same-DC peers; {@link Long#MAX_VALUE} when no live local peer is seen
+	 * (solo / partitioned — caller treats as no follower lag).
+	 */
+	public long minSeenLiveLocalPeerCommittedSeq() {
+		long min = Long.MAX_VALUE;
+		boolean any = false;
+		for (String id : peerIds) {
+			final PeerView peer = peers.get(id);
+			if (peer == null || !peer.seen) {
+				continue;
+			}
+			any = true;
+			if (peer.lastCommittedSeq < min) {
+				min = peer.lastCommittedSeq;
+			}
+		}
+		return any ? min : Long.MAX_VALUE;
+	}
+
+	/**
+	 * Test hook: mark a peer seen with an advertised committed tip (tip-behind admit IT).
+	 *
+	 * @param peerId       peer node id (must be non-null)
+	 * @param committedSeq tip to advertise ({@code >} local tip triggers fail-closed admit)
+	 */
+	@VisibleForTesting
+	public void testingNotePeerCommittedSeq(String peerId, long committedSeq) {
+		if (peerId == null || peerId.isEmpty() || committedSeq < 0L) {
+			return;
+		}
+		final PeerView view = peers.computeIfAbsent(peerId, PeerView::new);
+		view.seen = true;
+		if (committedSeq > view.lastCommittedSeq) {
+			view.lastCommittedSeq = committedSeq;
+		}
+	}
+
+	/**
 	 * After region claim: locally commit contiguous cross-DC proposes we digested but never
 	 * received a commit for (former Active crashed mid-broadcast). Prevents tip zeroing /
 	 * silent drop of ACKed ops. Call from logic VT (claim path), never Netty EL.
@@ -890,8 +957,36 @@ public class OrchidNode {
 				lock.unlock();
 			}
 			broadcastOwnPhaseDigests();
+			expireStaleLocalProposes();
 			requestCommitDrain();
 		}
+	}
+
+	/**
+	 * Fail admitted proposes that never reached digest quorum / commit within
+	 * {@link #LOCAL_PROPOSE_DIGEST_TIMEOUT_MS} (local-DC; remote voters use WAN timeout).
+	 */
+	private void expireStaleLocalProposes() {
+		final long ageMs = pendingProposeAgeMs();
+		if (ageMs < LOCAL_PROPOSE_DIGEST_TIMEOUT_MS) {
+			return;
+		}
+		PendingPropose oldest = null;
+		for (PendingPropose pendingPropose : pending.values()) {
+			if (pendingPropose == null || pendingPropose.future.isDone()) {
+				continue;
+			}
+			if (oldest == null || pendingPropose.proposeId < oldest.proposeId) {
+				oldest = pendingPropose;
+			}
+		}
+		if (oldest == null) {
+			clearPendingProposeTimestamp();
+			return;
+		}
+		failProposeChain(oldest, new OrchidNotSyncedException(
+				"local propose digest timeout after " + LOCAL_PROPOSE_DIGEST_TIMEOUT_MS
+						+ "ms ageMs=" + ageMs + " proposeId=" + oldest.proposeId));
 	}
 
 	private void kuramotoStep(double dt) {
@@ -956,7 +1051,9 @@ public class OrchidNode {
 	}
 
 	private PendingPropose findReadyContiguousPropose() {
-		if (!isSynced() || !isPhaseRankedProposer()) {
+		// Do not re-check isPhaseRankedProposer here: admit already required rank.
+		// A post-admit rank flap must not wedge an acknowledged propose forever.
+		if (!isSynced()) {
 			return null;
 		}
 		final long tip = lastCommittedSeq;

@@ -126,13 +126,13 @@ SQL и блокировки:
 | `orchid_r` ниже порога | Нет допуска записи | Сеть пиров, список `peers`, нагрузка digest — [репликация](configuration/replication.md) |
 | `applyLagStale: true` | Реплика слишком отстаёт для чтения | Не читать с неё; подтягивание / ремонт; порог `ha.max-stale-lag` |
 | Рост отставания OpLog | Подтягивание между узлами не успевает | Сеть, диск Applier, нагрузка записи; seq на обоих. `/replication/compare` — только лаборатория |
-| `writerEligible: false` после повышения роли | Клиент ещё на старом writer | `PROMOTE_NOTIFY` или `rediscoverWriter()` — [повышение роли](operations/ha-promote.md) |
+| `writerEligible: false` после повышения роли | Клиент ещё на старом пишущем | `PROMOTE_NOTIFY` или `rediscoverWriter()` — [повышение роли](operations/ha-promote.md) |
 | Отказ по `regionEpoch` | Клиент на устаревшей эпохе площадки | `rediscoverWriter()`, не крутить следующий host в URL |
 | `repair_issued` растёт, `repair_applied` нет | Подтягивание не применяется | Логи HomologousRepair, диск, рассинхрон seq |
 
-## Проверка после смены writer
+## Проверка после смены пишущего
 
-1. На целевом writer readiness UP и `writerEligible: true`.
+1. На целевом пишущем readiness UP и `writerEligible: true`.
 2. Никакой другой узел той же площадки не сообщает `writerEligible: true`.
 3. Приложение увидело `PROMOTE_NOTIFY` или ту же мету при reconnect — не HTTP.
 4. На репликах `applyLagStale: false` до маршрутизации чтения.
@@ -146,7 +146,7 @@ SQL и блокировки:
 |-------------|---------|
 | `ServerMeta` и `PROMOTE_NOTIFY` по протоколу | Единственный источник для выбора пишущего клиентом |
 | Actuator `/health/*` и Micrometer | Пробы оркестратора, дашборды, алерты |
-| `GET /replication/compare` | Сверка lag между двумя узлами на стенде. Не обнаружение writer и не штатная HA |
+| `GET /replication/compare` | Сверка lag между двумя узлами на стенде. Не обнаружение пишущего и не штатная HA |
 
 Инциденты: [отказы](operations/failures.md).
 

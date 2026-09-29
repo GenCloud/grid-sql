@@ -441,21 +441,93 @@ public final class GridSqlJmeterSession {
 	}
 
 	private static final long LOCK_WAIT_SLACK_MS = 2_000L;
+	/** Tip-fence / ORCHID catch-up window after DDL on HA: retry setup mutates briefly. */
+	private static final int SETUP_PROPOSER_RETRY_MAX = 120;
+	private static final long SETUP_PROPOSER_RETRY_SLEEP_MS = 250L;
+	private static final String PHASE_RANKED_PROPOSER_MARKER = "phase-ranked proposer";
+	private static final String CHANNEL_CLOSED_MARKER = "SQL channel closed";
+	private static final String CHANNEL_NOT_CONNECTED_MARKER = "SQL channel not connected";
 
 	public void runSetupBlocking() throws Exception {
 		// Fresh tables every capacity run — leftover KEY_SPACE=1M upserts otherwise grow forever
 		// and turn short-tx / count-join into multi-second scans (Aggregate ~20 TPS vs ~400).
-		await(startUpdate(sqlTemplates.renderDropA()));
-		await(startUpdate(sqlTemplates.renderDropB()));
-		await(startUpdate(sqlTemplates.renderDdlA()));
-		await(startUpdate(sqlTemplates.renderDdlB()));
-		await(startUpdate(sqlTemplates.renderIndexB()));
+		awaitSetupUpdate(sqlTemplates.renderDropA());
+		awaitSetupUpdate(sqlTemplates.renderDropB());
+		awaitSetupUpdate(sqlTemplates.renderDdlA());
+		awaitSetupUpdate(sqlTemplates.renderDdlB());
+		awaitSetupUpdate(sqlTemplates.renderIndexB());
 		final int rows = Math.min(seedRows, keySpace);
 		for (int from = 1; from <= rows; from += SEED_BATCH_SIZE) {
 			final int to = Math.min(from + SEED_BATCH_SIZE - 1, rows);
-			await(startUpdate(sqlTemplates.renderSeedInsertA(from, to)));
-			await(startUpdate(sqlTemplates.renderSeedInsertB(from, to)));
+			awaitSetupUpdate(sqlTemplates.renderSeedInsertA(from, to));
+			awaitSetupUpdate(sqlTemplates.renderSeedInsertB(from, to));
 		}
+	}
+
+	/**
+	 * Setup mutates retry on transient tip-fence / closed channel while replica catches up.
+	 */
+	private void awaitSetupUpdate(String sql) throws Exception {
+		Exception last = null;
+		for (int attempt = 1; attempt <= SETUP_PROPOSER_RETRY_MAX; attempt++) {
+			try {
+				await(startUpdate(sql));
+				return;
+			} catch (Exception ex) {
+				last = ex;
+				if (!isTransientSetupFailure(ex) || attempt == SETUP_PROPOSER_RETRY_MAX) {
+					throw ex;
+				}
+				if (isChannelDead(ex)) {
+					reconnectForSetup();
+				}
+				Thread.sleep(SETUP_PROPOSER_RETRY_SLEEP_MS);
+			}
+		}
+		if (last != null) {
+			throw last;
+		}
+	}
+
+	private void reconnectForSetup() throws Exception {
+		final Connection old = connection.getAndSet(null);
+		if (old != null) {
+			try {
+				old.close().timeout(opTimeout).toFuture().join();
+			} catch (Exception ignored) {
+				// best-effort close before reopen
+			}
+		}
+		final Connection next = factory.obtain()
+				.timeout(opTimeout)
+				.toFuture()
+				.get(opTimeout.toMillis(), TimeUnit.MILLISECONDS);
+		connection.set(next);
+	}
+
+	private static boolean isTransientSetupFailure(Throwable ex) {
+		return isTransientProposerFence(ex) || isChannelDead(ex);
+	}
+
+	private static boolean isTransientProposerFence(Throwable ex) {
+		return messageContains(ex, PHASE_RANKED_PROPOSER_MARKER);
+	}
+
+	private static boolean isChannelDead(Throwable ex) {
+		return messageContains(ex, CHANNEL_CLOSED_MARKER)
+				|| messageContains(ex, CHANNEL_NOT_CONNECTED_MARKER);
+	}
+
+	private static boolean messageContains(Throwable ex, String marker) {
+		Throwable cur = ex;
+		while (cur != null) {
+			final String msg = cur.getMessage();
+			if (msg != null && msg.contains(marker)) {
+				return true;
+			}
+			cur = cur.getCause();
+		}
+		return false;
 	}
 
 	public void close() {

@@ -83,7 +83,12 @@ import org.genfork.grid.query.plan.SortOrderData.OrderDirection;
  * @since: 1.0
  */
 public class QueryParser {
-	/** SQL → parsed plan; skip when explain plan is requested. */
+	/**
+	 * SQL → parsed plan; skip when explain plan is requested.
+	 * Bounded: Capacity EQ embeds distinct literals so an unbounded map becomes a GC bomb
+	 * (never hits, grows with KEY_SPACE). Cap matches {@link org.genfork.grid.sql.SqlNamedQueryExpand}.
+	 */
+	private static final int PLAN_CACHE_MAX = 512;
 	private static final Map<String, QueryData> PLAN_CACHE = new ConcurrentHashMap<>();
 
 	public static void clearPlanCache() {
@@ -116,8 +121,9 @@ public class QueryParser {
 
 		final QueryData built = parseAndBuildConditionUncached(
 				queryPlan, sql, compositeIndexes, resolvedWhereSubqueries);
-		if (!hasResolved && queryPlan == null && !cacheKey.isEmpty() && built != null) {
-			PLAN_CACHE.put(cacheKey, built);
+		if (!hasResolved && queryPlan == null && !cacheKey.isEmpty() && built != null
+				&& PLAN_CACHE.size() < PLAN_CACHE_MAX) {
+			PLAN_CACHE.putIfAbsent(cacheKey, built);
 		}
 		return built;
 	}

@@ -110,4 +110,4 @@ Coordinated cross-site restore: `PitrCoordinatedRestore.restoreUnderActiveFence(
 | After restore “open TX gone” | Expected: dirty before COMMIT is not in OpLog |
 | Restore rejected (Active fence) | Site is Hold/Witness or dual-writer / two Actives |
 
-**Related:** [durability](../configuration/durability.md), [GMAP storage](../../understand/storage-sealed-gmap.md), [failures](failures.md), [upgrade](upgrade.md).
+Next: [durability](../configuration/durability.md), [GMAP storage](../../understand/storage-sealed-gmap.md), [failures](failures.md), [upgrade](upgrade.md).

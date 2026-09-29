@@ -19,6 +19,7 @@ import index.unit.replication.ReplTestSupport;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.context.config.GridConfigurationProperties;
+import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.PrimaryKeyCodec;
@@ -194,9 +195,12 @@ public class SqlUpdateModifyIT {
 			}
 			assertTrue(peer.catalog().exists("append_domain"));
 
-			writer.execute("INSERT INTO append_domain (id, number, score) VALUES (7, '', 0)");
-			writer.execute("UPDATE append_domain SET number = number || ' ' || 'alpha' WHERE id = 7");
-			writer.execute("UPDATE append_domain SET number = number || ' ' || 'beta' WHERE id = 7");
+			executeOnEligibleWriter(a, b, engineA, engineB,
+					"INSERT INTO append_domain (id, number, score) VALUES (7, '', 0)");
+			executeOnEligibleWriter(a, b, engineA, engineB,
+					"UPDATE append_domain SET number = number || ' ' || 'alpha' WHERE id = 7");
+			executeOnEligibleWriter(a, b, engineA, engineB,
+					"UPDATE append_domain SET number = number || ' ' || 'beta' WHERE id = 7");
 
 			// Peer SQL SELECT is gate-closed (proposer-only). Assert apply via committed wire bytes.
 			final TableStore peerStore = peer.catalog().getStore("append_domain");
@@ -238,4 +242,66 @@ public class SqlUpdateModifyIT {
 			return s.getLocalPort();
 		}
 	}
+
+	private static void executeOnEligibleWriter(
+			ReplicationCoordinator a,
+			ReplicationCoordinator b,
+			SqlEngine engineA,
+			SqlEngine engineB,
+			String sql) throws InterruptedException {
+		final long deadline = System.currentTimeMillis() + 10_000L;
+		RuntimeException last = null;
+		while (System.currentTimeMillis() < deadline) {
+			final SqlEngine writer = a.isWriterEligible()
+					? engineA
+					: (b.isWriterEligible() ? engineB : null);
+			if (writer == null) {
+				Thread.sleep(50L);
+				continue;
+			}
+			try {
+				writer.execute(sql);
+				return;
+			} catch (OrchidNotSyncedException ex) {
+				last = ex;
+				Thread.sleep(50L);
+			} catch (RuntimeException ex) {
+				Throwable cur = ex;
+				boolean orchid = false;
+				while (cur != null) {
+					if (cur instanceof OrchidNotSyncedException) {
+						orchid = true;
+						last = ex;
+						break;
+					}
+					cur = cur.getCause();
+				}
+				if (!orchid) {
+					throw ex;
+				}
+				Thread.sleep(50L);
+			}
+		}
+		if (last != null) {
+			throw last;
+		}
+		throw new IllegalStateException("no writer-eligible node for sql=" + sql);
+	}
+
+	@Test
+	void updateMissingPkDoesNotInventRow() {
+		engine.execute("CREATE TABLE miss_upd (id INT PRIMARY KEY, number VARCHAR)");
+		final SqlResult updated = engine.execute(
+				"UPDATE miss_upd SET number = number || ' ' || 'ghost' WHERE id = 42");
+		assertEquals(0L, updated.rowsAffected(), "missing PK UPDATE must report 0 rows");
+		final SqlResult rows = engine.execute("SELECT number FROM miss_upd WHERE id = 42");
+		assertTrue(rows.rows().isEmpty(), "UPDATE must not invent a seed row for missing PK");
+		engine.execute("INSERT INTO miss_upd (id, number) VALUES (42, 'seed')");
+		engine.execute("UPDATE miss_upd SET number = number || ' ' || 'a' WHERE id = 42");
+		final SqlResult after = engine.execute("SELECT number FROM miss_upd WHERE id = 42");
+		assertEquals(1, after.rows().size());
+		assertEquals("seed a", String.valueOf(after.rows().get(0)[0]).trim());
+	}
+
+
 }
