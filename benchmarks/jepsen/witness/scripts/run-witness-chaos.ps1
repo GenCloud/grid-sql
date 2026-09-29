@@ -217,12 +217,21 @@ function Run-Workload([string]$Workload) {
   $out | ForEach-Object { Write-Host $_ }
   Fetch-Store
   $text = ($out | Out-String)
-  $valid = ($text -match "Everything looks good") -or ($text -match ":valid\? true")
-  $failClaim = ($text -match ":valid\? false") -or ($text -match "Analysis invalid")
-  if ($valid -and -not $failClaim) { return @{ code = 0; text = $text } }
-  $m = [regex]::Match($text, "LEIN_EXIT=(\d+)")
+  # Banner / LEIN_EXIT=0 win over nested ":valid? false" substrings.
+  if ($text -match "Everything looks good") {
+    return @{ code = 0; text = $text }
+  }
+  $m = [regex]::Match($text, "(?m)^LEIN_EXIT=(\d+)\s*$")
+  if (-not $m.Success) {
+    $m = [regex]::Match($text, "LEIN_EXIT=(\d+)")
+  }
+  if ($m.Success -and [int]$m.Groups[1].Value -eq 0) {
+    return @{ code = 0; text = $text }
+  }
+  if ($text -match "Analysis invalid" -or $text -match "(?m)^ :valid\? false") {
+    return @{ code = 1; text = $text }
+  }
   $code = if ($m.Success) { [int]$m.Groups[1].Value } elseif ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
-  if ($code -eq 0 -and $failClaim) { $code = 1 }
   return @{ code = $code; text = $text }
 }
 function Latest-StoreDir([string]$Workload) {

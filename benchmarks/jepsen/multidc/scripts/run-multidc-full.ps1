@@ -260,27 +260,37 @@ function Run-Workload([string]$Workload) {
   $out | ForEach-Object { Write-Host $_ }
   Fetch-Store
   $text = ($out | Out-String)
-  # Prefer final Elle/Knossos summary - nested :timeline {:valid? true} must not count as PASS.
-  if ($text -match "Analysis invalid" -or $text -match ":valid\? false") {
-    $mFail = [regex]::Match($text, "LEIN_EXIT=(\d+)")
-    $codeFail = if ($mFail.Success) { [int]$mFail.Groups[1].Value } else { 1 }
-    if ($codeFail -eq 0) { $codeFail = 1 }
-    return @{ code = $codeFail; text = $text }
+  # Jepsen success banner / LEIN_EXIT=0 are authoritative. Nested ":valid? false" in
+  # analyzer trees must not override a green final result (GHA false FAIL).
+  if ($text -match "Everything looks good") {
+    return @{ code = 0; text = $text }
+  }
+  $mExit = [regex]::Match($text, "(?m)^LEIN_EXIT=(\d+)\s*$")
+  if (-not $mExit.Success) {
+    $mExit = [regex]::Match($text, "LEIN_EXIT=(\d+)")
+  }
+  if ($mExit.Success -and [int]$mExit.Groups[1].Value -eq 0) {
+    return @{ code = 0; text = $text }
+  }
+  if ($text -match "Analysis invalid") {
+    return @{ code = 1; text = $text }
+  }
+  if ($text -match "(?m)^ :valid\? false") {
+    return @{ code = 1; text = $text }
   }
   if ($text -match ":valid\? :unknown" -and $Workload -eq "register") {
     $off = Offline-Analyze-Register
     return @{ code = $off; text = $text }
   }
-  if ($text -match "Everything looks good") {
-    return @{ code = 0; text = $text }
-  }
   if ($text -match "(?m)^ :valid\? true") {
     return @{ code = 0; text = $text }
   }
-  $m = [regex]::Match($text, "LEIN_EXIT=(\d+)")
-  $code = if ($m.Success) { [int]$m.Groups[1].Value } elseif ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  if ($text -match "jepsen\.core \{.*:valid\? true\}") {
+    return @{ code = 0; text = $text }
+  }
+  $code = if ($mExit.Success) { [int]$mExit.Groups[1].Value } elseif ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
   # Knossos OOM (137) / missing validity on register: offline re-check with DB nodes stopped (16g).
-  if ($Workload -eq "register" -and $code -ne 0 -and $text -notmatch ":valid\? false" -and $text -notmatch "Analysis invalid") {
+  if ($Workload -eq "register" -and $code -ne 0 -and $text -notmatch "(?m)^ :valid\? false" -and $text -notmatch "Analysis invalid") {
     Write-Host "Register LEIN_EXIT=$code without definitive invalid - Offline Knossos fallback"
     $off = Offline-Analyze-Register
     return @{ code = $off; text = $text }

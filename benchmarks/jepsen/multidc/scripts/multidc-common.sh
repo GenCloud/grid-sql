@@ -75,7 +75,7 @@ See [README.md](README.md). Coverage: [../COVERAGE.md](../COVERAGE.md). Parent 1
 |-------|------|----------|--------|---------|-------|
 | \`$stamp\` | $MODE_LABEL | $reg | $app | $outcome | $notes |
 EOF
-  echo "Wrote $RESULTS stamp=$stamp outcome=$outcome chaos=$CHAOS_NOTE"
+  echo "Wrote $RESULTS stamp=$stamp outcome=$outcome register=$reg append=$app chaos=$CHAOS_NOTE"
 }
 
 echo "=== Multi-DC $MODE_LABEL (nemesis=$MULTIDC_NEMESIS) ==="
@@ -203,14 +203,30 @@ run_workload() {
     -e "JEPSEN_UNCLEAN_DOWN_SEC=${JEPSEN_UNCLEAN_DOWN_SEC:-15}" \
     jepsen bash /jepsen/scripts/run-workload-multidc.sh "$workload" "$TIME_LIMIT" $nem_arg 2>&1 || true)"
   echo "$out"
-  if echo "$out" | grep -Eq 'Everything looks good|:valid\? true'; then
-    if echo "$out" | grep -Eq ':valid\? false|Analysis invalid'; then
-      return 1
-    fi
+  # Authoritative success: Jepsen banner and/or LEIN_EXIT=0.
+  # Do NOT require absence of nested ":valid? false" — analyzer trees / prior
+  # lines can contain that substring while the final result is valid (GHA false FAIL).
+  if echo "$out" | grep -Fq 'Everything looks good'; then
     return 0
   fi
+  if echo "$out" | grep -Eq 'Analysis invalid'; then
+    return 1
+  fi
   local code
-  code="$(echo "$out" | sed -n 's/.*LEIN_EXIT=\([0-9][0-9]*\).*/\1/p' | tail -1)"
+  code="$(echo "$out" | sed -n 's/^LEIN_EXIT=\([0-9][0-9]*\)$/\1/p' | tail -1)"
+  if [[ -z "$code" ]]; then
+    code="$(echo "$out" | sed -n 's/.*LEIN_EXIT=\([0-9][0-9]*\).*/\1/p' | tail -1)"
+  fi
+  if [[ "$code" == "0" ]]; then
+    return 0
+  fi
+  # Final pretty-print line only (leading space), not nested :timeline {:valid? true}.
+  if echo "$out" | grep -Eq '(^|[[:space:]]) :valid\? false([\}[:space:]]|$)'; then
+    return 1
+  fi
+  if echo "$out" | grep -Eq 'jepsen\.core \{.*:valid\? true\}'; then
+    return 0
+  fi
   return "${code:-1}"
 }
 
@@ -235,6 +251,7 @@ APP_OUTCOME=FAIL
 if run_workload append; then APP_OUTCOME=PASS; fi
 
 NOTES="FULL lein chaos=$CHAOS_NOTE time-limit=$TIME_LIMIT; register=$REG_OUTCOME; append=$APP_OUTCOME"
+echo "=== Multi-DC outcomes register=$REG_OUTCOME append=$APP_OUTCOME ==="
 if [[ "$REG_OUTCOME" == "PASS" && "$APP_OUTCOME" == "PASS" ]]; then
   stamp_multidc "$STAMP_BASE" "PASS" "$NOTES" "$REG_OUTCOME" "$APP_OUTCOME"
   exit 0
