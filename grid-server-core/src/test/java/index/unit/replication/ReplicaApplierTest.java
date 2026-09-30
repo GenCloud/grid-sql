@@ -23,6 +23,7 @@ import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.log.OpLog;
+import org.genfork.grid.replication.log.StreamOpLogAppender;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -30,6 +31,7 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -152,6 +154,58 @@ public class ReplicaApplierTest {
 			)), false, true);
 			assertEquals(5L, state.appliedWatermark("d", 0));
 			assertEquals(5, processor.get(new byte[]{1})[0]);
+		}
+	}
+
+	/**
+	 * Characterization: local-propose / fromConsensus without journalRemote leaves no OpLog bytes
+	 * (MutationRecorder owns that path). Documents the unclean hole if peer used this without journalRemote.
+	 */
+	@Test
+	void consensusApplyWithoutJournalRemoteSkipsOpLogBytes() throws Exception {
+		final ReplicationNodeState state = new ReplicationNodeState("n1", "c", "dc-a", 1L);
+		try (OpLog opLog = new OpLog(tempDir.resolve("oplog-consensus-skip"), false)) {
+			final GridEntriesProcessor processor = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+			final ReplicaApplier applier = new ReplicaApplier(state, opLog, shard -> processor, null, true);
+			final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
+					"d", 0, 7L, ReplicationOpType.UPSERT, new byte[]{1}, new byte[]{7}, 1L, 0L
+			));
+			applier.apply(op, true);
+			assertEquals(7L, state.appliedWatermark("d", 0));
+			assertFalse(opLog.containsSeq("d", 0, 7L), "fromConsensus without journalRemote must not invent OpLog bytes");
+		}
+	}
+
+	/**
+	 * Peer consensus path: journalRemote writes reshipable OpLog bytes outside tip fsync.
+	 */
+	@Test
+	void journalRemoteConsensusWritesOpLogBytes() throws Exception {
+		final ReplicationNodeState state = new ReplicationNodeState("n1", "c", "dc-a", 1L);
+		try (OpLog opLog = new OpLog(tempDir.resolve("oplog-journal-remote"), false)) {
+			final GridEntriesProcessor processor = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+			final ReplicaApplier applier = new ReplicaApplier(state, opLog, shard -> processor, null, true);
+			final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
+					"d", 0, 9L, ReplicationOpType.UPSERT, new byte[]{1}, new byte[]{9}, 1L, 0L
+			));
+			applier.apply(op, true, false, true);
+			assertEquals(9L, state.appliedWatermark("d", 0));
+			assertTrue(opLog.containsSeq("d", 0, 9L), "peer consensus journalRemote must leave reshipable OpLog bytes");
+			assertEquals(9, processor.get(new byte[]{1})[0]);
+		}
+	}
+
+	@Test
+	void tryAppendDeferredSoftSkipsBehindTip() throws Exception {
+		try (OpLog opLog = new OpLog(tempDir.resolve("oplog-try-ooo"), false)) {
+			assertTrue(opLog.tryAppendDeferred(OpLogCodec.withChecksum(new ReplicationOp(
+					"d", 0, 10L, ReplicationOpType.UPSERT, new byte[]{1}, new byte[]{10}, 1L, 0L
+			))));
+			assertFalse(opLog.tryAppendDeferred(OpLogCodec.withChecksum(new ReplicationOp(
+					"d", 0, 8L, ReplicationOpType.UPSERT, new byte[]{1}, new byte[]{8}, 1L, 0L
+			))), "behind tip must soft-skip (ship vs consensus race)");
+			assertTrue(opLog.containsSeq("d", 0, 10L));
+			assertFalse(opLog.containsSeq("d", 0, 8L));
 		}
 	}
 }

@@ -38,7 +38,7 @@ INSERT / UPDATE / DELETE
 Queue depth is one of the few write-path numbers an operator can act on:
 
 1. The change lands in shard staging. The SQL thread is free here — it does not wait for disk.
-2. With durability on, the drain runs ORCHID → OpLog → confirmation.
+2. With durability on, `GridEntriesWorker` drains ORCHID → OpLog → confirmation. On one shard `process()` never overlaps itself; each wake has a capped drain (at most 8 batches), not an unbounded “until empty” loop.
 3. The confirmed change is put into the map — that is when other sessions see the row.
 4. A separate worker updates secondary indexes.
 

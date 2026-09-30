@@ -12,6 +12,8 @@ Writer pin comes only from protocol meta. For orchestrator readiness use Actuato
 
 In practice three fields matter: `writerEligible` (may this node accept writes), `promoteHint` (where to look if the current writer is gone), `regionEpoch` (Active/Hold hand-off across sites). Full `ServerMeta` field list: [replication state](../../understand/replication-state.md).
 
+`writerEligible=false` is not only role/epoch (Hold, Witness, `R` below threshold). While the local tip lags reachable peers (`peerTip > localTip` — unclean revive / tip fence), the node is not writable either: catch up first, then eligibility returns. Being ahead of a live follower without a tip lag does not clear eligibility by itself.
+
 Peers in the same site receive OpLog via async Netty push. After a writer commit, replica map visibility can lag (`maxApplyLag` / missing key) until apply — that is **expected RPO**, not Applier failure. See [replication network](../../understand/replication-network.md). Watch lag in readiness (`applyLagStale`) and metrics; lab `GET /replication/compare` is not the writer pin source.
 
 ## Failover story

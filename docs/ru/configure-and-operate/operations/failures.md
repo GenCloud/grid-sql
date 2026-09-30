@@ -91,7 +91,7 @@
 
 ## Учебные контуры согласованности
 
-Jepsen unclean-revive (грязный рестарт узла с локальным `dataDir`) — PASS на стенде `2026-09-29-jepsen-unclean-revive`; сценарии и покрытие: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md), [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md).
+Jepsen unclean-revive (грязный рестарт узла с локальным `dataDir`) — PASS на стенде `2026-09-29-jepsen-unclean-revive`; полный прогон с tip-fence / HELLO sealed rejoin — `2026-09-30-jepsen-full`. Симптомы tip-behind: `writerEligible=false` и отказ propose, пока локальный tip не догонит пиров; при ACK ниже watermark truncate — sealed pack на HELLO, затем хвост OpLog. Сценарии и покрытие: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md), [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md).
 
 ## Чего не делать
 

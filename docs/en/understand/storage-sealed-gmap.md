@@ -103,7 +103,7 @@ The general sequence: sealed files (`.gmap` plus `.sbpt` / `.sbm`) → replay of
 
 ## Working set and eviction
 
-The `working-set-max-entries` parameter (any value above zero) enables LRU eviction for cold committed keys. Dirty rows and anything still sitting in the write queue are never evicted — eviction must never be able to drop a change that has not reached the journal. An evicted key is loaded back from the sealed files on the next access.
+The `working-set-max-entries` parameter (any value above zero) enables **CLOCK** eviction (reference bit + second-pass / hysteresis) for cold committed keys — not an LRU queue. Dirty rows and anything still sitting in the write queue are never evicted — eviction must never be able to drop a change that has not reached the journal. An evicted key is loaded back from the sealed files on the next access.
 
 Sizing it is a memory-versus-miss trade-off:
 
@@ -121,6 +121,8 @@ Sizing it is a memory-versus-miss trade-off:
 | Index miss starts a full partition scan | Should not happen with sealed `.sbpt` | Treat as a defect; check the `sealedPartitionScan` metric |
 
 Plan capacity for three things at once: the sealed corpus, the live OpLog tail, and — if PITR is enabled — the archive. The archive is the one that grows without an upper bound unless it is rotated.
+
+`DROP TABLE` removes the catalog and map/journal data but does **not** delete sealed files on the hot path — explicit retire (`purgeDomainArtifacts`) is separate. Otherwise CREATE/DROP churn in capacity stamps would crush READ_ONLY I/O.
 
 ## When to reach for recovery
 

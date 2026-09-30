@@ -56,6 +56,8 @@ UPDATE orders SET status = 'bulk', total = 0 WHERE customer_id = 100;
 
 `WHERE` is mandatory. Updating a whole table in one unconditional statement is simply not in the grammar — that is deliberate protection against an accidental "update everything".
 
+`UPDATE` does **not** invent a missing PK row: no match → 0 rows affected, no empty seed in the map/journal. Insert or full-row overwrite uses `UPSERT` / `INSERT … ON CONFLICT`.
+
 The right-hand side of an assignment is not limited to literals. Three read-modify-write forms exist:
 
 ```sql

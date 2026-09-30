@@ -86,7 +86,7 @@ After failover, do **not** rotate the next host in the URL by hand.
 | `PROMOTE_NOTIFY` / updated `ServerMeta` on the live channel | Prefer the promote hint; the factory may call `rediscoverWriter()` for you |
 | Writes still fail / stick to a dead host | Call `rediscoverWriter()` on `RemoteConnectionFactory` (returns a fresh `Connection`); check `lastServerMeta()` / `connection.serverMeta()` for `writerEligible`, `promoteHint`, `regionEpoch` |
 
-Connect retries (`retryMode`) are not a substitute for rediscover after role change. Procedure: [promote](../configure-and-operate/operations/ha-promote.md).
+Connect retries (`retryMode`) are not a substitute for `rediscoverWriter()` after role change. Procedure: [promote](../configure-and-operate/operations/ha-promote.md).
 
 ## Autocommit
 
@@ -133,7 +133,7 @@ Mono<Long> once = connection.prepare("upd_bal",
         .then(Mono.just(1L));
 ```
 
-The prepared name lives on the session (`TxContext` / connection). Another TCP session does not see it. Prefer `deallocate` when finished; closing the connection drops all prepares for that session.
+The prepared name lives on the session (`TxContext` / connection). Another TCP session does not see it. Prefer `deallocate` when finished; closing the connection drops all prepares for that session. Client prepare-name route cache is capped (`prepareNameCacheMax`); server VIEW/CTE expand has an identity fast-path (no VIEW catalog and no `WITH` → skip ANTLR) and a capped expand cache. The factory keeps `lastServerMeta()` after AUTH / ERROR / `PROMOTE_NOTIFY` — memo for pin/`rediscoverWriter()`, without re-AUTH on every frame.
 
 ### Session helpers
 

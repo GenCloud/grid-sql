@@ -13,7 +13,7 @@ Product SPI lives in **`grid-sql-client`** (apps) and **`grid-server-core`** (en
 | `maxTxContexts=N exhausted` (wire code 5) | More than eight open sessions on one TCP (server hard-cap **8**); Boot does not raise it from YAML — open another `Connection` or close idle `TxContext`s ([SQL server](../configure-and-operate/configuration/sql-server.md)) |
 | Stale / `applyLagStale` on replica read | Catch-up lag; above threshold — **reject** (wait or read the writer) ([replica reads](../configure-and-operate/operations/replica-reads.md)) |
 | Write reject after role promotion | Client did not `rediscoverWriter()` — [promote](../configure-and-operate/operations/ha-promote.md) |
-| Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without rediscover |
+| Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without `rediscoverWriter()` |
 | TX / DML on a read URL | `readEndpoints` / `READ_REPLICA` are SELECT/EXPLAIN only; writes always go to the writer |
 | Health readiness DOWN at start | ORCHID not synced yet — expected; do not send traffic |
 

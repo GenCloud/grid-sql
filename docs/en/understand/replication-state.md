@@ -92,6 +92,7 @@ The rules that protect against divergence during a partition:
 - `forgetPeer` clears the live view but **does not shrink** the configured quorum.
 - The writer is phase-ranked: `min(nodeId)` among self and seen peers.
 - A peer is promoted back to voter once its `APPLY_ACK` has caught up; a HELLO with the same `clusterId` adds it back via `addPeer`.
+- `writerEligible` requires sync, phase admission, **and** a tip that is not behind reachable peers. Tip-behind (unclean revive / tip fence) keeps `writerEligible=false` until local `lastCommittedSeq` catches `maxSeenPeerCommittedSeq` — independent of role/epoch.
 
 ## Repair and placement readiness
 

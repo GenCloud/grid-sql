@@ -6,7 +6,7 @@ services:
     build:
       context: ../..
       dockerfile: benchmarks/jepsen/Dockerfile
-      target: runtime
+      target: runtime-hostjar
     image: jamoa-grid-jepsen:local
     container_name: jamoa-jepsen-n1
     hostname: n1
@@ -34,7 +34,7 @@ services:
     build:
       context: ../..
       dockerfile: benchmarks/jepsen/Dockerfile
-      target: runtime
+      target: runtime-hostjar
     image: jamoa-grid-jepsen:local
     container_name: jamoa-jepsen-n2
     hostname: n2
@@ -65,7 +65,7 @@ services:
     build:
       context: ../..
       dockerfile: benchmarks/jepsen/Dockerfile
-      target: runtime
+      target: runtime-hostjar
     image: jamoa-grid-jepsen:local
     container_name: jamoa-jepsen-n3
     hostname: n3

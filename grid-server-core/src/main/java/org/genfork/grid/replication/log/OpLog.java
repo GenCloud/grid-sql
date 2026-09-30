@@ -116,20 +116,39 @@ public class OpLog implements AutoCloseable {
 	 * map/orchid apply visibility is not separated from durable OpLog by a long propose pipeline.
 	 */
 	public void appendDeferred(ReplicationOp op) {
+		if (!tryAppendDeferred(op)) {
+			final String k = key(op.domainType(), op.shard());
+			final NavigableMap<Long, Long> offsets = offsetIndex.get(k);
+			if (offsets != null && offsets.containsKey(op.opSeq())) {
+				return;
+			}
+			final Long last = offsets == null || offsets.isEmpty() ? null : offsets.lastKey();
+			throw new IllegalStateException(
+					"Out-of-order append: last=" + last + " got=" + op.opSeq() + " stream=" + k);
+		}
+	}
+
+	/**
+	 * Best-effort deferred append for peer consensus / ship races: no-op when seq already present
+	 * or behind stream tip (strictly increasing per-stream opSeq). Does not throw on race.
+	 *
+	 * @return true if bytes were written
+	 */
+	public boolean tryAppendDeferred(ReplicationOp op) {
 		final String k = key(op.domainType(), op.shard());
 		final NavigableMap<Long, Long> offsets = offsetIndex.computeIfAbsent(k, ignored -> new ConcurrentSkipListMap<>());
 		if (offsets.containsKey(op.opSeq())) {
-			return;
+			return false;
 		}
 		final Long last = offsets.isEmpty() ? null : offsets.lastKey();
 		if (last != null && op.opSeq() <= last) {
-			throw new IllegalStateException(
-					"Out-of-order append: last=" + last + " got=" + op.opSeq() + " stream=" + k);
+			return false;
 		}
 		try {
 			final long offset = storeFor(op.domainType(), op.shard()).appendDeferred(op);
 			offsets.put(op.opSeq(), offset);
 			noteLastSeq(k, op.opSeq());
+			return true;
 		} catch (IOException e) {
 			throw new IllegalStateException("OpLog appendDeferred failed", e);
 		}

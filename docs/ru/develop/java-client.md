@@ -133,7 +133,7 @@ Mono<Long> once = connection.prepare("upd_bal",
         .then(Mono.just(1L));
 ```
 
-Имя подготовленного оператора хранится в сессии (`TxContext` / соединение). Другая TCP-сессия его не видит. После работы вызывайте `deallocate`; закрытие соединения снимает все PREPARE этой сессии.
+Имя подготовленного оператора хранится в сессии (`TxContext` / соединение). Другая TCP-сессия его не видит. После работы вызывайте `deallocate`; закрытие соединения снимает все PREPARE этой сессии. Клиентский кэш маршрута по имени PREPARE ограничен (`prepareNameCacheMax`); на сервере expand VIEW/CTE имеет identity fast-path (без VIEW и без `WITH` — без ANTLR) и потолок кэша expand. Фабрика держит `lastServerMeta()` после AUTH / ERROR / `PROMOTE_NOTIFY` — memo для pin/`rediscoverWriter()`, без лишнего AUTH на каждый кадр.
 
 ### Помощники сессии
 

@@ -339,8 +339,41 @@ public class OrchidUncleanReviveListAppendIT {
 			shipSurvivorTipGap(b, c);
 			LockSupport.parkNanos(PARK_NANOS);
 		}
-		fail("survivor tips diverged; b.tip=" + b.getOrchidNode().getLastCommittedSeq()
-				+ " c.tip=" + c.getOrchidNode().getLastCommittedSeq());
+		fail("survivor tips diverged; " + tipJournalSnapshot(b, "b") + " " + tipJournalSnapshot(c, "c"));
+	}
+
+	/**
+	 * Evidence dump for tip-gap diagnosis: orchid tip vs OpLog lastSeq/containsSeq vs applied watermark.
+	 * Proves whether ahead tip can advance without journaled bytes (shipAllStreams then cannot close gap).
+	 */
+	private static String tipJournalSnapshot(ReplicationCoordinator coord, String label) {
+		final long tip = coord.getOrchidNode().getLastCommittedSeq();
+		final StringBuilder sb = new StringBuilder();
+		sb.append(label).append(".tip=").append(tip);
+		sb.append(" streams=[");
+		boolean first = true;
+		for (String streamKey : coord.getOpLog().streamKeys()) {
+			final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+			if (parsed == null) {
+				continue;
+			}
+			final long lastSeq = coord.getOpLog().lastSeq(parsed.domain(), parsed.shard());
+			final boolean containsTip = tip > 0L && coord.getOpLog().containsSeq(parsed.domain(), parsed.shard(), tip);
+			final long applied = coord.getNodeState().appliedWatermark(parsed.domain(), parsed.shard());
+			if (!first) {
+				sb.append("; ");
+			}
+			first = false;
+			sb.append(streamKey)
+					.append(" lastSeq=").append(lastSeq)
+					.append(" containsTip=").append(containsTip)
+					.append(" applied=").append(applied);
+		}
+		if (first) {
+			sb.append("none");
+		}
+		sb.append(']');
+		return sb.toString();
 	}
 
 	private static void stopQuietly(ReplicationCoordinator coord) {
