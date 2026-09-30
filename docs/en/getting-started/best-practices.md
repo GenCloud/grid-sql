@@ -75,4 +75,4 @@ Quote the JSON of a specific run: [capacity](../performance/capacity-slo.md), [r
 
 Writes are bounded by ORCHID admission and the journal, not by spare CPU. Reads scale roughly an order of magnitude better than writes — that is the expected shape. Extra read headroom comes from replicas, not from more write threads.
 
-**Related:** [production checklist](production-checklist.md), [why Grid](positioning.md), [transactions](../develop/transactions.md), [capacity](../performance/capacity-slo.md).
+Next: [production checklist](production-checklist.md), [why Grid](positioning.md), [transactions](../develop/transactions.md), [capacity](../performance/capacity-slo.md).

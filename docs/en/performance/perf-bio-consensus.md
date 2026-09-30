@@ -51,7 +51,7 @@ The safety invariants are unchanged: no solo commit in a configured cluster, the
 
 Biological metaphors stay in the documentation — [bio-inspired](../understand/bio-inspired.md), [placement and swarm](../understand/overlay-and-swarm.md). API and YAML use technical names: `orchid`, `HomologousRepair`, `swarm`, `overlay`.
 
-## Related
+## Next
 
 - [Write path](../understand/write-path-staging.md)
 - [ORCHID consensus](../understand/orchid-consensus.md)

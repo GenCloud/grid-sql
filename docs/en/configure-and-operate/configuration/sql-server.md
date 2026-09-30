@@ -1,8 +1,8 @@
 # SQL server
 
-`SqlServerRuntime` owns the SQL catalog, the engine, and — when the TCP listener is enabled — the `SqlServer` Netty endpoint. Applications never embed it: they connect through `grid-sql-client`, either reactively on `grid://` or through JDBC on `jdbc:grid://`. Both APIs speak the same framed protocol on the same port.
+The app needs a SQL port, not an embedded engine. The TCP listener (`SqlServer`) is enabled on the node; clients use `grid-sql-client` — reactively on `grid://` or via JDBC on `jdbc:grid://`. One framed protocol, one port.
 
-Server side: which keys turn the listener on, how to verify it accepts traffic, and which rejections come from the server rather than the network.
+Below: which keys open the listener, how to verify it accepts traffic, and which rejections come from the server rather than the network.
 
 ## Enabling the listener
 
@@ -126,4 +126,4 @@ From an IDE, start `org.genfork.grid.sql.SqlServerMain` with preview features en
 - There is no TLS on the SQL port in the product; terminate it on a proxy in front of the node — [security](../operations/security.md).
 - Drive load and latency measurements through the reactive client; JDBC is a supported synchronous API but adds its own blocking layer.
 
-**Related:** [security](../operations/security.md), [Spring Boot](../../develop/spring-boot.md), [Java client](../../develop/java-client.md), [connect clients](../../getting-started/connect-clients.md), [monitoring](../monitoring.md).
+Next: [security](../operations/security.md), [Spring Boot](../../develop/spring-boot.md), [Java client](../../develop/java-client.md), [connect clients](../../getting-started/connect-clients.md), [monitoring](../monitoring.md).

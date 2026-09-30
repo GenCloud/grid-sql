@@ -23,12 +23,11 @@ import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.log.OpLog;
+import org.genfork.grid.replication.log.StreamOpLogAppender;
 import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.transport.ApplyAckSender;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,17 +47,19 @@ import java.util.function.Function;
  * <p>
  * {@link ReplicationOpType#DDL}: catalog SQL replay via {@link CatalogDdlHandler} (fail-closed);
  * catalog DDL epochs are independent of HELLO duplex epoch — the handler rejects stale catalog epochs.
+ * <p>
+ * Peer consensus apply ({@code journalRemote=true}): OpLog bytes via {@link StreamOpLogAppender}
+ * <em>outside</em> shard locks (no tip fsync here — OrchidNode batches {@code confirmPersisted} after drain).
+ * Local propose apply keeps OpLog + tip in {@code MutationRecorder} ({@code journalRemote=false}).
  *
  * @author: GenCloud
  * @date: 2026/03
  * @since: 1.0
  */
 public class ReplicaApplier {
-	private static final Logger log = LoggerFactory.getLogger(ReplicaApplier.class);
-
 	private final ReplicationNodeState nodeState;
 	private final OpLog opLog;
-	private final Function<Integer, GridEntriesProcessor> processorByShard;
+    private final Function<Integer, GridEntriesProcessor> processorByShard;
 	private final ApplyAckSender ackSender;
 	private final boolean applyToLocalMap;
 
@@ -92,7 +93,7 @@ public class ReplicaApplier {
 		this.processorByShard = processorByShard;
 		this.ackSender = ackSender;
 		this.applyToLocalMap = applyToLocalMap;
-	}
+    }
 
 	/**
 	 * Start LAZY OpLog hydrate install mode (map-only + collect index delta).
@@ -153,10 +154,6 @@ public class ReplicaApplier {
 		this.envelopeCoordinator = envelopeCoordinator;
 	}
 
-	public TxEnvelopeCoordinator getEnvelopeCoordinator() {
-		return envelopeCoordinator;
-	}
-
 	/**
 	 * Applies committed ops. {@code opSeq} is the global ORCHID sequence (not per-shard dense).
 	 * Per-shard watermark only requires {@code opSeq > applied} (gaps across shards are expected).
@@ -164,7 +161,7 @@ public class ReplicaApplier {
 	 * @param fromConsensus true when already durable in local orchid/oplog path (skip re-append)
 	 */
 	public void apply(ReplicationOp op, boolean fromConsensus) {
-		apply(op, fromConsensus, false);
+		apply(op, fromConsensus, false, false);
 	}
 
 	/**
@@ -172,6 +169,16 @@ public class ReplicaApplier {
 	 *                     {@code opSeq <= applied} — watermark can match while value checksum diverged
 	 */
 	public void apply(ReplicationOp op, boolean fromConsensus, boolean forceInstall) {
+		apply(op, fromConsensus, forceInstall, false);
+	}
+
+	/**
+	 * @param journalRemote peer consensus path: write OpLog bytes outside shard locks (no tip fsync)
+	 */
+	public void apply(ReplicationOp op, boolean fromConsensus, boolean forceInstall, boolean journalRemote) {
+		if (journalRemote) {
+			journalRemoteConsensusOp(op);
+		}
 		final String lockKey = op.domainType() + "#" + op.shard();
 		synchronized (shardLocks.computeIfAbsent(lockKey, _ -> new Object())) {
 			final long applied = nodeState.appliedWatermark(op.domainType(), op.shard());
@@ -274,10 +281,14 @@ public class ReplicaApplier {
 			}
 
 			if (!fromConsensus) {
-				opLog.append(op);
 				final OrchidNode orchid = nodeState.getOrchidNode();
-				if (orchid != null) {
-					orchid.advanceCommittedTip(op.opSeq());
+				// Live peer commit journals via journalRemote; skip ship OpLog+tip when tip already covers seq.
+				final boolean tipCovers = orchid != null && op.opSeq() <= orchid.getLastCommittedSeq();
+				if (!tipCovers) {
+					opLog.tryAppendDeferred(op);
+					if (orchid != null) {
+						orchid.advanceCommittedTip(op.opSeq());
+					}
 				}
 			}
 
@@ -325,6 +336,18 @@ public class ReplicaApplier {
 	}
 
 	/**
+	 * Peer consensus durability: reshipable OpLog bytes without tip fsync / OpLog.force.
+	 * Race-safe vs concurrent OPLOG_PUSH ({@link OpLog#tryAppendDeferred}); never throws OOO.
+	 * Must run outside {@code shardLocks}.
+	 */
+	private void journalRemoteConsensusOp(ReplicationOp op) {
+		if (op == null || op.opSeq() <= 0L) {
+			return;
+		}
+		opLog.tryAppendDeferred(op);
+	}
+
+	/**
 	 * Discard any open TX staging (incomplete unit after hydrate or crash mid-commit).
 	 * Map never sees partial TX rows.
 	 */
@@ -365,7 +388,7 @@ public class ReplicaApplier {
 			return CompletableFuture.completedFuture(null);
 		}
 		final String key = domainType + "#" + shard + "@" + seq;
-		return waiters.computeIfAbsent(key, k -> new CompletableFuture<>());
+		return waiters.computeIfAbsent(key, _ -> new CompletableFuture<>());
 	}
 
 	private void applyCatalogDdl(ReplicationOp op, boolean fromConsensus) {
@@ -397,10 +420,13 @@ public class ReplicaApplier {
 
 	private void persistAndAck(ReplicationOp op, boolean fromConsensus) {
 		if (!fromConsensus) {
-			opLog.append(op);
 			final OrchidNode orchid = nodeState.getOrchidNode();
-			if (orchid != null) {
-				orchid.advanceCommittedTip(op.opSeq());
+			final boolean tipCovers = orchid != null && op.opSeq() <= orchid.getLastCommittedSeq();
+			if (!tipCovers) {
+				opLog.tryAppendDeferred(op);
+				if (orchid != null) {
+					orchid.advanceCommittedTip(op.opSeq());
+				}
 			}
 		}
 		nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());

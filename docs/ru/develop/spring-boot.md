@@ -41,7 +41,7 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.ja
 | `replication.op-log.segment-size` | `1024` (МиБ) | например `64` |
 | `replication.ha.replica-reads-enabled` | `false` | `true` на демо `primary`/`replica` |
 
-Полные таблицы defaults: [долговременное хранение](../configure-and-operate/configuration/durability.md), [репликация](../configure-and-operate/configuration/replication.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md). Ключи архива PITR (`oplog-archive.*`) и multi-site `region.*` — на тех страницах; по умолчанию выключены.
+Полные таблицы defaults: [долговременное хранение](../configure-and-operate/configuration/durability.md), [репликация](../configure-and-operate/configuration/replication.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md). Ключи архива PITR (`oplog-archive.*`) и нескольких ЦОД (`region.*`) — на тех страницах; по умолчанию выключены.
 
 ```yaml
 grid:

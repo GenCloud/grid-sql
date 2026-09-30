@@ -107,4 +107,4 @@ For two sites, enable `grid.replication.cross-dc` with `ASYNC_SHIP` or `SYNC_VOT
 - Metrics and probes: [monitoring](../configure-and-operate/monitoring.md)
 - Backups and point-in-time recovery: [PITR](../configure-and-operate/operations/pitr.md)
 
-**Related:** [quick start](quick-start.md), [connect clients](connect-clients.md), [production checklist](production-checklist.md).
+Next: [quick start](quick-start.md), [connect clients](connect-clients.md), [production checklist](production-checklist.md).

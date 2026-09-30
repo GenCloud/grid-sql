@@ -35,7 +35,7 @@ Starter profiles `primary`, `replica`, and `capacity` already set `fsync: true`,
 |---------|---------|--------|
 | `grid.durability.enabled` | `true` | Commit passes ORCHID and the OpLog before becoming visible in memory; a journal failure aborts the commit |
 | `grid.durability.hydrate-mode` | `FULL` | `FULL` loads sealed files and the journal into memory at startup; `LAZY` maps sealed files and replays only the journal tail |
-| `grid.durability.working-set-max-entries` | `0` (unbounded) | Working-set ceiling. Above `0`, cold committed keys are evicted by LRU; dirty and staged entries are never evicted |
+| `grid.durability.working-set-max-entries` | `0` (unbounded) | Working-set ceiling. Above `0`, cold committed keys are evicted by **CLOCK** (reference bit + hysteresis), not LRU; dirty and staged entries are never evicted |
 | `grid.durability.adaptive-disk-first` | `true` | Under disk pressure, lean harder on the sealed-miss load path instead of growing memory |
 | `grid.durability.oplog-archive.enabled` | `false` | Copy the journal range to the archive before truncate; a copy failure cancels the truncate |
 | `grid.durability.oplog-archive.dir` | `./data/oplog-archive` | Archive root, consumed by [PITR](../operations/pitr.md) |

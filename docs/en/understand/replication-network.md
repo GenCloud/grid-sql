@@ -47,6 +47,10 @@ uint32 BE length | uint8 opcode | body
 
 This is a private binary protocol between nodes. It is not exposed to applications, it is not the SQL wire, and there is no HTTP replication API to poll.
 
+### HELLO sealed catch-up
+
+When a peer’s `APPLY_ACK` is strictly behind the OpLog truncate watermark (`peerAck < truncatedThrough`), the journal tail alone cannot fill retired seqs. On the HELLO path the node ships a sealed shard pack (`.gmap` / `.sbpt` / `.sbm` via `HelloSealedCatchUpUtil`), then the live OpLog tail. An empty sealed root is a no-op; ordinary pull/repair continues.
+
 ## Inside one data centre
 
 Shipping happens **asynchronously** after the write has been confirmed on the writer. Visibility on a replica therefore lags, which is what the `eventual_replica` read mode and the `maxApplyLag` metric describe.

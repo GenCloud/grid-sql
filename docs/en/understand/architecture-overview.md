@@ -86,7 +86,7 @@ From a solo durable node to multi-site, diagrams live on the ops pages:
 
 ## A working set, not the whole dataset
 
-When durability is enabled, memory is the **working set**: the hot keys that serve queries without touching disk. Everything else lives in sealed files and is loaded on a miss. The limit is set by `working-set-max-entries`: cold committed keys are evicted by LRU, while dirty keys and those still in the queue never are.
+When durability is enabled, memory is the **working set**: the hot keys that serve queries without touching disk. Everything else lives in sealed files and is loaded on a miss. The limit is set by `working-set-max-entries`: cold committed keys are evicted by **CLOCK** (not LRU), while dirty keys and those still in the queue never are.
 
 This is why an "empty" heap after a restart with `hydrate-mode: LAZY` is not data loss. Truth is on disk; the map refills as traffic arrives. Configuration: [durability](../configure-and-operate/configuration/durability.md).
 
@@ -111,7 +111,7 @@ They are easy to confuse, so it is worth keeping the distinction in mind:
 
 When replication is enabled, transactions additionally write lifecycle markers (`TX_BEGIN`, `TX_COMMIT`, `TX_ABORT`) into the OpLog — through ORCHID, by the same path. Markers do not replace the rows themselves: data changes still go through the full chain. On a peer a transaction is applied in one piece, so a reader never sees a partially applied transaction.
 
-Multi-shard transactions are assembled by `MultiShardCommitBarrier`: it waits for the streams of all touched tables and lays a single `TX_BEGIN` → operations → `TX_COMMIT` block into the OpLog. This is a local commit-flush barrier on the proposer, not distributed two-phase commit over foreign resource managers.
+Multi-shard transactions are assembled by `MultiShardCommitBarrier`: it waits for the streams of all touched tables and lays a single `TX_BEGIN` → operations → `TX_COMMIT` block into the OpLog. This is a local commit-flush barrier on the writer, not distributed two-phase commit over foreign resource managers.
 
 Step-by-step breakdown: [the write path](write-path-staging.md), [visibility and concurrency](concurrency-and-visibility.md).
 

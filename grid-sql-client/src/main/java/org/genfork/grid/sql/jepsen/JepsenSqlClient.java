@@ -117,6 +117,10 @@ public final class JepsenSqlClient implements AutoCloseable {
 			}
 			try {
 				ensureConnected();
+			} catch (Exception reconnectEx) {
+				return mapException(reconnectEx, false, op);
+			}
+			try {
 				return dispatch(op, value);
 			} catch (Exception retryEx) {
 				return mapException(retryEx, true, op);
@@ -319,7 +323,13 @@ public final class JepsenSqlClient implements AutoCloseable {
 			invalidateConnection();
 			final Map<String, Object> m = new LinkedHashMap<>();
 			final boolean mutate = op == JepsenOp.WRITE || op == JepsenOp.APPEND || op == JepsenOp.TXN;
-			if (requestMayHaveStarted && mutate) {
+			final String lower = msg.toLowerCase();
+			// Refused / never-established are definite — do not explode Knossos as :info.
+			final boolean definiteMiss = lower.contains("refused")
+					|| lower.contains("not connected")
+					|| lower.contains("no route")
+					|| name.contains("ConnectException");
+			if (requestMayHaveStarted && mutate && !definiteMiss) {
 				m.put("type", "info");
 			} else {
 				m.put("type", "fail");

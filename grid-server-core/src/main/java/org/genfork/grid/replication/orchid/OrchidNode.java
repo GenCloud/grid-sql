@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.replication.orchid;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
@@ -28,13 +29,7 @@ import org.genfork.grid.replication.orchid.OrchidTransport.OrchidProposeMessage;
 import org.genfork.grid.threading.SerialTaskQueue;
 import org.genfork.grid.threading.ThreadService;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -47,6 +42,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.LongConsumer;
 
@@ -118,6 +114,11 @@ public class OrchidNode {
 	private final ConcurrentHashMap<Long, OrchidCommitMessage> commitHoldback = new ConcurrentHashMap<>();
 	private static final int COMMIT_HOLDBACK_CAP_FACTOR = 4;
 	/**
+	 * Fail-closed local digest wait: without this, a mid-failover flap can leave an admitted
+	 * propose wedged forever ({@code future.join} never completes — Elle-unsafe hang).
+	 */
+	private static final long LOCAL_PROPOSE_DIGEST_TIMEOUT_MS = 5_000L;
+	/**
 	 * FIFO propose wire queue: concurrent {@link #appendAndAdmit} must not reorder
 	 * {@code sendPropose} on the Netty channel (else peers NACK prevOpSeq gaps).
 	 */
@@ -131,7 +132,7 @@ public class OrchidNode {
 	 * Serial mailbox: contiguous holdback drain + fireApply (no VT-pool interleave).
 	 */
 	private final SerialTaskQueue commitApplyQueue = new SerialTaskQueue();
-	private final List<Consumer<ReplicationOp>> applyListeners = new CopyOnWriteArrayList<>();
+	private final List<BiConsumer<ReplicationOp, Boolean>> applyListeners = new CopyOnWriteArrayList<>();
 	private final Set<String> voterEligible = ConcurrentHashMap.newKeySet();
 	/**
 	 * Peers held down for partition simulation / operator isolate — ignore HELLO until heal.
@@ -233,8 +234,21 @@ public class OrchidNode {
 		}
 	}
 
+	/**
+	 * Apply listener without remote-journal hint (tests / simple observers).
+	 * Product path uses {@link #addApplyListener(BiConsumer)}.
+	 */
 	public void addApplyListener(Consumer<ReplicationOp> listener) {
-		applyListeners.add(listener);
+		Objects.requireNonNull(listener, "listener");
+		applyListeners.add((op, _) -> listener.accept(op));
+	}
+
+	/**
+	 * @param listener second arg {@code journalRemote}: true for peer commit apply
+	 *                 ({@link #finishCommitApply}), false for local {@link #commitOne} (MutationRecorder journals)
+	 */
+	public void addApplyListener(BiConsumer<ReplicationOp, Boolean> listener) {
+		applyListeners.add(Objects.requireNonNull(listener, "listener"));
 	}
 
 	public boolean isRunning() {
@@ -360,10 +374,6 @@ public class OrchidNode {
 		voterEligible.add(peerId);
 	}
 
-	public boolean isVoterEligible(String peerId) {
-		return peerId != null && voterEligible.contains(peerId);
-	}
-
 	/**
 	 * Kuramoto order parameter R over self + seen phase-coupled peers (best-effort snapshot).
 	 * Lock-free: reads volatile phase fields only — do not call under Netty EL wait paths.
@@ -396,12 +406,18 @@ public class OrchidNode {
 	/**
 	 * Phase-ranked proposer: lexicographically smallest nodeId among self and seen phase peers.
 	 * Requires phase sync when local peers (or coupled remotes) are configured.
+	 * <p>
+	 * Also requires a majority-sized live cluster view so asymmetric {@code seen} after a kill
+	 * cannot mint two concurrent proposers (Elle list-append dual-writer / G0).
 	 */
 	public boolean isPhaseRankedProposer() {
 		if (peerIds.isEmpty() && !(multiDc().phaseCoupling() && multiDc().hasRemoteVoters())) {
 			return true;
 		}
 		if (!isSynced()) {
+			return false;
+		}
+		if (!hasMajorityLiveClusterView()) {
 			return false;
 		}
 		String best = nodeId;
@@ -414,6 +430,21 @@ public class OrchidNode {
 	}
 
 	/**
+	 * {@code self + seen local peers} must cover a majority of the configured local cluster.
+	 * Prevents split-brain phase-rank when each survivor briefly sees a disjoint peer set.
+	 */
+	private boolean hasMajorityLiveClusterView() {
+		if (peerIds.isEmpty()) {
+			return true;
+		}
+
+		final int configuredClusterSize = peerIds.size() + 1;
+		final int majority = configuredClusterSize / 2 + 1;
+		final int liveClusterSize = 1 + liveLocalPeerCount();
+		return liveClusterSize >= majority;
+	}
+
+	/**
 	 * Current phase-ranked proposer id (self or seen peer); null if not synced.
 	 * Lock-free metric / admission helper (no monitors).
 	 */
@@ -422,6 +453,9 @@ public class OrchidNode {
 			return nodeId;
 		}
 		if (!isSynced()) {
+			return null;
+		}
+		if (!hasMajorityLiveClusterView()) {
 			return null;
 		}
 		String best = nodeId;
@@ -478,11 +512,11 @@ public class OrchidNode {
 		}
 		final long peerTip = maxSeenPeerCommittedSeq();
 		final long localTip = lastCommittedSeq;
-		if (localTip == 0L && peerTip > 0L) {
-			return AdmittedPropose.failed(new OrchidNotSyncedException(OrchidTipPersistSupport.tipBehindMessage(localTip, peerTip)));
-		}
-		if (peerTip > localTip + maxProposeInFlight) {
-			return AdmittedPropose.failed(new OrchidNotSyncedException(OrchidTipPersistSupport.tipBehindMessage(localTip, peerTip)));
+		// Strict tip fence: never propose while any seen peer advertises a higher committed seq.
+		// maxProposeInFlight remains the pipeline semaphore only — not a tip-behind allowance.
+		if (peerTip > localTip) {
+			return AdmittedPropose.failed(new OrchidNotSyncedException(
+					OrchidTipPersistSupport.tipBehindMessage(localTip, peerTip)));
 		}
 		try {
 			proposeFlight.acquire();
@@ -706,6 +740,24 @@ public class OrchidNode {
 	}
 
 	/**
+	 * Test hook: mark a peer seen with an advertised committed tip (tip-behind admit IT).
+	 *
+	 * @param peerId       peer node id (must be non-null)
+	 * @param committedSeq tip to advertise ({@code >} local tip triggers fail-closed admit)
+	 */
+	@VisibleForTesting
+	public void testingNotePeerCommittedSeq(String peerId, long committedSeq) {
+		if (peerId == null || peerId.isEmpty() || committedSeq < 0L) {
+			return;
+		}
+		final PeerView view = peers.computeIfAbsent(peerId, PeerView::new);
+		view.seen = true;
+		if (committedSeq > view.lastCommittedSeq) {
+			view.lastCommittedSeq = committedSeq;
+		}
+	}
+
+	/**
 	 * After region claim: locally commit contiguous cross-DC proposes we digested but never
 	 * received a commit for (former Active crashed mid-broadcast). Prevents tip zeroing /
 	 * silent drop of ACKed ops. Call from logic VT (claim path), never Netty EL.
@@ -745,6 +797,7 @@ public class OrchidNode {
 			for (OrchidCommitMessage commit : toApply) {
 				finishCommitApply(commit);
 			}
+			confirmPersistedAfterDrain(toApply);
 			sealed += toApply.size();
 		}
 	}
@@ -802,6 +855,34 @@ public class OrchidNode {
 		for (OrchidCommitMessage commit : toApply) {
 			finishCommitApply(commit);
 		}
+		confirmPersistedAfterDrain(toApply);
+	}
+
+	/**
+	 * One tip fsync for a contiguous peer-commit drain (not per-op on apply).
+	 * Off {@link #commitApplyQueue}: GroupForceGate park must not stall consensus apply drain.
+	 * OpLog bytes are already journaled in apply listeners when {@code journalRemote=true}.
+	 */
+	private void confirmPersistedAfterDrain(List<OrchidCommitMessage> toApply) {
+		if (toApply == null || toApply.isEmpty()) {
+			return;
+		}
+		long maxSeq = 0L;
+		for (OrchidCommitMessage commit : toApply) {
+			if (commit != null && commit.opSeq() > maxSeq) {
+				maxSeq = commit.opSeq();
+			}
+		}
+		if (maxSeq <= 0L) {
+			return;
+		}
+		final long tipSeq = maxSeq;
+		try {
+			ThreadService.getNetworkExecutor().execute(() -> confirmPersisted(tipSeq));
+		} catch (RuntimeException ex) {
+			log.warn("ORCHID tip persist enqueue failed seq={}: {}", tipSeq, ex.toString());
+			confirmPersisted(tipSeq);
+		}
 	}
 
 	/**
@@ -845,7 +926,8 @@ public class OrchidNode {
 		remoteInflightExpected.remove(msg.proposeId());
 		rememberCommittedPropose(msg.proposeId());
 		final PendingPropose local = pending.remove(msg.proposeId());
-		fireApply(msg.op());
+		// Peer commit path: journalRemote=true so ReplicaApplier writes reshipable OpLog bytes.
+		fireApply(msg.op(), true);
 		if (local != null) {
 			local.future.complete(msg.opSeq());
 			if (pending.isEmpty()) {
@@ -890,11 +972,40 @@ public class OrchidNode {
 				lock.unlock();
 			}
 			broadcastOwnPhaseDigests();
+			expireStaleLocalProposes();
 			requestCommitDrain();
 		}
 	}
 
-	private void kuramotoStep(double dt) {
+	/**
+	 * Fail admitted proposes that never reached digest quorum / commit within
+	 * {@link #LOCAL_PROPOSE_DIGEST_TIMEOUT_MS} (local-DC; remote voters use WAN timeout).
+	 */
+	private void expireStaleLocalProposes() {
+		final long ageMs = pendingProposeAgeMs();
+		if (ageMs < LOCAL_PROPOSE_DIGEST_TIMEOUT_MS) {
+			return;
+		}
+		PendingPropose oldest = null;
+		for (PendingPropose pendingPropose : pending.values()) {
+			if (pendingPropose == null || pendingPropose.future.isDone()) {
+				continue;
+			}
+			if (oldest == null || pendingPropose.proposeId < oldest.proposeId) {
+				oldest = pendingPropose;
+			}
+		}
+		if (oldest == null) {
+			clearPendingProposeTimestamp();
+			return;
+		}
+		failProposeChain(oldest, new OrchidNotSyncedException(
+				"local propose digest timeout after " + LOCAL_PROPOSE_DIGEST_TIMEOUT_MS
+						+ "ms ageMs=" + ageMs + " proposeId=" + oldest.proposeId));
+	}
+
+	@SuppressWarnings("NonAtomicOperationOnVolatileField")
+    private void kuramotoStep(double dt) {
 		int live = 0;
 		double sum = 0;
 		for (PeerView peer : peers.values()) {
@@ -904,10 +1015,12 @@ public class OrchidNode {
 			live++;
 			sum += Math.sin(peer.phase - phase);
 		}
+
 		if (live == 0) {
 			phase = wrap(phase + omega * dt);
 			return;
 		}
+
 		final double freeStep = omega * dt;
 		final double pullStep = (coupling / live) * sum * dt;
 		phase = wrap(phase + freeStep + pullStep);
@@ -956,7 +1069,9 @@ public class OrchidNode {
 	}
 
 	private PendingPropose findReadyContiguousPropose() {
-		if (!isSynced() || !isPhaseRankedProposer()) {
+		// Do not re-check isPhaseRankedProposer here: admit already required rank.
+		// A post-admit rank flap must not wedge an acknowledged propose forever.
+		if (!isSynced()) {
 			return null;
 		}
 		final long tip = lastCommittedSeq;
@@ -1017,7 +1132,8 @@ public class OrchidNode {
 		// applyReplicatedDdl → execute on the same session mailbox deadlocks the join.
 		// Peers still apply DDL through onCommit → finishCommitApply → fireApply.
 		if (withCs.type() != ReplicationOpType.DDL) {
-			fireApply(withCs);
+			// Local propose: MutationRecorder journals OpLog + confirmPersisted (journalRemote=false).
+			fireApply(withCs, false);
 		}
 		p.future.complete(opSeq);
 		transport.broadcastCommit(new OrchidCommitMessage(nodeId, p.proposeId, p.digest, p.prevOpSeq, opSeq, withCs));
@@ -1064,7 +1180,7 @@ public class OrchidNode {
 				toFail.add(pendingPropose);
 			}
 		}
-		toFail.sort((a, b) -> Long.compare(a.prevOpSeq, b.prevOpSeq));
+		toFail.sort(Comparator.comparingLong(a -> a.prevOpSeq));
 		for (PendingPropose pendingPropose : toFail) {
 			pending.remove(pendingPropose.proposeId, pendingPropose);
 			remoteInflightExpected.remove(pendingPropose.proposeId);
@@ -1273,10 +1389,10 @@ public class OrchidNode {
 		persistCommitted(seq);
 	}
 
-	private void fireApply(ReplicationOp op) {
-		for (Consumer<ReplicationOp> listener : applyListeners) {
+	private void fireApply(ReplicationOp op, boolean journalRemote) {
+		for (BiConsumer<ReplicationOp, Boolean> listener : applyListeners) {
 			try {
-				listener.accept(op);
+				listener.accept(op, journalRemote);
 			} catch (RuntimeException ex) {
 				log.warn("Orchid apply listener failed: {}", ex.toString());
 			}

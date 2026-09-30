@@ -68,11 +68,11 @@ public final class GridSqlLoadSqlTemplates {
 	public static final String DEFAULT_SQL_COUNT_JOIN =
 			"SELECT COUNT(*) FROM " + PH_TABLE_A + " JOIN " + PH_TABLE_B + " ON id = a_id WHERE a_id = " + PH_ID;
 	public static final String DEFAULT_SQL_DDL_A =
-			"CREATE TABLE " + PH_TABLE_A + " (id INT PRIMARY KEY, val VARCHAR, n INT)";
+			"CREATE TABLE IF NOT EXISTS " + PH_TABLE_A + " (id INT PRIMARY KEY, val VARCHAR, n INT)";
 	public static final String DEFAULT_SQL_DDL_B =
-			"CREATE TABLE " + PH_TABLE_B + " (bid INT PRIMARY KEY, a_id INT, label VARCHAR)";
+			"CREATE TABLE IF NOT EXISTS " + PH_TABLE_B + " (bid INT PRIMARY KEY, a_id INT, label VARCHAR)";
 	public static final String DEFAULT_SQL_INDEX_B =
-			"CREATE INDEX idx_" + PH_TABLE_B + "_a_id ON " + PH_TABLE_B + " (a_id)";
+			"CREATE INDEX IF NOT EXISTS idx_" + PH_TABLE_B + "_a_id ON " + PH_TABLE_B + " (a_id)";
 	public static final String DEFAULT_SQL_SEED_A_PREFIX =
 			"INSERT INTO " + PH_TABLE_A + " (id, val, n) VALUES ";
 	public static final String DEFAULT_SQL_SEED_B_PREFIX =

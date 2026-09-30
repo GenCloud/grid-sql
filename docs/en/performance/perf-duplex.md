@@ -51,7 +51,7 @@ Compare `logicalToArray` and `duplexEncodeDomain` in average time (µs/op). Curr
 
 Both the blob and `ReplicationOp` carry `schemaEpoch`. A mismatch refuses the apply rather than reinterpreting the layout. `SchemaEpochSupport` emits `BARRIER` and `SNAPSHOT_MARKER` records with a layout hash.
 
-## Related
+## Next
 
 - [ORCHID write critical path](perf-bio-consensus.md)
 - [Write path](../understand/write-path-staging.md)

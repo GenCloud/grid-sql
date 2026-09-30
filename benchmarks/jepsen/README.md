@@ -108,19 +108,27 @@ Multi-DC: `scripts/nemesis-dc-link.sh isolate|heal|kill-voter|kill-dc-a` (wired 
 
 Separate workflow [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) — **not** unit CI (`.github/workflows/ci.yml`). Never co-run with Load / JMH / OSS compare-all.
 
+Full matrix (A–I): see [COVERAGE.md](COVERAGE.md).
+
 | Matrix `config` | Entrypoint | What it gates |
 |-----------------|------------|---------------|
-| `1dc-chaos` | `scripts/run-jepsen.sh` | 1-DC register+append with nemesis (`:valid?`) |
-| `1dc-nochao` | `scripts/run-jepsen-nochao.sh` + `qg-gate.ps1` | No-nemesis consistency + Ref B latency (p50/p95 hard) |
-| `multidc-async` | `multidc/scripts/run-multidc-async.sh` (`MULTIDC_FULL=1`) | 2-DC ASYNC_SHIP register+append |
-| `multidc-sync` | `multidc/scripts/run-multidc-sync-voters.sh` (`MULTIDC_FULL=1`) | 2-DC SYNC_VOTERS register+append |
-| `witness` | `witness/scripts/run-witness-chaos.ps1` | Active+Hold+Witness chaos stamp |
+| `1dc-chaos` | `scripts/run-jepsen.sh` | 1-DC N=3 partition + kill; Knossos + Elle |
+| `1dc-unclean-revive` | `scripts/run-jepsen-unclean-revive.sh` | Unclean proposer revive |
+| `1dc-nochao` | `scripts/run-jepsen-nochao.sh` + `qg-gate.sh` | Baseline + Ref B latency (bash) |
+| `multidc-async-chaos` | `multidc/scripts/run-multidc-chaos.sh async` | ASYNC_SHIP **with** nemesis |
+| `multidc-sync-chaos` | `multidc/scripts/run-multidc-chaos.sh sync-voters` | SYNC_VOTERS **with** nemesis |
+| `multidc-async-nochao` | `multidc/scripts/run-multidc-nochao.sh async` | ASYNC topology without faults |
+| `multidc-sync-nochao` | `multidc/scripts/run-multidc-nochao.sh sync-voters` | SYNC topology without faults |
+| `witness-chaos` | `witness/scripts/run-witness-chaos.sh` | Active+Hold+Witness (bash) |
+| `multidc-unclean-revive` | `multidc/scripts/run-multidc-unclean-revive.sh` | Cross-DC unclean revive |
+
+**Completeness:** do not substitute chaos ↔ nochao. Multidc CI previously was `--no-nemesis` only; `*-chaos` cells are now required. In-process: `ci.yml` `mvn verify` → `index.unit.replication.chaos.*IT`.
 
 **Triggers:** `workflow_dispatch` (input `time_limit`, default 60), nightly `schedule`, `push` to `main`/`master`. On **PR** only when label `jepsen` is present (or run via Actions → workflow_dispatch).
 
 **Artifacts:** each matrix cell uploads `RESULTS.md`, `ARTIFACTS.txt` (nochao), and `clojure/store/**/{history,results}.edn` when present. Shared image `jamoa-grid-jepsen:local` is built once and loaded per cell (`JEPSEN_REBUILD=0` / `MULTIDC_SKIP_REBUILD=1`).
 
-**Latency vs consistency on GHA:** matrix cells hard-gate Knossos/Elle (`:valid?`). `qg-gate.ps1` Ref B **p50+p95** remains the living floor on a **calm host** (do not raise Ref B to green CI). On `GITHUB_ACTIONS`, qg-gate runs in **CI_ADVISORY** mode: p95 FAIL prints `OVERALL=CI_ADVISORY_P95_FAIL` and exits 0 (shared-runner tail noise); **p50 hard FAIL still fails the job** (median-path regression smoke). Re-stamp Ref B on calm host before claiming algorithm PASS.
+**Latency vs consistency on GHA:** matrix cells hard-gate Knossos/Elle (`:valid?`). `qg-gate.sh` Ref B **p50+p95** remains the living floor on a **calm host** (do not raise Ref B to green CI). On `GITHUB_ACTIONS`, qg-gate runs in **CI_ADVISORY** mode: p95 FAIL prints `OVERALL=CI_ADVISORY_P95_FAIL` and exits 0; **p50 hard FAIL still fails the job**. Orchestration is **bash-only** (no pwsh in CI).
 
 **Local pre-commit smoke** (calm host; one contour at a time):
 
@@ -129,7 +137,7 @@ export JEPSEN_TIME_LIMIT=30 JEPSEN_REBUILD=1
 ./benchmarks/jepsen/scripts/build-jepsen-image.sh
 ./benchmarks/jepsen/scripts/jepsen-purge.sh all
 ./benchmarks/jepsen/scripts/run-jepsen-nochao.sh
-# then: source benchmarks/jepsen/ARTIFACTS.txt && pwsh -File benchmarks/jepsen/scripts/qg-gate.ps1 ...
+# then: source benchmarks/jepsen/ARTIFACTS.txt && bash benchmarks/jepsen/scripts/qg-gate.sh -RegisterHistory "$REGISTER_HISTORY" -AppendHistory "$APPEND_HISTORY"
 ```
 
 Optional: `actionlint .github/workflows/jepsen-qg.yml` and `act workflow_dispatch -W .github/workflows/jepsen-qg.yml -j build-image`.

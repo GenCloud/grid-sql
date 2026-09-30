@@ -93,6 +93,8 @@ Defaults `1 Hz` / `10 ms` / coupling `15` lock. Raising `natural-freq-hz` to `50
 
 - Only the writer assigns operation sequence numbers.
 - `opSeq` is global; gaps in one shard stream are normal.
+- **Tip fence:** propose is refused when any reachable peer reports a committed tip ahead of the local tip (`peerTip > localTip`). Typical path — unclean revive / tip-behind: catch up first, then propose again. `maxProposeInFlight` is a pipeline semaphore, not permission to write while lagging.
+- On the peer-commit apply path: OpLog is written outside shard locks (`journalRemote`); after a drained batch — one `confirmPersisted` at the tip, not an fsync per operation.
 - A structural `UPDATE` becomes an `UPSERT`: the writer merges via `LogicalFieldCursor` / `BlobFieldModifier`; the final row goes to the journal.
 - Linearizable reads (what Jepsen checks) are served only by the writer from the committed map.
 

@@ -25,9 +25,9 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 | Write rejected (`OrchidNotSyncedException` / no admission) | Check peers, network, `R` threshold, disk/`fsync`. Do not disable fsync for TPS — better a reject than two journals | [replication](../configuration/replication.md) |
 | Disk full / OpLog cannot write | Free space; check `op-log` and archive. Archive I/O failure blocks truncate — that is protection | [durability](../configuration/durability.md), [PITR](pitr.md) |
 | Client still writes the old writer after failover | Wait for `PROMOTE_NOTIFY` or call `rediscoverWriter()`. Do not round-robin hosts | [promote](ha-promote.md) |
-| Reject on `regionEpoch` / dual-writer risk | One Active; Hold/Witness not in the write URL. Reconnect via rediscover | [multi-site](multi-dc.md) |
-| Active site loss (`ASYNC_SHIP`) | RPO on Hold within lag is possible. New Active via claim; client rediscover | [multi-site](multi-dc.md) |
-| Active site loss (`SYNC_VOTERS`) | Commits that passed quorum are already on voters. Same claim + rediscover; cost is WAN on every write | [multi-site](multi-dc.md) |
+| Reject on `regionEpoch` / dual-writer risk | One Active; Hold/Witness not in the write URL. Reconnect via `rediscoverWriter()` | [multi-site](multi-dc.md) |
+| Active site loss (`ASYNC_SHIP`) | RPO on Hold within lag is possible. New Active via claim; client `rediscoverWriter()` | [multi-site](multi-dc.md) |
+| Active site loss (`SYNC_VOTERS`) | Commits that passed quorum are already on voters. Same claim + `rediscoverWriter()`; cost is WAN on every write | [multi-site](multi-dc.md) |
 | Replica read rejected / `applyLagStale` | Do not “fix” in the client. Catch up first; `ha.max-stale-lag` | [replica reads](replica-reads.md) |
 | AUTH fail on replica after `CREATE USER` only on the writer | `privileges.meta` is per-node; replication does not ship it — apply on every SQL node | [security](security.md) |
 | `repair_issued` grows, `repair_applied` does not | HomologousRepair logs, disk, peer seq; no shared NFS `dataDir` | [monitoring](../monitoring.md), [replication state](../../understand/replication-state.md) |
@@ -39,7 +39,7 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 
 1. **Signal.** Writes fail or hang; readiness on the old host is DOWN or the process is gone.
 2. **Verify.** No second process on the same `dataDir`. New writer: readiness UP and `writerEligible: true`. Client meta updated via `PROMOTE_NOTIFY` or `rediscoverWriter()` — not the next URL host.
-3. **Escalate.** If two Actives or two writers appear — stop the extra process immediately; fix `regionEpoch` / claim ([multi-site](multi-dc.md)). If apps keep hitting the dead host — client bug (no rediscover).
+3. **Escalate.** If two Actives or two writers appear — stop the extra process immediately; fix `regionEpoch` / claim ([multi-site](multi-dc.md)). If apps keep hitting the dead host — client bug (no `rediscoverWriter()`).
 
 ### B. Disk full mid-write
 
@@ -86,8 +86,12 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 |-----------|------------|
 | Two processes write one `dataDir` or two Actives | Immediate: stop the extra writer, fix epoch; do not “fix” via URL |
 | `repair_issued` grows for hours without `repair_applied` | Peer disk/network; if journal is doubtful — PITR drill on a copy |
-| After failover clients still write the old host | Application bug (no rediscover) — fix the client, not the server |
+| After failover clients still write the old host | Application bug (no `rediscoverWriter()`) — fix the client, not the server |
 | Need “rollback one hour” but archive was off | No archive data — only peers/sealed; enable archive before the next load |
+
+## Consistency drill contours
+
+Jepsen unclean-revive (dirty node restart with local `dataDir`) — PASS on stamp `2026-09-29-jepsen-unclean-revive`; full run covering tip-fence / HELLO sealed rejoin — `2026-09-30-jepsen-full`. Tip-behind symptoms: `writerEligible=false` and refused propose until the local tip catches peers; when ACK is below the truncate watermark — sealed pack on HELLO, then the OpLog tail. Scenarios and coverage: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md), [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md).
 
 ## Do not
 

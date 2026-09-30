@@ -42,6 +42,13 @@ class WriterFenceSignalsTest {
 	}
 
 	@Test
+	void detectsOrchidNackPrevOpSeq() {
+		assertTrue(WriterFenceSignals.requiresWriterRediscover(
+				new IllegalStateException(
+						"SQL error 2: ORCHID NACK from b1: prevOpSeq mismatch expected=0 got=8")));
+	}
+
+	@Test
 	void ignoresUnrelated() {
 		assertFalse(WriterFenceSignals.requiresWriterRediscover(
 				new IllegalArgumentException("syntax error near SELECT")));

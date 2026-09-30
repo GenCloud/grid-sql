@@ -150,7 +150,7 @@ For existing rows an added column reads as `NULL` — no data rewrite is needed.
 DROP TABLE IF EXISTS orders;
 ```
 
-Removes the schema, the data and the table's secondary indexes.
+Removes the schema, map/journal data and the table's secondary indexes. Does **not** delete sealed files (`.gmap` / `.sbpt` / `.sbm`) on the hot path: explicit retire (`purgeDomainArtifacts`) is separate, outside load DROP.
 
 ## Schemas
 

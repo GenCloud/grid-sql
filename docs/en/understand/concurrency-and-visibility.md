@@ -2,7 +2,7 @@
 
 Two sessions look at the same row. When does the second see what the first already committed? Not before the write passed admission and the journal. While a transaction is open, outsiders still see the old state — the dirty buffer does not leak out.
 
-Related: [transactions](../develop/transactions.md), [write path](write-path-staging.md), [ORCHID](orchid-consensus.md).
+Next: [transactions](../develop/transactions.md), [write path](write-path-staging.md), [ORCHID](orchid-consensus.md).
 
 ## Autocommit versus open transaction
 
@@ -78,7 +78,7 @@ Details and routing: [replica reads](../configure-and-operate/operations/replica
 
 Visibility is commit order plus a dirty buffer — not classic MVCC snapshots. One phase-ranked writer writes; role change is explicit ([promote](../configure-and-operate/operations/ha-promote.md)). XA / two-phase commit across foreign systems is not supported.
 
-## Related
+## Next
 
 - [Transactions API](../develop/transactions.md)
 - [SQL support matrix](../sql/support-matrix.md)

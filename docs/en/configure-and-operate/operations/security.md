@@ -108,4 +108,4 @@ There is no product TLS on the SQL port. Put a reverse proxy or load balancer in
 3. Do not confuse the SQL port (**15432**) with replication (**5615**).
 4. Readiness UP does not replace AUTH: the channel can be ready while a frame without login is rejected.
 
-**Related:** [failures](failures.md), [SQL server](../configuration/sql-server.md), [connect clients](../../getting-started/connect-clients.md).
+Next: [failures](failures.md), [SQL server](../configuration/sql-server.md), [connect clients](../../getting-started/connect-clients.md).

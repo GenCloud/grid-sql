@@ -11,11 +11,11 @@ PITR — про сохранность и откат, не про TPS. Не ос
 | Включить archive | До первой нагрузки, которую хотите откатывать | `oplog-archive.enabled: true`, свой `dir` на узел |
 | Base backup | По расписанию (суточно / перед релизом) | Снять sealed + orchid state на watermark `W` (`SealedBaseBackupUtil`) |
 | Проверка покрытия | После truncate / регулярно | Archive покрывает хвост после `W`; иначе restore до `T > W` оборвётся |
-| Учебное восстановление | На копии `dataDir`, не на живом writer | Прогнать `PitrRestoreMain --until-seq` offline |
+| Учебное восстановление | На копии `dataDir`, не на живом пишущем | Прогнать `PitrRestoreMain --until-seq` offline |
 
 Без включённого archive в момент аварии восстанавливать нечего.
 
-**Периодичность учебной проверки.** После включения archive и первого base backup периодически восстанавливайте на **копии** `dataDir` (никогда на живом writer): убедитесь, что покрытие за watermark `W`, затем `PitrRestoreMain --until-seq`. Провал учебной проверки — дефект эксплуатации до реального инцидента.
+**Периодичность учебной проверки.** После включения archive и первого base backup периодически восстанавливайте на **копии** `dataDir` (никогда на живом пишущем): убедитесь, что покрытие за watermark `W`, затем `PitrRestoreMain --until-seq`. Провал учебной проверки — дефект эксплуатации до реального инцидента.
 
 ## Короткий сценарий инцидента
 
@@ -29,7 +29,7 @@ flowchart LR
   Base[base_W] --> Restore[PitrRestoreMain]
   Arch[archive_W_to_T] --> Restore
   Restore --> DataDir[dataDir_restored]
-  DataDir --> CatchUp[подтягивание_peers]
+  DataDir --> CatchUp[подтягивание_соседей]
 ```
 
 ## Модель
@@ -91,7 +91,7 @@ java --enable-preview -cp ... org.genfork.grid.replication.pitr.PitrRestoreMain 
   --shard 0
 ```
 
-Согласованное восстановление между ЦОД: `PitrCoordinatedRestore.restoreUnderActiveFence(ACTIVE, remoteAlsoActive=false, …)` — отказ, если сайт не Active или удалённый peer тоже Active.
+Согласованное восстановление между ЦОД: `PitrCoordinatedRestore.restoreUnderActiveFence(ACTIVE, remoteAlsoActive=false, …)` — отказ, если ЦОД не Active или удалённый узел тоже Active.
 
 ## Что не делать
 
@@ -108,6 +108,6 @@ java --enable-preview -cp ... org.genfork.grid.replication.pitr.PitrRestoreMain 
 | Seq не совпадает с ожиданием | Неверный `--until-seq` или base с другого watermark |
 | Узел не догоняет peers | Чужой `cluster-id` / epoch; общий dataDir; смотреть HomologousRepair |
 | После restore «пропали» открытые TX | Ожидаемо: dirty до COMMIT не в OpLog |
-| Restore отклонён (ограждение Active) | Сайт Hold/Witness или два пишущих / два Active |
+| Restore отклонён (ограждение Active) | ЦОД Hold/Witness или два пишущих / два Active |
 
 Дальше: [долговременное хранение](../configuration/durability.md), [хранение GMAP](../../understand/storage-sealed-gmap.md), [отказы](failures.md), [обновление узла](upgrade.md).

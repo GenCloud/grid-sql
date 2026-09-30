@@ -94,4 +94,4 @@ Full reference: [connect clients](connect-clients.md), [Java client](../develop/
 
 Before the first production write, confirm: durability on with `fsync: true`; `dataDir` local and per node; one writer and clients pinned through `ServerMeta` / `PROMOTE_NOTIFY`; AUTH enabled with least-privilege grants; OpLog archive on with a base backup taken and a restore rehearsed; liveness and readiness probes wired with alerts in place.
 
-**Related:** [best practices](best-practices.md), [start a cluster](start-cluster.md), [durability](../configure-and-operate/configuration/durability.md), [monitoring](../configure-and-operate/monitoring.md), [PITR](../configure-and-operate/operations/pitr.md).
+Next: [best practices](best-practices.md), [start a cluster](start-cluster.md), [durability](../configure-and-operate/configuration/durability.md), [monitoring](../configure-and-operate/monitoring.md), [PITR](../configure-and-operate/operations/pitr.md).

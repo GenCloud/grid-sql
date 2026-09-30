@@ -15,24 +15,6 @@
  */
 package org.genfork.grid.replication;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationProps;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
@@ -50,39 +32,45 @@ import org.genfork.grid.replication.flow.ReplicationFlowControl;
 import org.genfork.grid.replication.join.SparseCatchUp;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.log.StreamOpLogAppender;
+import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.netty.NettyReplicationTransport;
 import org.genfork.grid.replication.orchid.DigestQuorum;
 import org.genfork.grid.replication.orchid.OrchidMultiDcConfig;
 import org.genfork.grid.replication.orchid.OrchidNode;
+import org.genfork.grid.replication.pitr.OpLogArchiveStreamer;
 import org.genfork.grid.replication.region.RegionRoleCoordinator;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.schema.SchemaEpochSupport;
 import org.genfork.grid.replication.snapshot.IndexCheckpointService;
 import org.genfork.grid.replication.snapshot.SnapshotService;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
-import org.genfork.grid.replication.swarm.AdaptiveReplicaSwarm;
-import org.genfork.grid.replication.swarm.HierarchicalPlacementOptimizer;
-import org.genfork.grid.replication.swarm.PeerRole;
-import org.genfork.grid.replication.swarm.PlacementPlan;
-import org.genfork.grid.replication.swarm.PlacementTopology;
-import org.genfork.grid.replication.swarm.ShardMigrateAction;
-import org.genfork.grid.replication.swarm.ShardMigrator;
-import org.genfork.grid.replication.swarm.SwarmMigrateBatchSizes;
-import org.genfork.grid.replication.swarm.SwarmMigrateHysteresis;
+import org.genfork.grid.replication.swarm.*;
 import org.genfork.grid.replication.transport.ApplyAckSender;
 import org.genfork.grid.replication.transport.ReplicationPeer;
 import org.genfork.grid.replication.transport.ReplicationPublisher;
 import org.genfork.grid.replication.tx.StreamCommitSerializer;
-import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
+import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 import org.genfork.grid.replication.util.CrossDcVoterUtil;
-import org.genfork.grid.replication.pitr.OpLogArchiveStreamer;
 import org.genfork.grid.replication.util.OpLogArchiveUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.sql.tx.DistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.NettyDistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
-import com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Facade: ORCHID consensus + Netty-only transport + always-on-disk OpLog + swarm + homologous repair.
@@ -92,7 +80,8 @@ import com.google.common.annotations.VisibleForTesting;
  * @since: 1.0
  */
 public class ReplicationCoordinator {
-	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ReplicationCoordinator.class);
+	private static final Logger log = LoggerFactory.getLogger(ReplicationCoordinator.class);
+
 	/**
 	 * OpLog / ORCHID domain for catalog DDL ({@link ReplicationOpType#DDL}).
 	 */
@@ -115,9 +104,7 @@ public class ReplicationCoordinator {
 	private final ReplicationPublisher publisher;
 	private final CrossDcPublisher crossDcPublisher;
 	private final TxEnvelopeCoordinator txEnvelopeCoordinator;
-	private final SnapshotService snapshotService;
-	private final IndexCheckpointService indexCheckpointService;
-	private final SealedGridMapService sealedGridMapService;
+    private final SealedGridMapService sealedGridMapService;
 	/**
 	 * PITR archive root when {@code grid.durability.oplog-archive.enabled}; else {@code null}.
 	 * Archive I/O is sync on seal/truncateSafe callers (already off Netty EL).
@@ -128,8 +115,7 @@ public class ReplicationCoordinator {
 	 */
 	private final Path opLogArchiveStreamRoot;
 	private final OrchidNode orchidNode;
-	private final SparseCatchUp sparseCatchUp;
-	private final HomologousRepair homologousRepair;
+    private final HomologousRepair homologousRepair;
 	private final AdaptiveReplicaSwarm swarm;
 	private final ShardMigrator shardMigrator;
 	private final boolean enabled;
@@ -140,8 +126,6 @@ public class ReplicationCoordinator {
 	private final NettyReplicationTransport nettyTransport;
 	private final AdaptiveDiskFirstController adaptiveDiskFirstController;
 	private final Map<String, ReplicaApplier> appliers = new ConcurrentHashMap<>();
-	private final Map<String, MutationRecorder> recorders = new ConcurrentHashMap<>();
-	private final Map<String, Function<Integer, GridEntriesProcessor>> domainProcessors = new ConcurrentHashMap<>();
 	private final Set<String> pendingSchemaBarriers = ConcurrentHashMap.newKeySet();
 	private final ReplicationFlowControl flowControl;
 	/**
@@ -189,10 +173,6 @@ public class ReplicationCoordinator {
 		this.overlayStore = overlayStore;
 	}
 
-	public OverlayStore overlayStore() {
-		return overlayStore;
-	}
-
 	/**
 	 * Bind SQL record locks for inbound Netty {@code FOR_UPDATE_LOCK_*} (logic VT handlers).
 	 * Also used by {@link #createNettyDistForUpdatePeerLockAgents()} factory for outbound agents.
@@ -229,18 +209,6 @@ public class ReplicationCoordinator {
 	}
 
 	/**
-	 * Single-peer factory for tests / explicit wiring.
-	 */
-	@VisibleForTesting
-	public DistForUpdatePeerLockAgent createNettyDistForUpdatePeerLockAgent(String peerId) {
-		Objects.requireNonNull(peerId, "peerId");
-		if (nettyTransport == null) {
-			throw new IllegalStateException("Netty transport not available");
-		}
-		return new NettyDistForUpdatePeerLockAgent(nettyTransport, peerId);
-	}
-
-	/**
 	 * True when soft overlay has any live pin (metric / ops). Migrate filtering is per-shard —
 	 * see {@link #isOverlayBlockingShardMigrate(String, int)}.
 	 */
@@ -268,7 +236,7 @@ public class ReplicationCoordinator {
 		}
 		this.catalogDdlHandler = handler;
 		if (!appliers.containsKey(CATALOG_DOMAIN)) {
-			registerDomain(CATALOG_DOMAIN, shard -> null, false);
+			registerDomain(CATALOG_DOMAIN, _ -> null, false);
 		}
 		final ReplicaApplier catalogApplier = appliers.get(CATALOG_DOMAIN);
 		if (catalogApplier != null) {
@@ -288,7 +256,8 @@ public class ReplicationCoordinator {
 		final String hydrateMode = SealedHydrateService.normalizeHydrateMode(durability.getHydrateMode());
 		final int workingSetMaxEntries = Math.max(0, durability.getWorkingSetMaxEntries());
 		final boolean adaptiveDiskFirst = durability.isAdaptiveDiskFirst();
-		if (!enabled) {
+
+        if (!enabled) {
 			this.adaptiveDiskFirstController = null;
 			this.nodeState = null;
 			this.opLog = null;
@@ -297,15 +266,12 @@ public class ReplicationCoordinator {
 			this.publisher = null;
 			this.crossDcPublisher = null;
 			this.txEnvelopeCoordinator = null;
-			this.snapshotService = null;
-			this.indexCheckpointService = null;
 			this.sealedGridMapService = null;
 			this.opLogArchiveRoot = null;
 			this.opLogArchiveStreamRoot = null;
 			this.orchidNode = null;
 			this.nettyTransport = null;
 			this.flowControl = null;
-			this.sparseCatchUp = null;
 			this.homologousRepair = null;
 			this.swarm = null;
 			this.shardMigrator = null;
@@ -346,8 +312,9 @@ public class ReplicationCoordinator {
 		final CrossDcMode crossDcMode = CrossDcMode.valueOf(cfg.getCrossDc().getMode());
 		this.crossDcPublisher = new CrossDcPublisher(nodeState, crossDcMode, cfg.getCrossDc().getBatchMaxOps(), cfg.getCrossDc().getBatchMaxWaitMs(), cfg.getCrossDc().isRequireRemoteAck(), cfg.getCrossDc().getRemoteAckTimeoutMs(), cfg.getCrossDc().getLearners(), cfg.getCrossDc().getVoters());
 		this.crossDcPublisher.setEnvelopeCoordinator(txEnvelopeCoordinator);
-		this.snapshotService = new SnapshotService(opLog, nodeState);
-		this.indexCheckpointService = new IndexCheckpointService(dataDir.resolve("index-ckpt"));
+
+        final SnapshotService snapshotService = new SnapshotService(opLog, nodeState);
+        final IndexCheckpointService indexCheckpointService = new IndexCheckpointService(dataDir.resolve("index-ckpt"));
 		this.opLogArchiveRoot = resolveOpLogArchiveRoot(durability);
 		this.opLogArchiveStreamRoot = resolveOpLogArchiveStreamRoot(durability, opLogArchiveRoot);
 		this.sealedGridMapService = new SealedGridMapService(dataDir.resolve("sealed"), opLogArchiveRoot);
@@ -377,7 +344,7 @@ public class ReplicationCoordinator {
 		if (swarmEnabled) {
 			crossDcPublisher.setSwarm(swarm);
 			swarm.registerSensor("queueDepth", () -> (double) flowControl.inflight());
-			swarm.registerSensor("hitRate", () -> org.genfork.grid.replication.metrics.ReplicationMetrics.mapHitRate());
+			swarm.registerSensor("hitRate", ReplicationMetrics::mapHitRate);
 			swarm.registerSensor("applyLag", () -> (double) nodeState.maxApplyLag(opLog));
 			swarm.registerSensor("rttMs", () -> (double) nettyTransport.emaRttMs());
 			swarm.registerSensor("openTx", this::openTxPressure);
@@ -387,11 +354,13 @@ public class ReplicationCoordinator {
 				return (double) used / (double) rt.maxMemory();
 			});
 		}
-		this.sparseCatchUp = new SparseCatchUp(nodeState, opLog, orchidNode);
-		this.regionClaimService = new RegionClaimService(enabled, peerTransportEnabled, crossDcEnabled, writeAdmission, replicaReadsEnabled, maxStaleLag, nodeState, opLog, orchidNode, nettyTransport, regionCoordinator);
-		this.peerMembershipService = new PeerMembershipService(enabled, crossDcEnabled, repairEnabled, nodeState, opLog, orchidNode, nettyTransport, sparseCatchUp, homologousRepair, publisher, crossDcPublisher, peers, regionClaimService);
-		this.txMarkerService = new TxMarkerService(enabled, crossDcEnabled, nodeState, opLog, streamOpLogAppender, orchidNode, publisher, crossDcPublisher, homologousRepair);
-		this.sealedHydrateService = new SealedHydrateService(enabled, hydrateMode, workingSetMaxEntries, adaptiveDiskFirstController, nodeState, opLog, snapshotService, indexCheckpointService, sealedGridMapService, homologousRepair, appliers);
+
+        final SparseCatchUp sparseCatchUp = new SparseCatchUp(nodeState, opLog, orchidNode);
+		this.regionClaimService = new RegionClaimService(true, peerTransportEnabled, crossDcEnabled, writeAdmission, replicaReadsEnabled, maxStaleLag, nodeState, opLog, orchidNode, nettyTransport, regionCoordinator);
+		this.peerMembershipService = new PeerMembershipService(true, crossDcEnabled, repairEnabled, nodeState, opLog, orchidNode, nettyTransport, sparseCatchUp, homologousRepair, publisher, crossDcPublisher, peers, regionClaimService);
+		this.peerMembershipService.setSealedGridMapService(sealedGridMapService);
+		this.txMarkerService = new TxMarkerService(true, crossDcEnabled, nodeState, opLog, streamOpLogAppender, orchidNode, publisher, crossDcPublisher, homologousRepair);
+		this.sealedHydrateService = new SealedHydrateService(true, hydrateMode, workingSetMaxEntries, adaptiveDiskFirstController, nodeState, opLog, snapshotService, indexCheckpointService, sealedGridMapService, homologousRepair, appliers);
 		publisher.setPeers(peers);
 		crossDcPublisher.setRemotePeers(peers);
 		if (peerTransportEnabled) {
@@ -403,7 +372,7 @@ public class ReplicationCoordinator {
 			crossDcPublisher.setShipper((peer, segment) -> {
 			});
 		}
-		nettyTransport.bindHandlers(() -> orchidNode, domain -> appliers.get(domain), crossDcEnabled ? crossDcPublisher : null, nodeState, homologousRepair, opLog, sparseCatchUp, peerMembershipService::onPeerDiscovered, peerMembershipService::maybePromoteVoter, regionClaimService::regionEpoch, regionClaimService::regionRoleWire);
+		nettyTransport.bindHandlers(() -> orchidNode, appliers::get, crossDcEnabled ? crossDcPublisher : null, nodeState, homologousRepair, opLog, sparseCatchUp, peerMembershipService::onPeerDiscovered, peerMembershipService::maybePromoteVoter, regionClaimService::regionEpoch, regionClaimService::regionRoleWire);
 		nettyTransport.setSealedShardPackHandler(sealedHydrateService::onSealedShardPack);
 		nettyTransport.setRegionClaimHandlers(regionClaimService::onRegionClaimReqBuildAck, regionClaimService::onRegionClaimAck);
 		regionClaimService.seedObservedState();
@@ -556,20 +525,19 @@ public class ReplicationCoordinator {
 			applier.setCatalogDdlHandler(catalogDdlHandler);
 		}
 		appliers.put(domainType, applier);
-		if (processorByShard != null) {
-			domainProcessors.put(domainType, processorByShard);
-		}
-		orchidNode.addApplyListener(op -> {
+
+		orchidNode.addApplyListener((op, journalRemote) -> {
 			if (op != null && domainType.equals(op.domainType())) {
 				if (homologousRepair != null) {
 					homologousRepair.observe(op);
 				}
-				// fromConsensus=true: OpLog + confirmPersisted remain in MutationRecorder.
-				applier.apply(op, true);
+				// fromConsensus=true: local propose OpLog stays in MutationRecorder (journalRemote=false).
+				// Peer commit: journalRemote=true → StreamOpLogAppender outside shardLocks; tip batched in OrchidNode.
+				applier.apply(op, true, false, journalRemote);
 			}
 		});
+
 		final MutationRecorder recorder = new MutationRecorder(nodeState, opLog, domainType, publisher, crossDcEnabled ? crossDcPublisher : null, homologousRepair, streamOpLogAppender);
-		recorders.put(domainType, recorder);
 		sealedGridMapService.bindProcessor(domainType, processorByShard);
 		final boolean lazy = sealedHydrateService.isLazyHydrate() && !CATALOG_DOMAIN.equals(domainType);
 		if (lazy) {
@@ -622,16 +590,8 @@ public class ReplicationCoordinator {
 		return sealedHydrateService != null && sealedHydrateService.isLazyHydrate();
 	}
 
-	public int workingSetMaxEntries() {
-		return sealedHydrateService == null ? 0 : sealedHydrateService.workingSetMaxEntries();
-	}
-
 	public boolean isAdaptiveDiskFirst() {
 		return sealedHydrateService != null && sealedHydrateService.isAdaptiveDiskFirst();
-	}
-
-	public AdaptiveDiskFirstController adaptiveDiskFirstController() {
-		return sealedHydrateService == null ? null : sealedHydrateService.adaptiveDiskFirstController();
 	}
 
 	/**
@@ -706,20 +666,6 @@ public class ReplicationCoordinator {
 		pendingSchemaBarriers.remove(domainType);
 	}
 
-	/**
-	 * Bump schema epoch and emit barriers for all registered domains.
-	 */
-	public void bumpSchemaEpoch(long newEpoch) {
-		if (!enabled || newEpoch <= nodeState.getSchemaEpoch()) {
-			return;
-		}
-		nodeState.setSchemaEpoch(newEpoch);
-		nettyTransport.setSchemaEpoch(newEpoch);
-		for (String domain : appliers.keySet()) {
-			pipelineSchemaBarrier(domain);
-		}
-	}
-
 	public synchronized void addPeer(ReplicationPeer peer) {
 		if (peerMembershipService != null) {
 			peerMembershipService.addPeer(peer);
@@ -748,14 +694,6 @@ public class ReplicationCoordinator {
 		return appliers.get(domainType);
 	}
 
-	public CompletableFuture<Void> awaitApplied(String domainType, int shard, long seq) {
-		final ReplicaApplier applier = appliers.get(domainType);
-		if (applier == null) {
-			return CompletableFuture.completedFuture(null);
-		}
-		return applier.awaitApplied(domainType, shard, seq);
-	}
-
 	public void truncateSafe(String domainType, int shard) {
 		final long applied = nodeState.appliedWatermark(domainType, shard);
 		final long peerMin = nodeState.minPeerAck(domainType, shard);
@@ -782,28 +720,6 @@ public class ReplicationCoordinator {
 	}
 
 	/**
-	 * DROP TABLE: clear hydrate memo and relax adaptive mode for {@code domainType}.
-	 * <p>
-	 * Does <strong>not</strong> delete sealed {@code .gmap}/{@code .sbpt} or index-ckpt files on
-	 * the DROP hot path — full {@link SealedGridMapService#deleteDomain} during JMeter/catalog
-	 * DROP/CREATE crushed Capacity READ_ONLY (~10 k vs ~55 k) even when AdaptiveDiskFirst
-	 * no longer enters HIGH on sealed-miss bursts. File retire remains available via
-	 * {@link SealedGridMapService#deleteDomain} / {@link IndexCheckpointService#deleteDomain}
-	 * for explicit domain teardown outside the load DROP cycle.
-	 */
-	public void purgeDomainArtifacts(String domainType) {
-		if (!enabled || domainType == null || domainType.isEmpty()) {
-			return;
-		}
-		if (sealedHydrateService != null) {
-			sealedHydrateService.forgetDomain(domainType);
-		}
-		if (adaptiveDiskFirstController != null) {
-			adaptiveDiskFirstController.relaxAfterDomainPurge();
-		}
-	}
-
-	/**
 	 * Synced and phase-ranked proposer — may accept writes (requires write-admission + region Active).
 	 */
 	public boolean isWriterEligible() {
@@ -826,10 +742,6 @@ public class ReplicationCoordinator {
 		return regionClaimService != null && regionClaimService.observePeerRegionEpoch(peerEpoch, peerNodeId);
 	}
 
-	public boolean noteRemotePeerRegion(long peerEpoch, byte peerRoleWire) {
-		return regionClaimService != null && regionClaimService.noteRemotePeerRegion(peerEpoch, peerRoleWire);
-	}
-
 	public boolean tryRegionClaim(int ackCount) {
 		return regionClaimService != null && regionClaimService.tryRegionClaim(ackCount);
 	}
@@ -850,20 +762,8 @@ public class ReplicationCoordinator {
 		return regionClaimService == null || regionClaimService.isWriteAdmission();
 	}
 
-	public boolean hasActiveRemoteDcLink() {
-		return regionClaimService == null || regionClaimService.hasActiveRemoteDcLink();
-	}
-
-	public MutationRecorder mutationRecorder(String domainType) {
-		return recorders.get(domainType);
-	}
-
 	public String promoteHint() {
 		return regionClaimService == null ? null : regionClaimService.promoteHint();
-	}
-
-	public long maxStaleLag() {
-		return regionClaimService == null ? Long.MAX_VALUE : regionClaimService.maxStaleLag();
 	}
 
 	public boolean isApplyLagStale() {
@@ -878,19 +778,9 @@ public class ReplicationCoordinator {
 		return regionClaimService == null || regionClaimService.regionAllowsReplicaReads();
 	}
 
-	public int installFromOpLog(String domainType, int shard, long fromSeqInclusive, int limit) {
-		return sealedHydrateService.installFromOpLog(domainType, shard, fromSeqInclusive, limit);
-	}
-
 	public void recordTxMarker(ReplicationOpType type, long txId, String domainType, int shard) {
 		if (txMarkerService != null) {
 			txMarkerService.recordTxMarker(type, txId, domainType, shard);
-		}
-	}
-
-	public void recordTxMarker(ReplicationOpType type, long txId, String domainType, int shard, byte[] value) {
-		if (txMarkerService != null) {
-			txMarkerService.recordTxMarker(type, txId, domainType, shard, value);
 		}
 	}
 
@@ -1174,11 +1064,13 @@ public class ReplicationCoordinator {
 				if (hash <= 0) {
 					continue;
 				}
+
 				final String domain = streamKey.substring(0, hash);
 				final int shard = Integer.parseInt(streamKey.substring(hash + 1));
 				if (hasOpenTxOnStream(domain, shard)) {
 					continue;
 				}
+
 				if (!fullReconcile) {
 					final long lastSeq = opLog.lastSeq(domain, shard);
 					final long peerAck = nodeState.peerAck(peer.id(), domain, shard);
@@ -1186,7 +1078,7 @@ public class ReplicationCoordinator {
 					// Checksum heal remains on full cadence; OpLog publisher streams catch-up.
 					if (lastSeq > 0L) {
 						final long lag = lastSeq - peerAck;
-						if (lag <= 0L || lag < REPAIR_SOFT_LAG_OPS) {
+						if (lag < REPAIR_SOFT_LAG_OPS) {
 							continue;
 						}
 					}
@@ -1254,14 +1146,6 @@ public class ReplicationCoordinator {
 		return this.txEnvelopeCoordinator;
 	}
 
-	public SnapshotService getSnapshotService() {
-		return this.snapshotService;
-	}
-
-	public IndexCheckpointService getIndexCheckpointService() {
-		return this.indexCheckpointService;
-	}
-
 	public SealedGridMapService getSealedGridMapService() {
 		return this.sealedGridMapService;
 	}
@@ -1270,20 +1154,12 @@ public class ReplicationCoordinator {
 		return this.orchidNode;
 	}
 
-	public SparseCatchUp getSparseCatchUp() {
-		return this.sparseCatchUp;
-	}
-
 	public HomologousRepair getHomologousRepair() {
 		return this.homologousRepair;
 	}
 
 	public AdaptiveReplicaSwarm getSwarm() {
 		return this.swarm;
-	}
-
-	public ShardMigrator getShardMigrator() {
-		return this.shardMigrator;
 	}
 
 	public boolean isEnabled() {

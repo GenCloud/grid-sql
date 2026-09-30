@@ -103,4 +103,4 @@ JVM: `--add-modules=jdk.incubator.vector`. Without the module, loading the Vecto
 - IT: `QueryHeavinessEstimatorIT`, `AdaptiveParallelScanIT`, `AdaptiveChunkSchedulerIT`, `ShardPartitionMapReduceIT`, `WireResidualBatchIT`
 - JMH: `QueryHeavinessEstimatorBenchmark`, `ShardPartitionMapReduceBenchmark`, `WireResidualBatchBenchmark`
 
-**Related:** [fundamentals](fundamentals.md), [architecture](../understand/architecture-overview.md), [capacity](../performance/capacity-slo.md).
+Next: [fundamentals](fundamentals.md), [architecture](../understand/architecture-overview.md), [capacity](../performance/capacity-slo.md).

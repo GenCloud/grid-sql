@@ -99,4 +99,4 @@ Drive load runs with JMeter over `grid://`, not JDBC: [load and SLO](../tools/jm
 | `readPreference=REPLICA requires readEndpoints` | A read preference was set without a replica list |
 | `REPLICA_READ_STALE` | Replica lag is above `max-stale-lag`; the client will rotate the endpoint |
 
-**Related:** [Java client](../develop/java-client.md), [transactions](../develop/transactions.md), [production checklist](production-checklist.md), [API reference](../api-reference/README.md).
+Next: [Java client](../develop/java-client.md), [transactions](../develop/transactions.md), [production checklist](production-checklist.md), [API reference](../api-reference/README.md).

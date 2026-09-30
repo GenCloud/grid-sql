@@ -25,10 +25,11 @@ if [[ "${JEPSEN_WITNESS:-}" == "1" ]]; then
 fi
 WL="${1:-register}"
 TL="${2:-60}"
-NEM="${3:-}"
+NEM_MODE="${3:-}"
 command -v lein
 command -v docker || true
-if [[ -n "$NEM" ]]; then
+# Third arg: empty | chaos => nemesis ON; nochao | 1 | no-nemesis => --no-nemesis
+if [[ "$NEM_MODE" == "nochao" || "$NEM_MODE" == "1" || "$NEM_MODE" == "no-nemesis" ]]; then
   lein run -m jamoa-jepsen.core test --workload "$WL" --time-limit "$TL" --no-nemesis
 else
   lein run -m jamoa-jepsen.core test --workload "$WL" --time-limit "$TL"

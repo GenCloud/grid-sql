@@ -70,17 +70,30 @@
   (if (:no-nemesis opts)
     ;; Keep gen/nemesis shape but never fire faults.
     (gen/sleep (:time-limit opts))
-    (let [multidc? (= "1" (System/getenv "JEPSEN_MULTIDC"))]
-      ;; Multi-DC: partition + kill-voter only (no whole-DC kill) so Knossos can finish
-      ;; after Elle-safe :info connect classification on in-flight writes.
-      (if multidc?
+    (let [multidc? (= "1" (System/getenv "JEPSEN_MULTIDC"))
+          unclean? (= "1" (System/getenv "JEPSEN_UNCLEAN_REVIVE"))]
+      (cond
+        ;; Unclean first (1-DC or Multi-DC): long kill+start only — avoids :info flood.
+        unclean?
+        (cycle [(gen/sleep 12)
+                {:type :info :f :kill-proposer}
+                (gen/sleep 28)])
+
+        multidc?
+        ;; Full Multi-DC chaos: DC-link partition + kill-voter + whole DC-A kill/revive.
         (cycle [(gen/sleep 10)
                 {:type :info :f :start-partition}
                 (gen/sleep 4)
                 {:type :info :f :stop-partition}
                 (gen/sleep 12)
                 {:type :info :f :kill-proposer}
+                (gen/sleep 10)
+                {:type :info :f :kill-dc-a}
+                (gen/sleep 12)
+                {:type :info :f :revive-dc-a}
                 (gen/sleep 10)])
+
+        :else
         (cycle [(gen/sleep 8)
                 {:type :info :f :start-partition}
                 (gen/sleep 5)
@@ -107,12 +120,18 @@
         no-nem? (:no-nemesis opts)
         nodes (test-nodes)
         multidc? (= "1" (System/getenv "JEPSEN_MULTIDC"))
-        ;; Register+Knossos: concurrency 1 under Multi-DC so :info connect writes stay analyzable.
+        unclean? (= "1" (System/getenv "JEPSEN_UNCLEAN_REVIVE"))
+        ;; Register+Knossos: concurrency 1 whenever sticky-only routing can yield mid-write
+        ;; :info :connect (partition / kill / unclean). Append keeps higher conc for Elle.
         conc (cond
-               (and multidc? (= "register" workload)) 1
+               (= "register" workload) 1
                multidc? 2
+               unclean? 3
                :else 5)
-        rate (if multidc? (min (:rate opts) 5.0) (:rate opts))
+        rate (cond
+               multidc? (min (:rate opts) 5.0)
+               (= "register" workload) (min (:rate opts) 5.0)
+               :else (:rate opts))
         opts (assoc opts :rate rate)]
     (merge tests/noop-test
            opts

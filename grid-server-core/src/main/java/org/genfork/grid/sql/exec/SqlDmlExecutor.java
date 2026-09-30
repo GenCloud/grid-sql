@@ -476,6 +476,13 @@ public final class SqlDmlExecutor {
 				session.lockManager().lock(table, key);
 				try {
 					final byte[] base = store.getCommittedBytes(key);
+					if (base == null) {
+						// SQL UPDATE: missing PK must not invent an empty seed row (G-single-item wipe).
+						final SqlResult result =
+								SqlDmlReturningOps.updateResult(session, table, store, s, returningKeys, 0L);
+						SqlTriggerFireOps.fireAfterStatement(session, engine, table, TriggerEvent.UPDATE);
+						return result;
+					}
 					final TableStore.EncodedRow encoded =
 							store.encodeUpdatePlan(s.rmw(), base, s.setLiterals());
 					SqlTriggerFireOps.fireBeforeRow(
@@ -525,14 +532,16 @@ public final class SqlDmlExecutor {
 			final byte[] key = store.keyBytesForPk(s.rmw().pkValue());
 			SqlDmlLockOps.ensureRowLocked(session, table, key);
 			final byte[] base = SqlDmlLockOps.baseBytes(session, table, store, key);
-			final TableStore.EncodedRow encoded =
-					store.encodeUpdatePlan(s.rmw(), base, s.setLiterals());
-			SqlTriggerFireOps.fireBeforeRow(
-					session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
-			SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
-			SqlTriggerFireOps.fireAfterRow(
-					session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
-			affected = 1L;
+			if (base != null) {
+				final TableStore.EncodedRow encoded =
+						store.encodeUpdatePlan(s.rmw(), base, s.setLiterals());
+				SqlTriggerFireOps.fireBeforeRow(
+						session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
+				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
+				SqlTriggerFireOps.fireAfterRow(
+						session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
+				affected = 1L;
+			}
 		} else if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 			affected = updateOneKey(session, table, store, key, s.setLiterals(), true);
@@ -558,6 +567,9 @@ public final class SqlDmlExecutor {
 		final byte[] base = stageInTx
 				? SqlDmlLockOps.baseBytes(session, table, store, key)
 				: SqlDmlLockOps.existingBytes(session, table, store, key);
+		if (base == null) {
+			return 0L;
+		}
 		final TableStore.EncodedRow encoded = store.encodeSetLiterals(key, base, sets);
 		SqlTriggerFireOps.fireBeforeRow(
 				session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());

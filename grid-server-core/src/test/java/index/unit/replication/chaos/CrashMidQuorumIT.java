@@ -25,6 +25,7 @@ import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.CleanupMode;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.net.ServerSocket;
@@ -63,7 +64,7 @@ public class CrashMidQuorumIT {
 	private static final long GC_SETTLE_NS = TimeUnit.MILLISECONDS.toNanos(200L);
 	private static final int MIN_LIVE_PEERS_AFTER_CRASH = 1;
 
-	@TempDir
+	@TempDir(cleanup = CleanupMode.NEVER)
 	Path tempDir;
 
 	@Test

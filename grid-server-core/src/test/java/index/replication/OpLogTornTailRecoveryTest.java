@@ -47,6 +47,8 @@ public class OpLogTornTailRecoveryTest {
 	private static final String DOMAIN = "t";
 	private static final int SHARD = 0;
 	private static final int TORN_ZERO_HEADER_BYTES = 8;
+	private static final int MID_RECORD_CLAIMED_LEN = 64;
+	private static final int LENGTH_HEADER_AND_PARTIAL = 4 + 4;
 	private static final long SCHEMA_EPOCH = 1L;
 	private static final String WPOS_SUFFIX = ".wpos";
 
@@ -86,6 +88,42 @@ public class OpLogTornTailRecoveryTest {
 		try (MappedAppendFile mapped = new MappedAppendFile(logPath, false)) {
 			assertEquals(goodSize, mapped.size());
 			assertTrue(mapped.size() > 0L);
+		}
+	}
+
+	@Test
+	void replayTruncatesMidRecordTornTailAndKeepsPriorOps() throws Exception {
+		long goodSize;
+		try (FileDurableOpStore store = new FileDurableOpStore(dir, STREAM, false)) {
+			store.append(OpLogCodec.withChecksum(new ReplicationOp(
+					DOMAIN, SHARD, 1L, ReplicationOpType.UPSERT, new byte[]{1}, new byte[]{2}, SCHEMA_EPOCH, 0L)));
+			store.append(OpLogCodec.withChecksum(new ReplicationOp(
+					DOMAIN, SHARD, 2L, ReplicationOpType.UPSERT, new byte[]{3}, new byte[]{4}, SCHEMA_EPOCH, 0L)));
+		}
+		final Path logPath = dir.resolve(STREAM + ".log");
+		try (MappedAppendFile mapped = new MappedAppendFile(logPath, false)) {
+			goodSize = mapped.size();
+		}
+		// Partial next record: valid positive length header claiming more bytes than remain.
+		try (FileChannel ch = FileChannel.open(logPath, StandardOpenOption.WRITE, StandardOpenOption.APPEND)) {
+			final ByteBuffer buf = ByteBuffer.allocate(LENGTH_HEADER_AND_PARTIAL);
+			buf.putInt(MID_RECORD_CLAIMED_LEN);
+			buf.put(new byte[]{1, 2, 3, 4});
+			buf.flip();
+			ch.write(buf);
+		}
+		final Path wpos = Path.of(logPath + WPOS_SUFFIX);
+		Files.writeString(wpos, Long.toString(Files.size(logPath)));
+
+		final List<ReplicationOp> ops;
+		try (FileDurableOpStore store = new FileDurableOpStore(dir, STREAM, false)) {
+			ops = store.replayOps();
+		}
+		assertEquals(2, ops.size());
+		assertEquals(1L, ops.get(0).opSeq());
+		assertEquals(2L, ops.get(1).opSeq());
+		try (MappedAppendFile mapped = new MappedAppendFile(logPath, false)) {
+			assertEquals(goodSize, mapped.size());
 		}
 	}
 

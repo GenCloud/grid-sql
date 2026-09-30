@@ -139,4 +139,4 @@ It means the socket is not speaking SQL frames. Almost always it is the wrong po
 
 If you want a console instead of an IDE, there is the [SQL CLI](../tools/sql-cli.md). Reactive path: [Java client](java-client.md).
 
-**Related:** [Java client](java-client.md), [connecting clients](../getting-started/connect-clients.md), [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md), [DBeaver README](../../tools/dbeaver/README.md).
+Next: [Java client](java-client.md), [connecting clients](../getting-started/connect-clients.md), [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md), [DBeaver README](../../tools/dbeaver/README.md).

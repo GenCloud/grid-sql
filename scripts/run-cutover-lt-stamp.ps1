@@ -128,7 +128,7 @@ try {
 | apply-auto-cutover | **true** (CLI only; product YAML default remains **false**) |
 | windows | $WindowLabel |
 | coolSec | $CoolSec |
-| floors | living WRITE ~4676 / READ band ~52261…59430 (floor ~52261) / QG ~8333; mix sizing ref unchanged |
+| floors | living WRITE ~6052 (planning 6371) / READ band ~52261…59430 (floor ~52261) / QG ~8333 (upper ~11519); mix sizing ~9896 |
 | purpose | calm living-capacity stamp for production cutover decision |
 
 ## Gates
@@ -137,10 +137,10 @@ try {
   Write-Utf8 $NotesPath $hdr
 
   $stamps = @(
-    @{ Name = "$StampPrefix-write"; Clients = 48; Dur = $WriteDur; Mix = "WRITE_ONLY"; Floor = 4676; Living = 4921.975 },
+    @{ Name = "$StampPrefix-write"; Clients = 48; Dur = $WriteDur; Mix = "WRITE_ONLY"; Floor = 6052; Living = 6371 },
     @{ Name = "$StampPrefix-read";  Clients = 64; Dur = $ReadDur;  Mix = "READ_ONLY";  Floor = 52261; Living = 59430.467 },
-    @{ Name = "$StampPrefix-qg";    Clients = 64; Dur = $QgDur;    Mix = "CAPACITY";   Floor = 8333; Living = 11351.533 },
-    @{ Name = "$StampPrefix-mix";   Clients = 128; Dur = $MixDur;  Mix = "CAPACITY";   Floor = $null; Living = 9013.292 }
+    @{ Name = "$StampPrefix-qg";    Clients = 64; Dur = $QgDur;    Mix = "CAPACITY";   Floor = 8333; Living = 11519 },
+    @{ Name = "$StampPrefix-mix";   Clients = 128; Dur = $MixDur;  Mix = "CAPACITY";   Floor = $null; Living = 9896 }
   )
 
     $gi = 0

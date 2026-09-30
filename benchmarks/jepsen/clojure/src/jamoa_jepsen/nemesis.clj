@@ -48,14 +48,20 @@
                 (assoc op :type :info :value :healed)))
 
           :kill-proposer
-          (if mdc?
-            (do (info "nemesis multi-dc kill follower/voter (see MULTIDC_MODE)")
-                (sh! "bash" (str scripts "/nemesis-dc-link.sh") "kill-voter")
-                (assoc op :type :info :value :killed-multidc-target))
-            (do (info "nemesis kill proposer")
-                (sh! "bash" (str scripts "/nemesis-kill-proposer.sh")
+          ;; Unclean path wins on 1-DC and Multi-DC (long down, no purge).
+          (if (= "1" (System/getenv "JEPSEN_UNCLEAN_REVIVE"))
+            (do (info "nemesis unclean revive (long down, no purge)")
+                (sh! "bash" (str scripts "/nemesis-unclean-revive.sh")
                      (or (sql-client/current-proposer) ""))
-                (assoc op :type :info :value :killed-proposer)))
+                (assoc op :type :info :value :unclean-revive))
+            (if mdc?
+              (do (info "nemesis multi-dc kill follower/voter (see MULTIDC_MODE)")
+                  (sh! "bash" (str scripts "/nemesis-dc-link.sh") "kill-voter")
+                  (assoc op :type :info :value :killed-multidc-target))
+              (do (info "nemesis kill proposer")
+                  (sh! "bash" (str scripts "/nemesis-kill-proposer.sh")
+                       (or (sql-client/current-proposer) ""))
+                  (assoc op :type :info :value :killed-proposer))))
 
           :kill-dc-a
           (if mdc?

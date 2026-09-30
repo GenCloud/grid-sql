@@ -186,4 +186,4 @@ Rules for the client side:
 
 Bringing up 1+1 on one machine — [starting a cluster](../getting-started/start-cluster.md). Compose topologies — [Compose deployment](../configure-and-operate/operations/deploy-compose.md).
 
-**Related:** [Java client](java-client.md), [transactions](transactions.md), [SQL server](../configure-and-operate/configuration/sql-server.md), [durability](../configure-and-operate/configuration/durability.md).
+Next: [Java client](java-client.md), [transactions](transactions.md), [SQL server](../configure-and-operate/configuration/sql-server.md), [durability](../configure-and-operate/configuration/durability.md).

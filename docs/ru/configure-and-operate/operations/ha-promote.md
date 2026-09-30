@@ -12,6 +12,8 @@
 
 На практике клиенту важны три поля: `writerEligible` (можно ли писать на этот узел), `promoteHint` (куда смотреть, если текущий недоступен), `regionEpoch` (смена Active/Hold между ЦОД). Полный список полей `ServerMeta` — в [состоянии репликации](../../understand/replication-state.md).
 
+`writerEligible=false` бывает не только из‑за роли/epoch (Hold, Witness, `R` ниже порога). Пока локальный tip отстаёт от достижимых пиров (`peerTip > localTip` — unclean-revive / tip-fence), узел тоже не пишущий: сначала catch-up, потом снова `true`. Опережение живого follower без отставания tip само по себе eligibility не снимает.
+
 Узлы в одном ЦОД получают OpLog через асинхронную доставку журнала (Netty). После записи на пишущем видимость на реплике может отставать (`maxApplyLag` / отсутствующий ключ), пока apply не догонит — это **ожидаемый RPO**, не сбой Applier. См. [сеть репликации](../../understand/replication-network.md). Отставание смотрите в readiness (`applyLagStale`) и метриках; лабораторная сверка `GET /replication/compare` — не источник для выбора пишущего.
 
 ## Сценарий отказа пишущего узла
@@ -44,7 +46,7 @@ stateDiagram-v2
 |---------|-----------|
 | Ключ закрепления | `writerEligible` и `regionEpoch` (`regionEpoch=0` → только `writerEligible`) |
 | Живой канал | `PROMOTE_NOTIFY` / AUTH / ERROR обновляют мету закрепления |
-| Отказ посреди операции | Orchid reject или несовпадение `regionEpoch` → `rediscoverWriter()`; **не** молча крутить адрес (риск двух writer) |
+| Отказ посреди операции | Orchid reject или несовпадение `regionEpoch` → `rediscoverWriter()`; **не** молча крутить адрес (риск двух пишущих) |
 | Источник | Только мета протокола `ServerMeta` |
 
 ### Один ЦОД
@@ -56,7 +58,7 @@ grid://u:p@n1:15432,n2:15433,n3:15434/public?connectTimeoutMs=1000&retryMode=FIX
 | Слой | Поведение |
 |------|-----------|
 | `RemoteConnectionFactory` multi-host | TCP с закреплением; при connect / смерти канала пробует следующий `host:port` |
-| Обнаружение writer | `PROMOTE_NOTIFY` обновляет мету закрепления; AUTH / ERROR — тот же `ServerMeta` при reconnect |
+| Обнаружение пишущего | `PROMOTE_NOTIFY` обновляет мету закрепления; AUTH / ERROR — тот же `ServerMeta` при reconnect |
 | Отказ ORCHID / отставание / несовпадение площадки | **Не** переключать закрепление посреди операции. Вызывать `rediscoverWriter()`, когда прежнее закрепление теряет `writerEligible` или не совпадает `regionEpoch` |
 
 `maxTxContexts` — потолок логических сессий на **одном** TCP: у клиента по умолчанию **256**, на сервере жёсткий потолок канала **8** (Boot не поднимает из YAML). Это не пул из N сокетов.
@@ -114,7 +116,7 @@ flowchart TB
 
 Инциденты: [отказы](failures.md).
 
-## Связанные поверхности
+## Дальше
 
 Опциональное чтение с реплики (выкл. по умолчанию): [чтение с реплики](replica-reads.md). Поля readiness Actuator (`writerEligible`, `applyLagStale`, …): [мониторинг](../monitoring.md).
 

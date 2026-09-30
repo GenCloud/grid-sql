@@ -13,7 +13,7 @@ Product SPI lives in **`grid-sql-client`** (apps) and **`grid-server-core`** (en
 | `maxTxContexts=N exhausted` (wire code 5) | More than eight open sessions on one TCP (server hard-cap **8**); Boot does not raise it from YAML — open another `Connection` or close idle `TxContext`s ([SQL server](../configure-and-operate/configuration/sql-server.md)) |
 | Stale / `applyLagStale` on replica read | Catch-up lag; above threshold — **reject** (wait or read the writer) ([replica reads](../configure-and-operate/operations/replica-reads.md)) |
 | Write reject after role promotion | Client did not `rediscoverWriter()` — [promote](../configure-and-operate/operations/ha-promote.md) |
-| Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without rediscover |
+| Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without `rediscoverWriter()` |
 | TX / DML on a read URL | `readEndpoints` / `READ_REPLICA` are SELECT/EXPLAIN only; writes always go to the writer |
 | Health readiness DOWN at start | ORCHID not synced yet — expected; do not send traffic |
 
@@ -58,7 +58,7 @@ HA helpers on `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()
 - TX: `connection.begin()` → statements on `TxContext` → `commit()` / `rollback()`
 - Parallel TX = N `begin()` on one `Connection` (client `maxTxContexts`; server stops at **8**)
 
-See also: [java-client](../develop/java-client.md), [transactions](../develop/transactions.md).
+Next: [java-client](../develop/java-client.md), [transactions](../develop/transactions.md).
 
 ## Server SPI (`grid-server-core`)
 
@@ -81,4 +81,4 @@ JDBC in `grid-sql-client` (`jdbc:grid://`, package `org.genfork.grid.jdbc`) is a
 
 SQL **15432** / **15433** · replication **5615** / **5616**.
 
-**Related:** [sql fundamentals](../sql/fundamentals.md), [positioning](../getting-started/positioning.md).
+Next: [sql fundamentals](../sql/fundamentals.md), [positioning](../getting-started/positioning.md).

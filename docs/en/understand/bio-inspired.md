@@ -20,7 +20,7 @@ Paper BFT / QSS / OMNeT simulations are not imported into product runtime or con
 Phase coupling follows Yoshiki Kuramoto’s coupled-oscillator model (the author of the model, not a Grid algorithm name). In `OrchidNode`:
 
 1. Peers exchange `ORCHID_PHASE`: phase, ω, last committed seq, optional propose digest.
-2. Order parameter `R` measures sync among **seen live** peers, by default inside the local data center. Writes need `R ≥ order-threshold`.
+2. Order parameter `R` measures sync among **reachable live** peers, by default inside the local data center. Writes need `R ≥ order-threshold`.
 3. Solo write is allowed only when configured `N = 1` (empty peer list) — not after partition or `forgetPeer`.
 4. The writer is phase-ranked (`min(nodeId)` among self and reachable peers); competing proposes get NACK.
 5. `ORCHID_PROPOSE` carries the previous op seq. Majority on one digest commits. Journal confirm happens before commit broadcast.
@@ -34,9 +34,9 @@ Invariants and formal model: [ORCHID](orchid-consensus.md), [orchid-tla](../inte
 
 | Mechanism | Default | Role |
 |-----------|---------|------|
-| Phase order `R` | Peers in the local data center | Whether a write may be proposed at all |
+| Order parameter `R` | Peers in the local data center | Whether a write may be proposed at all |
 | Digest agreement | Configured local-DC peers plus self | Agreement on a concrete operation |
-| Cross-DC voters | `SYNC_VOTERS_ACROSS_DC` plus `cross-dc.voters` | Wait for remote digest ACK (with timeout) |
+| Cross-site voters | `SYNC_VOTERS_ACROSS_DC` plus `cross-dc.voters` | Wait for remote digest ACK (with timeout) |
 | WAN phase-coupling | Off (`cross-dc.phase-coupling`) | Only when enabled do remote phases enter `R` |
 
 Commit invariant: local sync **and** local digest quorum **and** (when configured) remote voter digests.
@@ -62,7 +62,7 @@ Why placement is separate from ORCHID:
 | Task | What we choose | Cost of a bad choice |
 |------|----------------|----------------------|
 | Shard / replica placement | which shard on which node / DC | hot-spot, extra RTT, OOM, long catch-up |
-| Cross-DC voter set | who ACKs digest synchronously | WAN on every write vs RPO risk |
+| Cross-site voter set | who ACKs digest synchronously | WAN on every write vs RPO risk |
 | Repair priority | which divergence to heal first | long inconsistency window |
 | Ship urgency / batching | when to flush journal segments | lag vs CPU/network |
 
@@ -126,12 +126,12 @@ Practical use: [overlay and swarm](overlay-and-swarm.md). Configuration: [overla
 
 See [storage](storage-sealed-gmap.md). Domain dump is `SealedGridMapService.dumpDomain`. `SnapshotService` is OpLog-range hydrate and markers only. `IndexCheckpointService` meta after rebuild is a **KEYS watermark** (plus optional CRC), not a full RAM BPTree restore; durable secondary index remains sealed `.sbpt`.
 
-## Cross-DC
+## Cross-site
 
-`ASYNC_SHIP` — async OpLog ship to remote-DC peers.  
-`SYNC_VOTERS_ACROSS_DC` — remote voters ACK digest before commit; catch-up-only nodes (`cross-dc.learners`) stay async. Local phase order `R` stays inside the DC by default (`cross-dc.phase-coupling` off).
+`ASYNC_SHIP` — async OpLog ship to remote-site peers.  
+`SYNC_VOTERS_ACROSS_DC` — remote voters ACK digest before commit; catch-up-only nodes (`cross-dc.learners`) stay async. Local order parameter `R` stays inside the site by default (`cross-dc.phase-coupling` off).
 
-Node maps: [multi-DC](../configure-and-operate/operations/multi-dc.md).
+Node maps: [multi-site](../configure-and-operate/operations/multi-dc.md).
 
 ## What is not in the system
 
@@ -140,7 +140,7 @@ Node maps: [multi-DC](../configure-and-operate/operations/multi-dc.md).
 - An `hdcrm.*` config namespace.
 - WAN phase-coupling as the default multi-DC consistency path.
 
-## Related
+## Next
 
 [ORCHID](orchid-consensus.md), [replication state](replication-state.md), [replication network](replication-network.md), [architecture overview](architecture-overview.md).
 

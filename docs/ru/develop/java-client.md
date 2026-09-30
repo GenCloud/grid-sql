@@ -77,7 +77,7 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<опции>
 
 Несколько хостов в authority — это **не** балансировка записи, а список кандидатов: клиент закрепляется на узле, который может писать (`writerEligible`) и меняет его только по `ServerMeta` / `PROMOTE_NOTIFY`. Подробнее — [повышение роли узла](../configure-and-operate/operations/ha-promote.md).
 
-### Смена writer в приложении
+### Смена пишущего в приложении
 
 После отказа узла **не** крутите следующий host в URL вручную.
 
@@ -133,7 +133,7 @@ Mono<Long> once = connection.prepare("upd_bal",
         .then(Mono.just(1L));
 ```
 
-Имя подготовленного оператора хранится в сессии (`TxContext` / соединение). Другая TCP-сессия его не видит. После работы вызывайте `deallocate`; закрытие соединения снимает все PREPARE этой сессии.
+Имя подготовленного оператора хранится в сессии (`TxContext` / соединение). Другая TCP-сессия его не видит. После работы вызывайте `deallocate`; закрытие соединения снимает все PREPARE этой сессии. Клиентский кэш маршрута по имени PREPARE ограничен (`prepareNameCacheMax`); на сервере expand VIEW/CTE имеет identity fast-path (без VIEW и без `WITH` — без ANTLR) и потолок кэша expand. Фабрика держит `lastServerMeta()` после AUTH / ERROR / `PROMOTE_NOTIFY` — memo для pin/`rediscoverWriter()`, без лишнего AUTH на каждый кадр.
 
 ### Помощники сессии
 
@@ -192,13 +192,13 @@ Mono<Void> parallel = Mono.zip(
 
 ## Чтение с реплик
 
-Если в URL указать `readEndpoints`, `ConnectionFactory.fromUrl` вернёт маршрутизирующее соединение: autocommit `SELECT` / `EXPLAIN` уйдут на наименее загруженную синхронную реплику, а записи, транзакции, DDL, `PREPARE` и `FOR UPDATE` — на writer. Классификацию делает общий ANTLR-классификатор, одинаковый на клиенте и на сервере.
+Если в URL указать `readEndpoints`, `ConnectionFactory.fromUrl` вернёт маршрутизирующее соединение: autocommit `SELECT` / `EXPLAIN` уйдут на наименее загруженную синхронную реплику, а записи, транзакции, DDL, `PREPARE` и `FOR UPDATE` — на пишущий узел. Классификацию делает общий ANTLR-классификатор, одинаковый на клиенте и на сервере.
 
 ```
 grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:15434&readPreference=REPLICA&maxReadConnections=2
 ```
 
-Чтение своих записей через реплику без лишнего обхода через writer не гарантируется. При превышении допустимого отставания реплика отвечает `REPLICA_READ_STALE`, и клиент меняет адрес реплики. Полный разбор политик, отказов и рисков — [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
+Чтение своих записей через реплику без лишнего обхода через пишущий не гарантируется. При превышении допустимого отставания реплика отвечает `REPLICA_READ_STALE`, и клиент меняет адрес реплики. Полный разбор политик, отказов и рисков — [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 
 ## Потоковая выдача больших выборок
 

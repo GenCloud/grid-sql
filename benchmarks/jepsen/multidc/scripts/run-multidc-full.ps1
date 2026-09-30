@@ -144,13 +144,24 @@ function Ensure-SqlClient {
   Push-Location $ROOT
   try { mvn -B -pl grid-sql-client -am install "-DskipTests"; if ($LASTEXITCODE -ne 0) { throw "mvn install failed" } } finally { Pop-Location }
 }
+function Release-JepsenPorts {
+  Write-Host "Releasing Jepsen host ports (1dc+multidc compose down)..."
+  $purge = Join-Path $JEPSEN_DIR "scripts\jepsen-purge.ps1"
+  if (Test-Path $purge) {
+    & $purge -Scope "all"
+  } else {
+    docker compose down -v --remove-orphans 2>$null
+  }
+}
+
 function Ensure-Cluster {
   Write-Host "Starting Multi-DC cluster..."
   Ensure-Image
-  Write-Host "Fresh cluster: jepsen-purge multidc data volumes (keep control m2)..."
+  # Scope=all: free leftover 1-DC binds (15432+) before Multi-DC up.
+  Write-Host "Fresh cluster: jepsen-purge all (free host ports; keep control m2)..."
   $purge = Join-Path $JEPSEN_DIR "scripts\jepsen-purge.ps1"
   if (Test-Path $purge) {
-    & $purge -Scope "multidc"
+    & $purge -Scope "all"
   } else {
     docker compose stop a1 a2 a3 b1 b2 2>$null
     docker compose rm -f a1 a2 a3 b1 b2 2>$null
@@ -249,27 +260,37 @@ function Run-Workload([string]$Workload) {
   $out | ForEach-Object { Write-Host $_ }
   Fetch-Store
   $text = ($out | Out-String)
-  # Prefer final Elle/Knossos summary - nested :timeline {:valid? true} must not count as PASS.
-  if ($text -match "Analysis invalid" -or $text -match ":valid\? false") {
-    $mFail = [regex]::Match($text, "LEIN_EXIT=(\d+)")
-    $codeFail = if ($mFail.Success) { [int]$mFail.Groups[1].Value } else { 1 }
-    if ($codeFail -eq 0) { $codeFail = 1 }
-    return @{ code = $codeFail; text = $text }
+  # Jepsen success banner / LEIN_EXIT=0 are authoritative. Nested ":valid? false" in
+  # analyzer trees must not override a green final result (GHA false FAIL).
+  if ($text -match "Everything looks good") {
+    return @{ code = 0; text = $text }
+  }
+  $mExit = [regex]::Match($text, "(?m)^LEIN_EXIT=(\d+)\s*$")
+  if (-not $mExit.Success) {
+    $mExit = [regex]::Match($text, "LEIN_EXIT=(\d+)")
+  }
+  if ($mExit.Success -and [int]$mExit.Groups[1].Value -eq 0) {
+    return @{ code = 0; text = $text }
+  }
+  if ($text -match "Analysis invalid") {
+    return @{ code = 1; text = $text }
+  }
+  if ($text -match "(?m)^ :valid\? false") {
+    return @{ code = 1; text = $text }
   }
   if ($text -match ":valid\? :unknown" -and $Workload -eq "register") {
     $off = Offline-Analyze-Register
     return @{ code = $off; text = $text }
   }
-  if ($text -match "Everything looks good") {
-    return @{ code = 0; text = $text }
-  }
   if ($text -match "(?m)^ :valid\? true") {
     return @{ code = 0; text = $text }
   }
-  $m = [regex]::Match($text, "LEIN_EXIT=(\d+)")
-  $code = if ($m.Success) { [int]$m.Groups[1].Value } elseif ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  if ($text -match "jepsen\.core \{.*:valid\? true\}") {
+    return @{ code = 0; text = $text }
+  }
+  $code = if ($mExit.Success) { [int]$mExit.Groups[1].Value } elseif ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
   # Knossos OOM (137) / missing validity on register: offline re-check with DB nodes stopped (16g).
-  if ($Workload -eq "register" -and $code -ne 0 -and $text -notmatch ":valid\? false" -and $text -notmatch "Analysis invalid") {
+  if ($Workload -eq "register" -and $code -ne 0 -and $text -notmatch "(?m)^ :valid\? false" -and $text -notmatch "Analysis invalid") {
     Write-Host "Register LEIN_EXIT=$code without definitive invalid - Offline Knossos fallback"
     $off = Offline-Analyze-Register
     return @{ code = $off; text = $text }
@@ -292,6 +313,7 @@ function Latency-Line([string]$Workload) {
   $lines = & $latScript -HistoryEdn $hist -Workload $Workload -WarmupSeconds 10 2>&1
   return (($lines | Out-String).Trim() -replace "`r?`n", " | ")
 }
+$script:ExitCode = 2
 try {
   Ensure-SqlClient
   Ensure-Cluster
@@ -306,11 +328,13 @@ try {
   $NOTES = "register=$REGISTER_OUTCOME; append=$APPEND_OUTCOME; time-limit=$TimeLimit"
   $Outcome = if ($reg.code -eq 0 -and $app.code -eq 0) { "PASS" } else { "FAIL" }
   Stamp-Multidc -Outcome $Outcome -Notes $NOTES -Reg $REGISTER_OUTCOME -App $APPEND_OUTCOME -Lat $Lat
-  if ($Outcome -eq "PASS") { exit 0 }
-  exit 1
+  $script:ExitCode = if ($Outcome -eq "PASS") { 0 } else { 1 }
 } catch {
   $msg = $_.Exception.Message
   Write-Host "ERROR: $msg"
   Stamp-Multidc -Outcome "FAIL" -Notes ("BLOCKED/ERROR: " + $msg) -Reg "-" -App "-" -Lat "n/a"
-  exit 2
+  $script:ExitCode = 2
+} finally {
+  Release-JepsenPorts
 }
+exit $script:ExitCode

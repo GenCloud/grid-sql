@@ -76,7 +76,7 @@ One line is one statement (Simplified SQL). An empty line, `quit` or `exit` leav
 - Not a JDBC replacement for applications or DBeaver — that is `org.genfork.grid.jdbc` in `grid-sql-client`.
 - Does not start a node: SQL TCP must already listen (`grid.sql-server.enabled`).
 
-## Related
+## Next
 
 - Bring a node up: [quick start](../getting-started/quick-start.md), [start a cluster](../getting-started/start-cluster.md)
 - URL and writer pin: [connect clients](../getting-started/connect-clients.md)

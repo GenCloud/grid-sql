@@ -150,7 +150,7 @@ ALTER TABLE orders DROP COLUMN channel;
 DROP TABLE IF EXISTS orders;
 ```
 
-Удаляет схему, данные и вторичные индексы таблицы.
+Удаляет схему, данные в карте/журнале и вторичные индексы таблицы. **Не** удаляет sealed-файлы (`.gmap` / `.sbpt` / `.sbm`) на hot path: явный retire (`purgeDomainArtifacts`) — отдельно, вне нагрузки DROP.
 
 ## Схемы
 
