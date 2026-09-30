@@ -70,6 +70,14 @@ Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и т�
 | `grid.sealed.window_remap` | Перекладки mmap-окон на крупных полезных нагрузках |
 | `grid.sealed.index_hit` / `index_miss` | Эффективность sealed вторичных индексов |
 
+| `grid.sealed.seal_fail_size` | Сбои seal (размер / IO) |
+| `grid.sealed.index_page_fault` | Page fault sealed `.sbpt` |
+| `grid.durability.ws_size` / `ws_max_entries` | Размер рабочего набора vs потолок |
+| `grid.durability.ws_evictions` | Вытеснения CLOCK |
+| `grid.durability.adaptive_mode` / `adaptive_mode_changes` | Режим adaptive disk-first |
+
+`grid.replication.sealed_misses` — промах WS с подгрузкой sealed; `grid.sealed.miss` — lookup в sealed reader. Смотреть вместе с `map_hit_rate` при настройке `working-set-max-entries`.
+
 SQL и блокировки:
 
 | Метрика | Назначение |

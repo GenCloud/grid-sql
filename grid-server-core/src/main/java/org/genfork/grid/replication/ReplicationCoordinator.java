@@ -32,6 +32,7 @@ import org.genfork.grid.replication.flow.ReplicationFlowControl;
 import org.genfork.grid.replication.join.SparseCatchUp;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.log.StreamOpLogAppender;
+import org.genfork.grid.replication.metrics.DurabilityMetrics;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.netty.NettyReplicationTransport;
 import org.genfork.grid.replication.orchid.DigestQuorum;
@@ -592,6 +593,44 @@ public class ReplicationCoordinator {
 
 	public boolean isAdaptiveDiskFirst() {
 		return sealedHydrateService != null && sealedHydrateService.isAdaptiveDiskFirst();
+	}
+
+	/**
+	 * Configured / effective hydrate mode label for readiness ({@code FULL}|{@code LAZY}|{@code n/a}).
+	 */
+	public String hydrateModeLabel() {
+		if (sealedHydrateService == null) {
+			return "n/a";
+		}
+		return sealedHydrateService.hydrateModeLabel();
+	}
+
+	/**
+	 * Adaptive mode ordinal for gauges; {@code -1} when adaptive off.
+	 */
+	public int adaptiveModeOrdinal() {
+		if (adaptiveDiskFirstController == null) {
+			return -1;
+		}
+		return adaptiveDiskFirstController.mode().ordinal();
+	}
+
+	public int workingSetLiveSize() {
+		if (adaptiveDiskFirstController != null) {
+			return adaptiveDiskFirstController.workingSetSize();
+		}
+		return DurabilityMetrics.wsSize();
+	}
+
+	public int workingSetMaxEntriesConfigured() {
+		if (sealedHydrateService == null) {
+			return 0;
+		}
+		return sealedHydrateService.workingSetMaxEntries();
+	}
+
+	public boolean isOplogArchiveEnabled() {
+		return opLogArchiveRoot != null;
 	}
 
 	/**

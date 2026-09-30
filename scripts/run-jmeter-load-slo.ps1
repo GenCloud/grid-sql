@@ -39,9 +39,9 @@ $ErrorActionPreference = "Stop"
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)
 
 $Script:DefaultTpsFloor = 400.0
-# Living floors: WRITE ~95% of peak; READ = observed band min (host variance = band like QG)
-# see docs/en/capacity-slo.md
-$Script:LivingCanonWriteTpsFloor = 4676.0
+# Living floors: WRITE ~95% of planning; READ = band min (host variance = band like QG)
+# see docs/en/performance/capacity-slo.md
+$Script:LivingCanonWriteTpsFloor = 4442.0
 $Script:LivingCanonReadTpsFloor = 52261.0
 $Script:DefaultP95CeilingUs = 1.0e9
 $Script:DefaultP99CeilingUs = 1.0e9

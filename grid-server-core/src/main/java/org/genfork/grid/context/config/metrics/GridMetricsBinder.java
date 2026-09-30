@@ -26,6 +26,7 @@ import org.genfork.grid.metrics.SqlTxMetrics;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.crossdc.CrossDcPublisher;
+import org.genfork.grid.replication.metrics.DurabilityMetrics;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.snapshot.sealed.SealedMetrics;
@@ -66,6 +67,13 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_SEALED_STICKY_REJECTED = "grid.sealed.sticky_rejected";
 	public static final String METRIC_SEALED_INDEX_HIT = "grid.sealed.index_hit";
 	public static final String METRIC_SEALED_INDEX_MISS = "grid.sealed.index_miss";
+	public static final String METRIC_SEALED_SEAL_FAIL_SIZE = "grid.sealed.seal_fail_size";
+	public static final String METRIC_SEALED_INDEX_PAGE_FAULT = "grid.sealed.index_page_fault";
+	public static final String METRIC_ADAPTIVE_MODE_CHANGES = "grid.durability.adaptive_mode_changes";
+	public static final String METRIC_ADAPTIVE_MODE = "grid.durability.adaptive_mode";
+	public static final String METRIC_WS_SIZE = "grid.durability.ws_size";
+	public static final String METRIC_WS_MAX_ENTRIES = "grid.durability.ws_max_entries";
+	public static final String METRIC_WS_EVICTIONS = "grid.durability.ws_evictions";
 
 	public static final String METRIC_SQL_EXECUTIONS = "grid.sql.executions";
 	public static final String METRIC_SQL_COMMITS = "grid.sql.tx_commits";
@@ -146,6 +154,27 @@ public final class GridMetricsBinder implements MeterBinder {
 		FunctionCounter.builder(METRIC_SEALED_INDEX_HIT, SealedMetrics.class, m -> SealedMetrics.SEALED_INDEX_HIT.get())
 				.register(registry);
 		FunctionCounter.builder(METRIC_SEALED_INDEX_MISS, SealedMetrics.class, m -> SealedMetrics.SEALED_INDEX_MISS.get())
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_SEAL_FAIL_SIZE, SealedMetrics.class, m -> SealedMetrics.SEAL_FAIL_SIZE.get())
+				.description("Seal dump failures due to size / IO")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INDEX_PAGE_FAULT, SealedMetrics.class, m -> SealedMetrics.SEALED_INDEX_PAGE_FAULT.get())
+				.description("Sealed .sbpt page faults")
+				.register(registry);
+		FunctionCounter.builder(METRIC_ADAPTIVE_MODE_CHANGES, ReplicationMetrics.class, m -> ReplicationMetrics.adaptiveModeChanges())
+				.description("Adaptive disk-first mode transitions")
+				.register(registry);
+		Gauge.builder(METRIC_ADAPTIVE_MODE, this, GridMetricsBinder::sampleAdaptiveModeOrdinal)
+				.description("Adaptive disk-first mode ordinal (-1 if off)")
+				.register(registry);
+		Gauge.builder(METRIC_WS_SIZE, DurabilityMetrics.class, m -> DurabilityMetrics.wsSize())
+				.description("Working-set live entry count")
+				.register(registry);
+		Gauge.builder(METRIC_WS_MAX_ENTRIES, DurabilityMetrics.class, m -> DurabilityMetrics.wsMaxEntries())
+				.description("Working-set max entries cap")
+				.register(registry);
+		FunctionCounter.builder(METRIC_WS_EVICTIONS, DurabilityMetrics.class, m -> DurabilityMetrics.wsEvictions())
+				.description("Working-set CLOCK evictions")
 				.register(registry);
 
 		FunctionCounter.builder(METRIC_SQL_EXECUTIONS, SqlTxMetrics.class, m -> SqlTxMetrics.executions())
@@ -232,6 +261,14 @@ public final class GridMetricsBinder implements MeterBinder {
 		}
 		final PlacementHint hint = swarm.getLastHint().get();
 		return hint == null ? SWARM_HINT_ABSENT : (double) hint.ordinal();
+	}
+
+	private double sampleAdaptiveModeOrdinal() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled() || !coordinator.isAdaptiveDiskFirst()) {
+			return SWARM_HINT_ABSENT;
+		}
+		return (double) coordinator.adaptiveModeOrdinal();
 	}
 
 	private HomologousRepair homologousRepairOrNull() {

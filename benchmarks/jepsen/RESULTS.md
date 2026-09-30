@@ -6,18 +6,15 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-09-30-jepsen-full |
-| date | 2026-09-30T11:12:58+03:00 |
-| git | unknown |
+| stamp | 2026-09-30-sess-jepsen-1dc |
+| date | 2026-09-30T16:58:57.4657771+03:00 |
+| git | dac901a |
 | host | DESKTOP-4IC511D |
 | mode | `full-jepsen` |
 | outcome | `PASS` |
 | notes | register=PASS; append=PASS |
 
 ## History
-
-PASS-only (FAIL and empty duplicate headers removed).
-
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
 | Mode | register | append | outcome |
 |------|----------|--------|---------|
@@ -437,4 +434,14 @@ Details + p50/p95/p99: [multidc/RESULTS.md](multidc/RESULTS.md).
 - chaos-it: not-run
 - full-jepsen: PASS
 - command: run-jepsen.sh register+append (time-limit=60)
+- notes: register=PASS; append=PASS
+
+### 2026-09-30-sess-jepsen-1dc
+- mode: full-jepsen
+- outcome: PASS
+- git: dac901a
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=30)
 - notes: register=PASS; append=PASS

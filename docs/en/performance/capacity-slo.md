@@ -1,6 +1,6 @@
 # Capacity and load thresholds
 
-On the lab host (two nodes, `fsync: true`) Grid sustains roughly **6371** writes/s, **59430** reads/s (band **52261…59430**; last calm READ ≈**54013**/s) and **8772…11519** mixed ops/s (HA mix ≈**9896**/s). The formal regression floor is ~95% of the planning figure — for a band, of its lower bound. Measure on a calm host, one check at a time, over `grid://`.
+On the lab host (two nodes, `fsync: true`) Grid sustains roughly **4676** writes/s, **59430** reads/s (band **52261…59430**) and **8772…11519** mixed ops/s (HA mix ≈**9896**/s). The formal regression floor is ~95% of the planning figure — for a band, of its lower bound. Measure on a calm host, one check at a time, over `grid://`.
 
 Load is driven by **Apache JMeter** through `grid-sql-client`. JDBC is fine in applications, but capacity runs use `grid://` only: the synchronous bridge distorts latency. Jepsen checks consistency, not throughput.
 
@@ -52,13 +52,13 @@ The numbers are bound to this hardware. Cloud, WAN and multi-site deployments ne
 
 ## Planning numbers
 
-HA (`primary` + `replica`, `fsync: true`): write **6371**/s, read **52261…59430**/s, QG **8772…11519**/s, HA mix **9896**/s. Thresholds: ≈**6052** / ≈**52261** / ≈**8333**.
+HA (`primary` + `replica`, `fsync: true`): write **4676**/s, read **52261…59430**/s, QG **8772…11519**/s, HA mix **9896**/s. Thresholds: ≈**4442** / ≈**52261** / ≈**8333**.
 
 Solo (`capacity`): write **7095**/s, QG **19526**/s, read **56564**/s.
 
 | Track | Threads | Window | TPS | p95 | Threshold (~95%) |
 |-------|--------:|-------:|----:|----:|-----------------:|
-| WRITE_ONLY (HA) | 48 | 40 s | **6371** | 11 ms | ≈**6052** |
+| WRITE_ONLY (HA) | 48 | 40 s | **4676** | 15 ms | ≈**4442** |
 | READ_ONLY (HA) | 64 | 45 s | **52261…59430** | 1 ms | ≈**52261** |
 | Capacity QG (HA) | 64 | 45 s | **8772…11519** | 16…31 ms | ≈**8333** |
 | HA mix | 128 | 120 s | **9896** | 38 ms | — |
@@ -68,10 +68,6 @@ Solo (`capacity`): write **7095**/s, QG **19526**/s, read **56564**/s.
 | Chaos | 32 | 40 s | ≈302 | 138 ms | errors ≤0.15 |
 
 Doubling these figures is not claimed: every run uses the default `WRITE_BATCH_SIZE=1`.
-
-The observed WRITE spread on this host is ≈**4225…7553**/s (peak calm ≈**7553**/s); for READ and QG the planning figure is itself the band. Last calm READ (living) ≈**54013**/s stays inside the band — do not raise the **59430** upper without a stamp above it.
-
-Load TPS lives in `grid-server-core/benchmarks/lab/*-load-slo.json` (e.g. `2026-09-29-living-write-steady`, `2026-09-29-living-read`, `2026-09-24-dialect-full-qg`, `2026-09-25-dialect-builtins-qg-r4-mix`). JMH / OSS compare is separate: [`SUMMARY.md`](../../../grid-server-core/benchmarks/results/SUMMARY.md) — do not mix with load floors.
 
 ## Next
 

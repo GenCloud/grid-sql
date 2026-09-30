@@ -58,6 +58,11 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 	public static final String DETAIL_REPAIR_APPLIED = "repairApplied";
 	public static final String DETAIL_RPO_ESTIMATE_MS = "rpoEstimateMs";
 	public static final String DETAIL_SWARM_HINT = "swarmHint";
+	public static final String DETAIL_HYDRATE_MODE = "hydrateMode";
+	public static final String DETAIL_ADAPTIVE_MODE = "adaptiveMode";
+	public static final String DETAIL_WORKING_SET_MAX = "workingSetMaxEntries";
+	public static final String DETAIL_WORKING_SET_SIZE = "workingSetSize";
+	public static final String DETAIL_OPLOG_ARCHIVE = "oplogArchiveEnabled";
 
 	private static final String REASON_SQL_TCP_DOWN = "sql_tcp_down";
 	private static final String REASON_ORCHID_NOT_SYNCED = "orchid_not_synced";
@@ -149,6 +154,11 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 			builder.withDetail(DETAIL_REPAIR_APPLIED, STATUS_N_A);
 			builder.withDetail(DETAIL_RPO_ESTIMATE_MS, STATUS_N_A);
 			builder.withDetail(DETAIL_SWARM_HINT, STATUS_N_A);
+			builder.withDetail(DETAIL_HYDRATE_MODE, STATUS_N_A);
+			builder.withDetail(DETAIL_ADAPTIVE_MODE, STATUS_N_A);
+			builder.withDetail(DETAIL_WORKING_SET_MAX, STATUS_N_A);
+			builder.withDetail(DETAIL_WORKING_SET_SIZE, STATUS_N_A);
+			builder.withDetail(DETAIL_OPLOG_ARCHIVE, STATUS_N_A);
 			return;
 		}
 		final ReplicationNodeState state = coordinator.getNodeState();
@@ -166,5 +176,13 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 				? null
 				: swarm.getLastHint().get();
 		builder.withDetail(DETAIL_SWARM_HINT, hint == null ? STATUS_N_A : hint.name());
+		builder.withDetail(DETAIL_HYDRATE_MODE, coordinator.hydrateModeLabel());
+		builder.withDetail(DETAIL_ADAPTIVE_MODE,
+				coordinator.isAdaptiveDiskFirst()
+						? coordinator.adaptiveModeOrdinal()
+						: STATUS_N_A);
+		builder.withDetail(DETAIL_WORKING_SET_MAX, coordinator.workingSetMaxEntriesConfigured());
+		builder.withDetail(DETAIL_WORKING_SET_SIZE, coordinator.workingSetLiveSize());
+		builder.withDetail(DETAIL_OPLOG_ARCHIVE, coordinator.isOplogArchiveEnabled());
 	}
 }

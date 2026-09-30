@@ -71,6 +71,14 @@ Storage and reads:
 | `grid.sealed.window_remap` | Mapping-window churn on large payloads |
 | `grid.sealed.index_hit` / `index_miss` | Sealed secondary index effectiveness |
 
+| `grid.sealed.seal_fail_size` | Seal dump failures (size / IO) |
+| `grid.sealed.index_page_fault` | Sealed `.sbpt` page faults |
+| `grid.durability.ws_size` / `ws_max_entries` | Working-set live size vs cap |
+| `grid.durability.ws_evictions` | CLOCK working-set evictions |
+| `grid.durability.adaptive_mode` / `adaptive_mode_changes` | Adaptive disk-first mode ordinal / transitions |
+
+`grid.replication.sealed_misses` counts working-set misses that load from sealed; `grid.sealed.miss` counts sealed reader lookups. Use both with `map_hit_rate` when sizing `working-set-max-entries`.
+
 SQL and locking:
 
 | Metric | Use |

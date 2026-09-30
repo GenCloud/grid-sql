@@ -1,3 +1,3 @@
 # Результаты производительности
 
-Перенесено в [performance/results.md](performance/results.md).
+Перенесено РІ [performance/results.md](performance/results.md).

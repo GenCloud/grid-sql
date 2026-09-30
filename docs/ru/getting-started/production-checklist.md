@@ -58,8 +58,8 @@
 | Проверка | Конечная точка или метрика | Зачем |
 |----------|----------------------------|-------|
 | Настроена проба живости | `/health/liveness` (`gridLiveness`) | Процесс и исполнитель логики живы |
-| Настроена и учитывается проба готовности | `/health/readiness` (`gridReadiness`) | SQL-порт слушает, а при включённой репликации ORCHID синхронизирован. Неготовый узел не должен принимать трафик |
-| Настроен сбор метрик Prometheus | `/prometheus` | `grid.replication.orchid_r`, `repair_issued` и `repair_applied`, `rpo_estimate_ms` |
+| Настроена и учитывается проба готовности | `/health/readiness` (`gridReadiness`) | SQL TCP + ORCHID; details: hydrateMode, workingSetSize, oplogArchiveEnabled (критерии UP/DOWN те же) |
+| Настроен сбор метрик Prometheus | `/prometheus` | orchid_r, repair, RPO, sealed/WS (`grid.durability.ws_*`), adaptive |
 | Определены оповещения | См. ниже | Сигналы, предшествующие отказу |
 | Понятно разделение стадий записи | `orchidWaitP99Ns` против `oplogFsyncP99Ns` | Рост ORCHID указывает на сеть между узлами или порог `R`, рост fsync — на диск |
 

@@ -176,6 +176,11 @@ public final class SealedHydrateService {
 		return adaptiveDiskFirstController != null && adaptiveDiskFirstController.forceLazySemantics();
 	}
 
+	/** Configured hydrate mode string ({@code FULL} or {@code LAZY}). */
+	public String hydrateModeLabel() {
+		return hydrateMode;
+	}
+
 	public int workingSetMaxEntries() {
 		if (adaptiveDiskFirstController != null) {
 			return adaptiveDiskFirstController.effectiveMaxEntries();

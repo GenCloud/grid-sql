@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.mem.stage;
 
+import org.genfork.grid.replication.metrics.DurabilityMetrics;
 import org.genfork.grid.utils.ArrayUtil;
 
 import java.util.ArrayList;
@@ -52,6 +53,7 @@ public final class WorkingSetBudget {
 	public WorkingSetBudget(int maxEntries) {
 		this.maxEntries = new AtomicInteger(Math.max(0, maxEntries));
 		this.entries = new ConcurrentHashMap<>(16);
+		DurabilityMetrics.setWsMaxEntries(this.maxEntries.get());
 	}
 
 	public int maxEntries() {
@@ -65,6 +67,7 @@ public final class WorkingSetBudget {
 	public void setMaxEntries(int newMax) {
 		final int capped = Math.max(0, newMax);
 		maxEntries.set(capped);
+		DurabilityMetrics.setWsMaxEntries(capped);
 		if (capped > 0 && size.get() > capped) {
 			drainOverflow();
 		}
@@ -101,6 +104,7 @@ public final class WorkingSetBudget {
 			return;
 		}
 		final int n = size.incrementAndGet();
+		DurabilityMetrics.setWsSize(n);
 		if (n > cap + DRAIN_HYSTERESIS) {
 			drainOverflow();
 		}
@@ -112,7 +116,7 @@ public final class WorkingSetBudget {
 		}
 		final Meta removed = entries.remove(new KeyRef(key));
 		if (removed != null) {
-			size.decrementAndGet();
+			DurabilityMetrics.setWsSize(size.decrementAndGet());
 		}
 	}
 
@@ -150,9 +154,11 @@ public final class WorkingSetBudget {
 				break;
 			}
 		}
+		DurabilityMetrics.recordWsEvictions(victims.size());
 		for (Victim v : victims) {
 			handler.accept(v.shard, v.key);
 		}
+		DurabilityMetrics.setWsSize(size.get());
 	}
 
 	public int size() {

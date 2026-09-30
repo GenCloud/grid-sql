@@ -58,8 +58,8 @@ Full reference: [security](../configure-and-operate/operations/security.md).
 | Check | Endpoint or metric | Why |
 |-------|--------------------|-----|
 | Liveness probe wired | `/health/liveness` (`gridLiveness`) | Process and logic executor alive |
-| Readiness probe wired and honoured | `/health/readiness` (`gridReadiness`) | SQL TCP bound, and with replication on, ORCHID synced. A node that is not ready must not take traffic |
-| Prometheus scrape configured | `/prometheus` | `grid.replication.orchid_r`, `repair_issued` / `repair_applied`, `rpo_estimate_ms` |
+| Readiness probe wired and honoured | `/health/readiness` (`gridReadiness`) | SQL TCP + ORCHID synced; details include `hydrateMode`, `workingSetSize`, `oplogArchiveEnabled` (UP/DOWN criteria unchanged) |
+| Prometheus scrape configured | `/prometheus` | `orchid_r`, repair, RPO, sealed miss/WS (`grid.durability.ws_*`), adaptive mode |
 | Alerts defined | See below | Signals that precede an outage |
 | Write-path stage split understood | `orchidWaitP99Ns` vs `oplogFsyncP99Ns` | ORCHID rising points at peer network or the `R` threshold; fsync rising points at disk |
 
