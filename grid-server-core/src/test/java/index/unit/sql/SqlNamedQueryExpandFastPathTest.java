@@ -20,6 +20,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 /**
@@ -39,16 +41,10 @@ class SqlNamedQueryExpandFastPathTest {
 
 	@Test
 	void withClauseDoesNotUseIdentityReference() {
-		final String sql = "WITH c AS (SELECT 1 AS id) SELECT * FROM c";
-		try {
-			final String out = SqlNamedQueryExpand.expand(sql, Map.of());
-			org.junit.jupiter.api.Assertions.assertNotSame(sql, out,
-					"WITH must enter expandUncached (not identity fast-path)");
-		} catch (RuntimeException ex) {
-			// Entering expandUncached is enough to prove the fast-path was skipped.
-			org.junit.jupiter.api.Assertions.assertFalse(
-					ex.getMessage() != null && ex.getMessage().contains("identity"),
-					ex.toString());
-		}
+		// Valid CTE body (FROM required) — expand must leave identity fast-path and inline.
+		final String sql = "WITH c AS (SELECT id FROM t) SELECT * FROM c";
+		final String out = SqlNamedQueryExpand.expand(sql, Map.of());
+		assertNotSame(sql, out, "WITH must enter expandUncached (not identity fast-path)");
+		assertEquals("SELECT id FROM t", out);
 	}
 }

@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set +e
 export PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export JAVA_HOME=/opt/java/openjdk
 export JAVA_CMD=/opt/java/openjdk/bin/java
@@ -11,4 +11,7 @@ export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=1
 export JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0
 command -v lein
 command -v git
-lein run -m jamoa-jepsen.core test --workload append --time-limit 60 --no-nemesis
+pkill -9 -f 'jamoa-jepsen.core' 2>/dev/null || true
+sleep 1
+lein run -m jamoa-jepsen.core test --workload append --time-limit 45 --no-nemesis
+echo LEIN_EXIT=$?

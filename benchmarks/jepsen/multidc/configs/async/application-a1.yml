@@ -45,7 +45,6 @@ grid:
         - { id: a3, host: a3, port: 5617, dc: dc-a }
         - { id: b1, host: b1, port: 5618, dc: dc-b }
         - { id: b2, host: b2, port: 5619, dc: dc-b }
-        - { id: w1, host: w1, port: 5620, dc: witness }
     cross-dc:
       enabled: true
       local-dc: dc-a

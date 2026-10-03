@@ -16,6 +16,7 @@
 package org.genfork.grid.sql.jmeter;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -29,13 +30,16 @@ import org.apache.jmeter.threads.JMeterContextService;
 import org.apache.jmeter.threads.JMeterVariables;
 import org.genfork.grid.sql.client.Connection;
 import org.genfork.grid.sql.client.ConnectionOptions;
+import org.genfork.grid.sql.client.HostEndpoint;
 import org.genfork.grid.sql.client.GridSqlUri;
+import org.genfork.grid.sql.client.ReadPreference;
 import org.genfork.grid.sql.client.RemoteConnection;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
 import org.genfork.grid.sql.client.Result;
 import org.genfork.grid.sql.client.Row;
 import org.genfork.grid.sql.client.RowMetadata;
 import org.genfork.grid.sql.client.TxContext;
+import org.genfork.grid.sql.client.sync.SyncAwait;
 import reactor.core.publisher.Mono;
 
 /**
@@ -52,6 +56,10 @@ public final class GridSqlJmeterSession {
 	public static final String VAR_SESSION = "grid.sql.jmeter.session";
 
 	public static final String PARAM_GRID_URL = "GRID_URL";
+	/** Optional primary URL for setUp DDL/seed when load targets a replica SQL port. */
+	public static final String PARAM_SETUP_GRID_URL = "SETUP_GRID_URL";
+	/** JMeter -JREAD_REPLICA_SESSION=true: open READ_REPLICA pool to load URL host (swarm replica stamp). */
+	public static final String PROP_READ_REPLICA_SESSION = "READ_REPLICA_SESSION";
 	public static final String PARAM_USER = "USER";
 	public static final String PARAM_PASSWORD = "PASSWORD";
 	public static final String PARAM_CONNECT_TIMEOUT_MS = "CONNECT_TIMEOUT_MS";
@@ -151,6 +159,8 @@ public final class GridSqlJmeterSession {
 	private final int stripeThreads;
 	private final int writeBatchSize;
 	private final GridSqlLoadSqlTemplates sqlTemplates;
+	/** READ_REPLICA pool: obtain/park per op so least-inflight can fan out across the ring. */
+	private final boolean readReplicaBalance;
 	private final ConcurrentLinkedQueue<CompletableFuture<Void>> inflight = new ConcurrentLinkedQueue<>();
 
 	private GridSqlJmeterSession(
@@ -162,7 +172,8 @@ public final class GridSqlJmeterSession {
 			MixProfile mixProfile,
 			int stripeThreads,
 			int writeBatchSize,
-			GridSqlLoadSqlTemplates sqlTemplates
+			GridSqlLoadSqlTemplates sqlTemplates,
+			boolean readReplicaBalance
 	) {
 		this.factory = factory;
 		this.connection.set(connection);
@@ -173,6 +184,7 @@ public final class GridSqlJmeterSession {
 		this.stripeThreads = Math.max(1, stripeThreads);
 		this.writeBatchSize = clampWriteBatchSize(writeBatchSize);
 		this.sqlTemplates = sqlTemplates == null ? GridSqlLoadSqlTemplates.defaults() : sqlTemplates;
+		this.readReplicaBalance = readReplicaBalance;
 	}
 
 	public static GridSqlJmeterSession open(
@@ -222,6 +234,26 @@ public final class GridSqlJmeterSession {
 			int writeBatchSize,
 			GridSqlLoadSqlTemplates sqlTemplates
 	) {
+		return open(
+				rawUrl, paramUser, paramPassword, connectTimeoutMs, opTimeoutMs,
+				keySpace, seedRows, mixProfile, stripeThreads, writeBatchSize,
+				sqlTemplates, readReplicaSessionEnabled());
+	}
+
+	public static GridSqlJmeterSession open(
+			String rawUrl,
+			String paramUser,
+			String paramPassword,
+			int connectTimeoutMs,
+			int opTimeoutMs,
+			int keySpace,
+			int seedRows,
+			MixProfile mixProfile,
+			int stripeThreads,
+			int writeBatchSize,
+			GridSqlLoadSqlTemplates sqlTemplates,
+			boolean readReplicaSession
+	) {
 		final String url = rawUrl == null ? DEFAULT_GRID_URL : rawUrl.trim();
 		if (url.toLowerCase(Locale.ROOT).startsWith(JDBC_SCHEME_PREFIX)) {
 			throw new IllegalArgumentException("Use product grid:// URL, not jdbc:grid:// (got: " + url + ")");
@@ -237,22 +269,94 @@ public final class GridSqlJmeterSession {
 				.connectTimeout(Duration.ofMillis(Math.max(1, connectTimeoutMs)))
 				.execTimeout(opTimeout)
 				.build();
-		final RemoteConnectionFactory factory = new RemoteConnectionFactory(
-				uri.endpoints(), user, password, options, uri.schema());
-		final Connection conn = factory.obtain()
-				.timeout(Duration.ofMillis(Math.max(1, connectTimeoutMs)))
-				.toFuture()
-				.join();
-		if (conn == null) {
-			factory.dispose();
-			throw new IllegalStateException("RemoteConnectionFactory.obtain() returned null");
-		}
 		final int stripes = stripeThreads > 0
 				? stripeThreads
 				: resolveStripeThreads();
+		final RemoteConnectionFactory factory = resolveFactory(
+				url, uri, user, password, options, readReplicaSession, stripes);
+		final Duration connectTimeout = Duration.ofMillis(Math.max(1, connectTimeoutMs));
+		final Connection conn;
+		try {
+			conn = SyncAwait.await(factory.obtainStage(), connectTimeout);
+		} catch (RuntimeException ex) {
+			factory.dispose();
+			throw ex;
+		}
+		if (conn == null) {
+			factory.dispose();
+			throw new IllegalStateException("RemoteConnectionFactory.obtainStage() returned null");
+		}
+		final boolean balanceReads = factory.factoryRole().isReadReplica();
 		return new GridSqlJmeterSession(
 				factory, conn, opTimeout, Math.max(1, keySpace), Math.max(0, seedRows),
-				mixProfile, stripes, writeBatchSize, sqlTemplates);
+				mixProfile, stripes, writeBatchSize, sqlTemplates, balanceReads);
+	}
+
+	private static RemoteConnectionFactory resolveFactory(
+			String url,
+			GridSqlUri uri,
+			String user,
+			String password,
+			ConnectionOptions options,
+			boolean readReplicaSession,
+			int stripeHint
+	) {
+		if (uri.options().readPreference() == ReadPreference.REPLICA
+				&& !uri.options().readEndpoints().isEmpty()) {
+			return RemoteConnectionFactory.createReadFactory(url);
+		}
+		if (readReplicaSession) {
+			return RemoteConnectionFactory.createReadFactory(
+					augmentReplicaReadUrl(url, uri, stripeHint));
+		}
+		return new RemoteConnectionFactory(uri.endpoints(), user, password, options, uri.schema());
+	}
+
+	private static boolean readReplicaSessionEnabled() {
+		final String flag = System.getProperty(PROP_READ_REPLICA_SESSION, "false");
+		return flag != null && Boolean.parseBoolean(flag.trim());
+	}
+
+	/**
+	 * Build read URL: {@code readEndpoints} = load hosts ∪ SETUP_GRID_URL authority (proposer+replica).
+	 * {@code maxReadConnections} sized to the thread group so least-inflight can use both nodes.
+	 */
+	private static String augmentReplicaReadUrl(String url, GridSqlUri uri, int stripeHint) {
+		if (uri.endpoints().isEmpty()) {
+			throw new IllegalArgumentException("READ_REPLICA_SESSION requires a host in grid:// URL");
+		}
+		final StringBuilder ring = new StringBuilder();
+		appendEndpointsCsv(ring, uri.endpoints());
+		final String setupRaw = System.getProperty(PARAM_SETUP_GRID_URL, "");
+		if (setupRaw != null && !setupRaw.isBlank()) {
+			final GridSqlUri setupUri = GridSqlUri.parse(setupRaw.trim());
+			appendEndpointsCsv(ring, setupUri.endpoints());
+		}
+		appendEndpointsCsv(ring, uri.options().readEndpoints());
+		final int ringCount = Math.max(1, ring.toString().split(",").length);
+		final int readCap = Math.max(ringCount, Math.max(1, stripeHint));
+		final String sep = url.contains("?") ? "&" : "?";
+		return url + sep + "readPreference=REPLICA&readEndpoints=" + ring
+				+ "&maxReadConnections=" + readCap;
+	}
+
+	private static void appendEndpointsCsv(StringBuilder ring, List<HostEndpoint> endpoints) {
+		if (endpoints == null || endpoints.isEmpty()) {
+			return;
+		}
+		for (HostEndpoint ep : endpoints) {
+			if (ep == null) {
+				continue;
+			}
+			final String token = ep.host() + ":" + ep.port();
+			if (ring.indexOf(token) >= 0) {
+				continue;
+			}
+			if (ring.length() > 0) {
+				ring.append(',');
+			}
+			ring.append(token);
+		}
 	}
 
 	private static int clampWriteBatchSize(int writeBatchSize) {
@@ -352,6 +456,19 @@ public final class GridSqlJmeterSession {
 
 	public CompletableFuture<Void> startQuery(String sql) {
 		ensureLive();
+		if (readReplicaBalance) {
+			final Mono<Void> pipeline = Mono.usingWhen(
+					factory.obtain(),
+					c -> c.createStatement(sql)
+							.execute()
+							.concatMap(r -> r.map((Row row, RowMetadata meta) -> Boolean.TRUE))
+							.then(),
+					Connection::close,
+					(c, _) -> c.close(),
+					Connection::close
+			);
+			return GridSqlJmeterAwait.toTimedFuture(pipeline, opTimeout);
+		}
 		final Connection c = connection.get();
 		final Mono<Void> pipeline = c.createStatement(sql)
 				.execute()
@@ -492,16 +609,9 @@ public final class GridSqlJmeterSession {
 	private void reconnectForSetup() throws Exception {
 		final Connection old = connection.getAndSet(null);
 		if (old != null) {
-			try {
-				old.close().timeout(opTimeout).toFuture().join();
-			} catch (Exception ignored) {
-				// best-effort close before reopen
-			}
+			parkQuietly(old);
 		}
-		final Connection next = factory.obtain()
-				.timeout(opTimeout)
-				.toFuture()
-				.get(opTimeout.toMillis(), TimeUnit.MILLISECONDS);
+		final Connection next = SyncAwait.await(factory.obtainStage(), opTimeout);
 		connection.set(next);
 	}
 
@@ -537,11 +647,7 @@ public final class GridSqlJmeterSession {
 		}
 		final Connection c = connection.getAndSet(null);
 		if (c != null) {
-			try {
-				c.close().timeout(opTimeout).toFuture().join();
-			} catch (Exception ignored) {
-				// harness close best-effort
-			}
+			parkQuietly(c);
 		}
 		try {
 			factory.dispose();
@@ -549,6 +655,16 @@ public final class GridSqlJmeterSession {
 			// harness dispose best-effort
 		}
 		unbind();
+	}
+
+	private void parkQuietly(Connection c) {
+		try {
+			if (c instanceof RemoteConnection remote) {
+				SyncAwait.awaitVoid(remote.transport().parkStage(), opTimeout, null);
+			}
+		} catch (Exception ignored) {
+			// harness close best-effort
+		}
 	}
 
 	private void ensureLive() {

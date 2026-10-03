@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.sql.exec;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -23,6 +24,7 @@ import java.util.function.Function;
 
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.SqlType;
+import org.genfork.grid.metrics.DistributedQueryMetrics;
 import org.genfork.grid.query.adaptive.QueryHeaviness;
 import org.genfork.grid.query.adaptive.QueryHeavinessEstimator;
 import org.genfork.grid.query.filters.FilterCondition;
@@ -60,6 +62,14 @@ public final class SqlExplainService {
 	private static final String STMT_SUFFIX = "Sql";
 	private static final String CAMEL_BOUNDARY = "(?<=[a-z0-9])(?=[A-Z])";
 	private static final String DRY_PLAN_DETAIL = "dry=true; side-effects=none";
+	private static final String KIND_AQE_TIMINGS = "AQE_TIMINGS";
+	private static final String KIND_PARSE = "PARSE";
+	private static final String KIND_EXECUTE = "EXECUTE";
+	private static final String AQE_ELAPSED_US_PREFIX = "elapsedUs=";
+	private static final String AQE_RESPLIT_PREFIX = " resplit=";
+	private static final String AQE_COALESCE_PREFIX = " coalesce=";
+	private static final String AQE_MAP_REDUCE_PREFIX = " mapReduce=";
+	private static final String PLAN_DETAIL_SINGLE_PASS = "singlePass=true";
 
 	private final SqlTableResolver tables;
 	private final CrossDomainTableResolver domains;
@@ -230,7 +240,10 @@ public final class SqlExplainService {
 	}
 
 	/**
-	 * Execute SELECT and return {@link ExplainQuery} plan rows (kind, strategy, detail).
+	 * Execute SELECT once and return {@link ExplainQuery} plan rows (kind, strategy, detail).
+	 * <p>
+	 * Single product pass — no second index key materialization. Dry PARSE/strategy nodes
+	 * annotate the plan; timings cover only {@link SqlQueryExecutor#select}.
 	 */
 	public SqlResult explainAnalyze(SqlSession session, SelectSql s) {
 		final List<SqlResult.ColumnMeta> metas = List.of(
@@ -239,22 +252,21 @@ public final class SqlExplainService {
 				SqlResult.ColumnMeta.of("detail", SqlType.VARCHAR)
 		);
 		final ExplainQuery.QueryPlan plan = new ExplainQuery.QueryPlan("SQL EXPLAIN ANALYZE");
+		final long analyzeStartNs = System.nanoTime();
+		final long resplitBefore = DistributedQueryMetrics.aqeResplit();
+		final long coalesceBefore = DistributedQueryMetrics.aqeCoalesce();
+		final long mapReduceBefore = DistributedQueryMetrics.mapReduceCalls();
 		long rowsReturned;
 		try {
-			if (s.hasJoins() || s.hasWindow() || s.aggregate()) {
-				final SqlResult executed = query.select(session, s);
-				rowsReturned = executed.rows().size();
-				ExplainQuery.startNode(plan, "EXECUTE", s.sql());
-				ExplainQuery.endNode(plan.getRootNode(), -1, rowsReturned);
-			} else {
-				final String table = tables.resolveTable(session, s.table());
-				final TableStore store = tables.requireStore(table);
-				final List<byte[]> keys = store.compositeIndex().executeStatement(plan, s.sql());
-				rowsReturned = keys == null ? 0L : keys.size();
-			}
+			final String table = tables.resolveTable(session, s.table());
+			final TableStore store = tables.requireStore(table);
+			annotateDryAnalyzePlan(plan, store, s);
+			final SqlResult executed = query.select(session, s);
+			rowsReturned = executed.rows().size();
+			ExplainQuery.startNode(plan, KIND_EXECUTE, s.sql());
+			ExplainQuery.endNode(plan.getRootNode(), -1, rowsReturned);
 			ExplainQuery.finishAnalyzePlan(plan, rowsReturned);
 			if (plan.getEstimatedCost() < 0.0) {
-				final TableStore store = tables.requireStore(tables.resolveTable(session, s.table()));
 				final double fallback = QueryCardinality.costTableScan(store.approxRowStats().estimatedRows());
 				ExplainQuery.recordEstimatedCost(plan, fallback);
 			}
@@ -263,7 +275,49 @@ public final class SqlExplainService {
 			throw ex;
 		}
 		final String strategy = tables.resolveTable(session, s.table());
-		return SqlResult.resultSet(metas, ExplainQuery.toResultRows(plan, strategy));
+		final long elapsedUs = (System.nanoTime() - analyzeStartNs) / NANOS_PER_MICRO;
+		final long resplitDelta = DistributedQueryMetrics.aqeResplit() - resplitBefore;
+		final long coalesceDelta = DistributedQueryMetrics.aqeCoalesce() - coalesceBefore;
+		final long mapReduceDelta = DistributedQueryMetrics.mapReduceCalls() - mapReduceBefore;
+		final List<Object[]> rows = new ArrayList<>(ExplainQuery.toResultRows(plan, strategy));
+		rows.add(new Object[]{
+				KIND_AQE_TIMINGS,
+				strategy,
+				AQE_ELAPSED_US_PREFIX + elapsedUs
+						+ AQE_RESPLIT_PREFIX + resplitDelta
+						+ AQE_COALESCE_PREFIX + coalesceDelta
+						+ AQE_MAP_REDUCE_PREFIX + mapReduceDelta
+		});
+		return SqlResult.resultSet(metas, rows);
+	}
+
+	/**
+	 * Dry plan annotation (no key scan): PARSE + predicted strategy from heaviness / composite name.
+	 */
+	private void annotateDryAnalyzePlan(ExplainQuery.QueryPlan plan, TableStore store, SelectSql s) {
+		ExplainQuery.startNode(plan, KIND_PARSE, s.sql());
+		ExplainQuery.endNode(plan.getRootNode(), -1, 0);
+		final QueryData parsed = QueryParser.parseAndBuildCondition(null, s.sql(), Map.of());
+		final FilterCondition filter = parsed.filter() == null ? null : parsed.filter().conditionTree();
+		final QueryHeaviness heaviness = QueryHeavinessEstimator.fromFilter(store, filter, false);
+		final String compositeName = store.compositeIndex().findApplicableCompositeIndexName(s.sql());
+		final StringBuilder detail = new StringBuilder(PLAN_DETAIL_SINGLE_PASS)
+				.append(" predictedCandidates=")
+				.append(heaviness.predictedCandidates());
+		String nodeKind = SqlExplainKinds.INDEX;
+		if (heaviness.isDistributedHeavy(store.shardCount())) {
+			nodeKind = SqlExplainKinds.DIST_MAP;
+			detail.append(" shards=").append(store.shardCount());
+		} else if (heaviness.isHeavy()) {
+			nodeKind = SqlExplainKinds.AQE_PARALLEL;
+		}
+		if (compositeName != null && !compositeName.isBlank()) {
+			detail.append(' ').append(COMPOSITE_INDEX_DETAIL_PREFIX).append(compositeName);
+		}
+		ExplainQuery.startNode(plan, nodeKind, detail.toString());
+		ExplainQuery.endNode(plan.getRootNode(), -1, 0);
+		final double est = QueryCardinality.costTableScan(store.approxRowStats().estimatedRows());
+		ExplainQuery.recordEstimatedCost(plan, est);
 	}
 
 	public SqlResult explainSetOp(SetOpSql u) {

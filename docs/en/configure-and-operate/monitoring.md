@@ -37,6 +37,14 @@ The `gridReadiness` component reports the following keys. Values marked `n/a` me
 | `repairIssued` / `repairApplied` | long, `n/a` | Gap repair counters |
 | `rpoEstimateMs` | long, `n/a` | Cross-site lag estimate |
 | `swarmHint` | `KEEP`, `ATTRACT_LEARNER`, `SHED_LOAD`, `PREFER_DC`, `n/a` | Latest placement hint, by name |
+| `hydrateMode` / `hydrateModeConfigured` / `hydrateModeEffective` | `FULL`/`LAZY`, `n/a` | Configured vs effective (adaptive may force LAZY) |
+| `adaptiveMode` | `LOW`/`NORMAL`/`HIGH`, `n/a` | Adaptive disk-first mode name |
+| `workingSetMaxEntries` / `workingSetMaxConfigured` / `workingSetMaxEffective` | integer, `n/a` | Working-set cap (effective vs YAML) |
+| `workingSetSize` | integer, `n/a` | Live working-set size |
+| `hydrateShardsDone` / `hydrateShardsTotal` | integer, `n/a` | FULL hydrate progress gauges |
+| `promoteHint` | string, `n/a` | Same promote hint as wire `ServerMeta` |
+| `regionEpoch` / `regionRole` | long / int, `n/a` | Multi-site region claim |
+| `oplogArchiveEnabled` | boolean, `n/a` | OpLog archive path present |
 | `maxTxContexts` | integer | May appear when `grid.sql.max-tx-contexts` is set in YAML; Boot does **not** apply it to the TCP listener (hard channel cap stays **8**) — [SQL server](configuration/sql-server.md) |
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Record-lock and cancellation counters |
 
@@ -71,6 +79,16 @@ Storage and reads:
 | `grid.sealed.window_remap` | Mapping-window churn on large payloads |
 | `grid.sealed.index_hit` / `index_miss` | Sealed secondary index effectiveness |
 
+| `grid.sealed.seal_fail_size` | Seal dump failures (size / IO) |
+| `grid.sealed.index_page_fault` | Sealed `.sbpt` page faults |
+| `grid.durability.ws_size` / `ws_max_entries` | Working-set live size vs cap |
+| `grid.durability.ws_evictions` | CLOCK working-set evictions |
+| `grid.durability.adaptive_mode` / `adaptive_mode_changes` | Adaptive disk-first mode ordinal / transitions |
+| `grid.durability.hydrate_shards_done` / `hydrate_shards_total` | FULL hydrate progress |
+| `grid.sealed.sticky_rejected` | Sticky mmap rejected (payload > window) |
+
+`grid.replication.sealed_misses` counts working-set misses that load from sealed; `grid.sealed.miss` counts sealed reader lookups. Use both with `map_hit_rate` and `ws_evictions` when sizing `working-set-max-entries`. Alert when `ws_evictions` climbs while `map_hit_rate` falls and `sealed.miss` rises.
+
 SQL and locking:
 
 | Metric | Use |
@@ -79,8 +97,15 @@ SQL and locking:
 | `grid.sql.tx_commits` / `tx_rollbacks` | Transaction outcome mix |
 | `grid.sql.session_opens` | Logical session churn |
 | `grid.sql.lock.wait_acquires`, `wait_timeouts`, `wait_cancels`, `wait_nanos` | Record-lock contention |
+| `grid.sql.lock.peer_lease_expired` | Dist FOR UPDATE peer lease TTL expirations |
+| `grid.sql.lock.peer_release_miss` | Dist FOR UPDATE release ACK miss |
 | `grid.sql.cancel.requests` / `cancel.active` | Client cancellations |
 | `grid.sql.distributed.fan_in_calls` / `fan_in_sources` / `fan_in_rows` | Distributed read fan-in |
+| `grid.sql.distributed.map_reduce_calls` / `map_reduce_stages` / `map_reduce_rows` | Map-reduce fan-in |
+| `grid.sql.aqe.resplit` / `aqe.coalesce` | AQE mid-flight chunk resize |
+| `grid.replication.writer_eligible` | Writer eligible 0/1 (orchestrator gauge) |
+| `grid.replication.region_epoch` | Region epoch |
+| `grid.replication.promote_hint_empty` | 1 when promoteHint absent |
 
 ## Diagnosing write latency
 
@@ -118,6 +143,8 @@ Build alerts on the fields above rather than on invented thresholds.
 | `oplog_fsync_p99_ns` above your disk budget, or disk near full | Durability path stalling | Page |
 | `rpo_estimate_ms` climbing with no known network event | Growing cross-site loss window | Ticket |
 | `lock.wait_timeouts` rising | Transaction contention reaching clients as errors | Ticket |
+| `ws_evictions` climbing with falling `map_hit_rate` / rising sealed miss | Working set undersized for traffic | Ticket |
+| `sticky_rejected` rising on large payloads | Expected for payloads above mmap window; watch remap churn | Info / ticket if p99 climbs |
 
 ## Typical signals
 
@@ -127,7 +154,7 @@ Build alerts on the fields above rather than on invented thresholds.
 | `orchid_r` below threshold | No write admission | Check peer network, `peers` list, digest load — [replication](configuration/replication.md) |
 | `applyLagStale: true` | Replica too far behind for reads | Do not read from it; catch-up / repair; threshold `ha.max-stale-lag` |
 | Rising OpLog lag | Catch-up between nodes cannot keep up | Network, Applier disk, write load; seq on both. `/replication/compare` is lab-only, not day-to-day HA |
-| `writerEligible: false` after promote | Client still on the old writer | Wait for `PROMOTE_NOTIFY` or `rediscoverWriter()` — [promote](operations/ha-promote.md) |
+| `writerEligible: false` after promote | Client still on the old writer **or** tip behind peers / catch-up after claim | `PROMOTE_NOTIFY` or `rediscoverWriter()`; on tip-behind wait for catch-up, do not rotate the URL — [promote](operations/ha-promote.md) |
 | Reject on `regionEpoch` | Client on a stale site epoch | `rediscoverWriter()`, do not rotate the next URL host |
 | `repair_issued` rising, `repair_applied` flat | Catch-up is not applying | HomologousRepair logs, disk, seq mismatch |
 

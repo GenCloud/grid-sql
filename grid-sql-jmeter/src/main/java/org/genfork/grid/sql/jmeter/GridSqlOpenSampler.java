@@ -45,6 +45,8 @@ public final class GridSqlOpenSampler extends AbstractJavaSamplerClient {
 	public Arguments getDefaultParameters() {
 		final Arguments args = new Arguments();
 		args.addArgument(GridSqlJmeterSession.PARAM_GRID_URL, GridSqlJmeterSession.DEFAULT_GRID_URL);
+		args.addArgument(GridSqlJmeterSession.PARAM_SETUP_GRID_URL, "");
+		args.addArgument(GridSqlJmeterSession.PROP_READ_REPLICA_SESSION, "false");
 		args.addArgument(GridSqlJmeterSession.PARAM_USER, "");
 		args.addArgument(GridSqlJmeterSession.PARAM_PASSWORD, "");
 		args.addArgument(GridSqlJmeterSession.PARAM_CONNECT_TIMEOUT_MS,
@@ -81,8 +83,15 @@ public final class GridSqlOpenSampler extends AbstractJavaSamplerClient {
 							GridSqlJmeterSession.MixProfile.CAPACITY.name()));
 			final GridSqlLoadSqlTemplates sqlTemplates = GridSqlLoadSqlTemplates.resolve(
 					GridSqlLoadSqlTemplates.PropSource.samplerThenSystem(context::getParameter));
+			final String mode = context.getParameter(PARAM_MODE, MODE_OPEN);
+			final String loadUrl = context.getParameter(GridSqlJmeterSession.PARAM_GRID_URL);
+			final String setupUrlOverride = context.getParameter(GridSqlJmeterSession.PARAM_SETUP_GRID_URL, "");
+			final String connectUrl = resolveConnectUrl(mode, loadUrl, setupUrlOverride);
+			final boolean readReplicaSession = !MODE_SETUP.equalsIgnoreCase(
+					mode == null ? MODE_OPEN : mode.trim())
+					&& readReplicaSessionEnabled(context);
 			final GridSqlJmeterSession session = GridSqlJmeterSession.open(
-					context.getParameter(GridSqlJmeterSession.PARAM_GRID_URL),
+					connectUrl,
 					context.getParameter(GridSqlJmeterSession.PARAM_USER),
 					context.getParameter(GridSqlJmeterSession.PARAM_PASSWORD),
 					context.getIntParameter(GridSqlJmeterSession.PARAM_CONNECT_TIMEOUT_MS,
@@ -96,9 +105,9 @@ public final class GridSqlOpenSampler extends AbstractJavaSamplerClient {
 					mix,
 					context.getIntParameter(GridSqlJmeterSession.PARAM_STRIPE_THREADS, 0),
 					resolveWriteBatchSize(context),
-					sqlTemplates);
+					sqlTemplates,
+					readReplicaSession);
 			GridSqlJmeterSession.bind(session);
-			final String mode = context.getParameter(PARAM_MODE, MODE_OPEN);
 			if (MODE_SETUP.equalsIgnoreCase(mode == null ? MODE_OPEN : mode.trim())) {
 				result.setSampleLabel(LABEL_SETUP);
 				session.runSetupBlocking();
@@ -124,6 +133,33 @@ public final class GridSqlOpenSampler extends AbstractJavaSamplerClient {
 	/**
 	 * Sampler arg first; else {@code -JWRITE_BATCH_SIZE} system property (CLI load-slo).
 	 */
+	/**
+	 * Sampler arg / {@code -JREAD_REPLICA_SESSION} via {@code __P} first; else JVM {@code -D}.
+	 * JMeter {@code -J} alone does not set {@link System#getProperty}.
+	 */
+	private static boolean readReplicaSessionEnabled(JavaSamplerContext context) {
+		final String fromArgs = context.getParameter(GridSqlJmeterSession.PROP_READ_REPLICA_SESSION, "");
+		if (fromArgs != null && !fromArgs.isBlank()) {
+			return Boolean.parseBoolean(fromArgs.trim());
+		}
+		final String flag = System.getProperty(GridSqlJmeterSession.PROP_READ_REPLICA_SESSION, "false");
+		return flag != null && Boolean.parseBoolean(flag.trim());
+	}
+
+	private static String resolveConnectUrl(String mode, String loadUrl, String setupUrlOverride) {
+		final String normalizedMode = mode == null ? MODE_OPEN : mode.trim();
+		if (MODE_SETUP.equalsIgnoreCase(normalizedMode)) {
+			if (setupUrlOverride != null && !setupUrlOverride.isBlank()) {
+				return setupUrlOverride.trim();
+			}
+			final String fromProp = System.getProperty(GridSqlJmeterSession.PARAM_SETUP_GRID_URL, "");
+			if (fromProp != null && !fromProp.isBlank()) {
+				return fromProp.trim();
+			}
+		}
+		return loadUrl;
+	}
+
 	private static int resolveWriteBatchSize(JavaSamplerContext context) {
 		final int fromArgs = context.getIntParameter(
 				GridSqlJmeterSession.PARAM_WRITE_BATCH_SIZE,

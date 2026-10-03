@@ -182,6 +182,9 @@ public final class SqlTxBuffer {
 	}
 
 	public List<DistForUpdatePeerLockLease> peerLockedLeases() {
+		if (peerLocks.isEmpty()) {
+			return List.of();
+		}
 		return List.copyOf(peerLocks);
 	}
 

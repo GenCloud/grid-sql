@@ -26,6 +26,7 @@ import io.netty.channel.Channel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.client.reactive.ReactiveBatchExchange;
 import org.genfork.grid.sql.client.reactive.ReactiveExecExchange;
 import org.genfork.grid.sql.client.transport.PendingExchange;
@@ -150,7 +151,7 @@ public final class RemoteConnection implements Connection {
 			return Mono.error(transport.beginNotAllowed());
 		}
 		return openSession()
-				.flatMap(sessionId -> applyTimeout(execRaw(sessionId, "BEGIN", null, 0))
+				.flatMap(sessionId -> applyTimeout(execRaw(sessionId, SqlStatementTag.BEGIN.wire(), null, 0))
 						.flatMap(Result::getRowsUpdated)
 						.map(handle -> (TxContext) new RemoteTxContext(
 								this, sessionId, handle == null ? 0L : handle)));

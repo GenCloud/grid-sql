@@ -87,6 +87,7 @@ Until every row that applies to your topology passes, do not call the restore su
 | Symptom | Check |
 |---------|--------|
 | Node starts “empty” under LAZY | Normal: truth is sealed + OpLog tail; not the same as a lost `dataDir` |
+| Sealed disk not freed after `DROP TABLE` | Expected: DROP does not purge sealed on the hot path; reclaim needs explicit retire (`purgeDomainArtifacts`) — [storage](../../understand/storage-sealed-gmap.md) |
 | Peers refuse the node | Wrong `cluster-id` / epoch; shared `dataDir` across two processes |
 | Open TX “gone” after restore | Expected: dirty buffer is not in OpLog until COMMIT |
 | Archive empty but you need “one hour ago” | No data — enable archive **before** the load |

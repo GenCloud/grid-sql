@@ -24,9 +24,26 @@ ORCHID note: only the phase-ranked proposer is writer-eligible. Clients should r
 | `append` | SQL `UPDATE … number \|\| …` via `grid://` | Space-separated token append |
 | `read` | SQL `SELECT` | Full string |
 
-Checker: **Elle** `list-append` (`elle.list-append/check`, no Graphviz directory — control image may lack `dot`). Generator emits txn mops `[:append k tok]` / `[:r k nil]` across **keys 2..16** (separate from register key 1).
+Checker: **Elle** `list-append` (`elle.list-append/check`, no Graphviz directory — control image may lack `dot`). Generator emits txn mops `[:append k tok]` / `[:r k nil]` across **keys 2..16** (separate from register key 1), including **multi-mop** txns (`[:append k1 …][:r k2 …]`). Client runs all mops of one `:txn` inside one SQL `BEGIN`/`COMMIT` (`TxContext`).
 
-**Consistency contract:** append is **SQL-only** (no client RMW). Proposer merges under **per-key** lock via `LogicalFieldCursor` → OpLog **`UPSERT`** final bytes. Non-proposer → `OrchidNotSynced` → `:fail`. Parser: UPDATE hot-path + template cache.
+**Consistency contract:** append is **SQL-only** (no client RMW). Proposer merges under **per-key** lock via `LogicalFieldCursor` → OpLog **`UPSERT`** final bytes. Multi-mop TX shares one dirty buffer until COMMIT. Non-proposer → `OrchidNotSynced` → `:fail`. Parser: UPDATE hot-path + template cache.
+
+### 3. Join / shards (`--workload join`, `JEPSEN_JOIN_SHARDS=1`)
+
+Same Elle mop shape as append (`[:append k tok]` / `[:r k nil]` / multi-mop TX), but storage is **parent+child**:
+
+| Table | Role |
+|-------|------|
+| `jepsen_child(id, parent_id, number, status)` | append list body (Elle key = child id) |
+| `jepsen_parent(id, name)` | `parent_id = child_id + 100` (cross-shard under `default-shards: 8`) |
+
+Reads use `SELECT c.number, c.status, p.id … LEFT OUTER JOIN jepsen_parent p ON c.parent_id = p.id` — child without parent is `:fail` (`join-parent-missing`), never a forged empty Elle list. Engine accepts either ON qualifier order. Profile script: `run-jepsen-join.ps1`.
+
+Honesty: `Unknown column` / `Unknown table` / `schema-error` in lein output → profile **FAIL** via `jepsen-honesty-gate.sh` even if Elle `:valid? true`. Elle `G2-item*` is also hard FAIL (product tip fence after cross-DC claim).
+
+### 4. Swarm / cutover (`JEPSEN_SWARM=1`, `run-jepsen-swarm.ps1`)
+
+Compose overlay `docker-compose.swarm.yml` enables `grid.replication.swarm` + `apply-auto-cutover`. Workload remains **append** multi-key TX. Nemesis adds `:swarm-bounce` (kill/start a follower) on top of partition/kill-proposer.
 
 SQL listen ports (Compose): n1 `15432`, n2 `15433`, n3 `15434` (`JEPSEN_SQL_PORTS`).
 

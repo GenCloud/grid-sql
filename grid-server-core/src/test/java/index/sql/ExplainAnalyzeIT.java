@@ -62,7 +62,8 @@ class ExplainAnalyzeIT {
 				sawSummary = true;
 				assertTrue(String.valueOf(row[2]).contains("timeMs="));
 				assertTrue(String.valueOf(row[2]).contains("estCost="), "SUMMARY should include estCost");
-			} else if (kind.contains("Bitmap") || kind.contains("Index") || kind.contains("PARSE")) {
+			} else if (kind.contains("Bitmap") || kind.contains("Index") || kind.contains("PARSE")
+					|| kind.contains("EXECUTE") || "DIST_MAP".equals(kind) || "AQE_PARALLEL".equals(kind)) {
 				sawPlan = true;
 			}
 		}

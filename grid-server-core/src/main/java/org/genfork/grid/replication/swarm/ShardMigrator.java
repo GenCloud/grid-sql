@@ -141,8 +141,10 @@ public class ShardMigrator {
 
 		if (state == ShardPlacementMap.DrainState.NONE
 				|| state == ShardPlacementMap.DrainState.CUTOVER_DONE) {
+			// Hold QUIESCE for one migrate tick so write admission can fence the shard
+			// before CATCH_UP ships sealed/OpLog (no same-call dual-admit window).
 			placementMap.beginDrain(domainType, shard, target);
-			state = ShardPlacementMap.DrainState.QUIESCE;
+			return 0;
 		}
 
 		if (state == ShardPlacementMap.DrainState.QUIESCE) {

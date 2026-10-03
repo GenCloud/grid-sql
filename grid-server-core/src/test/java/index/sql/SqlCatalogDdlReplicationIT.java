@@ -17,6 +17,7 @@ package index.sql;
 
 import index.unit.replication.ReplTestSupport;
 import org.genfork.grid.catalog.TableCatalog;
+import org.genfork.grid.common.WriterFenceSignals;
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.sql.SqlEngine;
@@ -29,7 +30,9 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -218,6 +221,63 @@ public class SqlCatalogDdlReplicationIT {
 			assertEquals(3, engineB.catalog().requireSchema("alter_peer").columnCount());
 			assertTrue(engineB.catalog().maxAppliedDdlEpoch()
 					>= engineA.catalog().maxAppliedDdlEpoch() - 1L);
+		} finally {
+			coordA.stop();
+			coordB.stop();
+		}
+	}
+
+	@Test
+	void nonWriterCreateTableDoesNotLeaveOrphanCatalog() throws Exception {
+		final int portA = freePort();
+		final int portB = freePort();
+		final GridConfigurationProperties propsA = ReplTestSupport.props(
+				"ddl-orphan-a", "ddl-catalog-orphan", "dc-a", portA, tempDir.resolve("oa"),
+				List.of(ReplTestSupport.peer("ddl-orphan-b", "dc-a", portB))
+		);
+		final GridConfigurationProperties propsB = ReplTestSupport.props(
+				"ddl-orphan-b", "ddl-catalog-orphan", "dc-a", portB, tempDir.resolve("ob"),
+				List.of(ReplTestSupport.peer("ddl-orphan-a", "dc-a", portA))
+		);
+
+		final ReplicationCoordinator coordA = new ReplicationCoordinator(propsA);
+		final ReplicationCoordinator coordB = new ReplicationCoordinator(propsB);
+		coordA.start();
+		coordB.start();
+
+		final long liveDeadline = System.currentTimeMillis() + 8_000L;
+		while (System.currentTimeMillis() < liveDeadline
+				&& (coordA.getOrchidNode().livePeerCount() < 1 || coordB.getOrchidNode().livePeerCount() < 1)) {
+			Thread.sleep(50L);
+		}
+		assertTrue(coordA.getOrchidNode().livePeerCount() >= 1);
+
+		final long writerDeadline = System.currentTimeMillis() + 15_000L;
+		while (System.currentTimeMillis() < writerDeadline
+				&& !coordA.isWriterEligible() && !coordB.isWriterEligible()) {
+			Thread.sleep(50L);
+		}
+		assertTrue(coordA.isWriterEligible() || coordB.isWriterEligible(), "expected a writer");
+
+		final ReplicationCoordinator followerCoord = coordA.isWriterEligible() ? coordB : coordA;
+		final Path followerCat = coordA.isWriterEligible()
+				? tempDir.resolve("ob-cat")
+				: tempDir.resolve("oa-cat");
+		assertFalse(followerCoord.isWriterEligible(), "need follower for orphan check");
+
+		try {
+			final SqlEngine followerEngine = new SqlEngine(
+					new TableCatalog(followerCat),
+					followerCoord,
+					4
+			);
+			final RuntimeException ex = assertThrows(RuntimeException.class,
+					() -> followerEngine.execute(
+							"CREATE TABLE IF NOT EXISTS orphan_ddl (id INT PRIMARY KEY, v VARCHAR)"));
+			assertTrue(WriterFenceSignals.requiresWriterRediscover(ex),
+					"expected writer fence, got: " + ex);
+			assertFalse(followerEngine.catalog().exists("orphan_ddl"),
+					"non-writer CREATE must not leave orphan catalog entry");
 		} finally {
 			coordA.stop();
 			coordB.stop();

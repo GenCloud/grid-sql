@@ -17,6 +17,7 @@ param(
   [int]$DurationSec = 120,
   [int]$RampSec = 5,
   [string]$GridUrl = "grid://grid:grid@127.0.0.1:15432/public",
+  [string]$SetupGridUrl = "",
   [string]$User = "",
   [string]$Password = "",
   [double]$TpsFloor = 0,
@@ -33,15 +34,16 @@ param(
   [int]$WriteBatchSize = 1,
   [switch]$DrySmoke,
   [switch]$SkipBuild,
-  [switch]$NoHtmlReport
+  [switch]$NoHtmlReport,
+  [switch]$ReadReplicaSession
 )
 $ErrorActionPreference = "Stop"
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)
 
 $Script:DefaultTpsFloor = 400.0
-# Living floors: WRITE ~95% of peak; READ = observed band min (host variance = band like QG)
-# see docs/en/capacity-slo.md
-$Script:LivingCanonWriteTpsFloor = 4676.0
+# Living floors: WRITE ~95% of planning; READ = band min (host variance = band like QG)
+# see docs/en/performance/capacity-slo.md
+$Script:LivingCanonWriteTpsFloor = 4442.0
 $Script:LivingCanonReadTpsFloor = 52261.0
 $Script:DefaultP95CeilingUs = 1.0e9
 $Script:DefaultP99CeilingUs = 1.0e9
@@ -79,12 +81,17 @@ if ($env:LOAD_SLO_P95_CEILING_US) { $P95CeilingUs = [double]$env:LOAD_SLO_P95_CE
 if ($env:LOAD_SLO_P99_CEILING_US) { $P99CeilingUs = [double]$env:LOAD_SLO_P99_CEILING_US }
 if ($env:LOAD_SLO_ERROR_RATE_CEILING) { $ErrorRateCeiling = [double]$env:LOAD_SLO_ERROR_RATE_CEILING }
 
+# Living floors only when caller left TpsFloor unset (<=0). Explicit -TpsFloor wins
+# (swarm replica stamp uses a modest floor, not primary living READ).
+$Script:TpsFloorExplicit = $TpsFloor -gt 0
 if ($TpsFloor -le 0) { $TpsFloor = $Script:DefaultTpsFloor }
-if ($MixProfile -eq 'WRITE_ONLY' -and [math]::Abs($TpsFloor - $Script:DefaultTpsFloor) -lt 0.01) {
-  $TpsFloor = $Script:LivingCanonWriteTpsFloor
-}
-if ($MixProfile -eq 'READ_ONLY' -and [math]::Abs($TpsFloor - $Script:DefaultTpsFloor) -lt 0.01) {
-  $TpsFloor = $Script:LivingCanonReadTpsFloor
+if (-not $Script:TpsFloorExplicit) {
+  if ($MixProfile -eq 'WRITE_ONLY') {
+    $TpsFloor = $Script:LivingCanonWriteTpsFloor
+  }
+  if ($MixProfile -eq 'READ_ONLY') {
+    $TpsFloor = $Script:LivingCanonReadTpsFloor
+  }
 }
 if ($P95CeilingUs -le 0) { $P95CeilingUs = $Script:DefaultP95CeilingUs }
 if ($P99CeilingUs -le 0) { $P99CeilingUs = $Script:DefaultP99CeilingUs }
@@ -241,6 +248,12 @@ $jmeterArgs = @(
   "-JWRITE_BATCH_SIZE=$WriteBatchSize",
   "-JREPORT_DIR=$($ReportDir -replace '\\','/')"
 )
+if ($SetupGridUrl) {
+  $jmeterArgs += "-JSETUP_GRID_URL=$SetupGridUrl"
+}
+if ($ReadReplicaSession) {
+  $jmeterArgs += "-JREAD_REPLICA_SESSION=true"
+}
 # Optional SQL template overrides (empty = living defaults in GridSqlLoadSqlTemplates):
 # -JTABLE_A=... -JSQL_EQ_LIMIT='SELECT ...' -JSQL_UPSERT='INSERT ...' etc.
 # Placeholders: ${tableA} ${tableB} ${id} ${val} ${n}

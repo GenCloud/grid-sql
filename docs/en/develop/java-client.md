@@ -86,7 +86,7 @@ After failover, do **not** rotate the next host in the URL by hand.
 | `PROMOTE_NOTIFY` / updated `ServerMeta` on the live channel | Prefer the promote hint; the factory may call `rediscoverWriter()` for you |
 | Writes still fail / stick to a dead host | Call `rediscoverWriter()` on `RemoteConnectionFactory` (returns a fresh `Connection`); check `lastServerMeta()` / `connection.serverMeta()` for `writerEligible`, `promoteHint`, `regionEpoch` |
 
-Connect retries (`retryMode`) are not a substitute for `rediscoverWriter()` after role change. Procedure: [promote](../configure-and-operate/operations/ha-promote.md).
+Connect retries (`retryMode`) are not a substitute for `rediscoverWriter()` after role change. AUTH redirect budget: writer path — **one** hop via `promoteHint`; `READ_REPLICA` — up to `ring−1` around the endpoint ring; after the budget is spent — fail-closed (including `applyLagStale`). Sync/JDBC: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` (no `Mono.block` on the hot path). Procedure: [promote](../configure-and-operate/operations/ha-promote.md).
 
 ## Autocommit
 

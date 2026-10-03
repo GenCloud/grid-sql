@@ -18,7 +18,9 @@ package org.genfork.grid.sql.exec;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -34,6 +36,7 @@ import org.genfork.grid.query.filters.WireResidualBatch;
 import org.genfork.grid.query.filters.impl.LogicalOperatorCondition;
 import org.genfork.grid.serial.SqlWireUtil;
 import org.genfork.grid.sql.tx.KeyWrapper;
+import org.genfork.grid.sql.tx.SqlTxBuffer;
 import org.genfork.grid.store.TableStore;
 
 /**
@@ -47,6 +50,9 @@ import org.genfork.grid.store.TableStore;
  * @since: 1.0
  */
 public final class SqlTxSnapshotOps {
+	/** Minimum concurrent seen-set capacity for open-TX dirty overlay. */
+	private static final int SEEN_SET_MIN_CAPACITY = 16;
+
 	private SqlTxSnapshotOps() {
 	}
 
@@ -183,6 +189,92 @@ public final class SqlTxSnapshotOps {
 			return;
 		}
 		blobs.addAll(residualBlobs(store, schema, filter, keys));
+	}
+
+	/**
+	 * Open-TX snapshot: AQE/DIST_MAP on committed keys, then serial dirty overlay
+	 * (DELETE tombstone / UPSERT replace) and insert-only dirty UPSERTs.
+	 */
+	static void forEachSnapshotWithDirtyOverlay(
+			TableStore store,
+			TableSchema schema,
+			String table,
+			SqlTxBuffer tx,
+			FilterCondition filter,
+			List<byte[]> blobs
+	) {
+		final boolean indexedEq = isIndexedEqSnapshot(store, filter);
+		final QueryHeaviness heaviness = QueryHeavinessEstimator.fromFilter(store, filter, indexedEq);
+		final List<byte[]> keys = new ArrayList<>();
+		forEachSnapshotKey(store, filter, keys::add);
+		final Set<KeyWrapper> seen = ConcurrentHashMap.newKeySet(Math.max(SEEN_SET_MIN_CAPACITY, keys.size()));
+		final Function<List<byte[]>, List<byte[]>> residual = chunk ->
+				residualBlobsWithDirty(store, schema, table, tx, filter, chunk, seen);
+		if (heaviness.isDistributedHeavy(store.shardCount())) {
+			blobs.addAll(DistributedKeyFanOut.mapReduceByShard(keys, store, residual, heaviness));
+		} else if (heaviness.isHeavy()) {
+			blobs.addAll(AdaptiveParallelScan.mapMergeKeys(keys, residual, heaviness));
+		} else {
+			blobs.addAll(residual.apply(keys));
+		}
+		for (Map.Entry<KeyWrapper, SqlTxBuffer.DirtyEntry> e : tx.entriesForTable(table).entrySet()) {
+			if (seen.contains(e.getKey()) || e.getValue().op() != SqlTxBuffer.Op.UPSERT) {
+				continue;
+			}
+			final byte[] valueBytes = e.getValue().valueBytesOrNull();
+			if (valueBytes == null) {
+				continue;
+			}
+			if (WireResidualBatch.matchesBlob(valueBytes, schema, filter)) {
+				blobs.add(valueBytes);
+			}
+		}
+	}
+
+	static List<byte[]> residualBlobsWithDirty(
+			TableStore store,
+			TableSchema schema,
+			String table,
+			SqlTxBuffer tx,
+			FilterCondition filter,
+			List<byte[]> keys,
+			Set<KeyWrapper> seen
+	) {
+		if (keys == null || keys.isEmpty()) {
+			return List.of();
+		}
+		final List<byte[]> committed = new ArrayList<>(keys.size());
+		final List<byte[]> dirtyMatched = new ArrayList<>();
+		for (byte[] key : keys) {
+			final KeyWrapper kw = new KeyWrapper(key);
+			seen.add(kw);
+			final SqlTxBuffer.DirtyEntry dirty = tx.get(table, key);
+			if (dirty != null) {
+				if (dirty.op() == SqlTxBuffer.Op.DELETE) {
+					continue;
+				}
+				final byte[] dirtyBytes = dirty.valueBytesOrNull();
+				if (dirtyBytes != null && WireResidualBatch.matchesBlob(dirtyBytes, schema, filter)) {
+					dirtyMatched.add(dirtyBytes);
+				}
+				continue;
+			}
+			final byte[] value = store.getCommittedBytes(key);
+			if (value != null) {
+				committed.add(value);
+			}
+		}
+		final List<byte[]> filteredCommitted = WireResidualBatch.filterBlobs(committed, schema, filter);
+		if (dirtyMatched.isEmpty()) {
+			return filteredCommitted;
+		}
+		if (filteredCommitted.isEmpty()) {
+			return dirtyMatched;
+		}
+		final List<byte[]> out = new ArrayList<>(filteredCommitted.size() + dirtyMatched.size());
+		out.addAll(filteredCommitted);
+		out.addAll(dirtyMatched);
+		return out;
 	}
 
 	static List<byte[]> residualBlobs(

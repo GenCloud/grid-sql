@@ -131,13 +131,25 @@ class LocusAndSwarmSoakTest {
 			final AtomicReference<OpLogSegment> pushed = new AtomicReference<>();
 			final RecordingTransport transport = new RecordingTransport(pushed);
 			final ShardMigrator migrator = new ShardMigrator(opLog, transport);
-			final int shipped = migrator.migrateRange(
-					MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
-			assertEquals(0, shipped);
+			assertEquals(0, driveMigrate(migrator, MIGRATE_PEER, DOMAIN, SHARD));
 			assertEquals(ShardPlacementMap.DrainState.CUTOVER_DONE,
 					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			assertEquals(MIGRATE_PEER, migrator.getPlacementMap().owner(DOMAIN, SHARD));
 			assertNull(pushed.get());
+		}
+	}
+
+	@Test
+	void migratorQuiesceHoldsOneTickBeforeCatchUp() throws Exception {
+		try (OpLog opLog = new OpLog(temp.resolve("oplog-quiesce"), false)) {
+			final ShardMigrator migrator = new ShardMigrator(opLog, new RecordingTransport(new AtomicReference<>()));
+			assertEquals(0, migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH));
+			assertEquals(ShardPlacementMap.DrainState.QUIESCE,
+					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
+			assertTrue(migrator.getPlacementMap().isDraining(DOMAIN, SHARD));
+			assertEquals(0, migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH));
+			assertEquals(ShardPlacementMap.DrainState.CUTOVER_DONE,
+					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 		}
 	}
 
@@ -158,9 +170,7 @@ class LocusAndSwarmSoakTest {
 			final ShardMigrator migrator = new ShardMigrator(opLog, transport);
 			migrator.setSealedGridMapService(sealed);
 
-			final int shipped = migrator.migrateRange(
-					MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
-			assertEquals(0, shipped);
+			assertEquals(0, driveMigrate(migrator, MIGRATE_PEER, DOMAIN, SHARD));
 			assertEquals(ShardPlacementMap.DrainState.CUTOVER_DONE,
 					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			assertNotNull(pushedPack.get());
@@ -177,7 +187,7 @@ class LocusAndSwarmSoakTest {
 			final RecordingTransport transport = new RecordingTransport(
 					new AtomicReference<>(), null, new AtomicReference<>(), sealedShips);
 			final ShardMigrator migrator = new ShardMigrator(opLog, transport);
-			migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
+			driveMigrate(migrator, MIGRATE_PEER, DOMAIN, SHARD);
 			assertEquals(ShardPlacementMap.DrainState.CUTOVER_DONE,
 					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
@@ -221,6 +231,10 @@ class LocusAndSwarmSoakTest {
 					opLog, new RecordingTransport(new AtomicReference<>(), null, new AtomicReference<>(), sealedShips));
 			migrator.setSealedGridMapService(sealed);
 			assertEquals(0, migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH));
+			assertEquals(ShardPlacementMap.DrainState.QUIESCE,
+					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
+			assertEquals(0, sealedShips.get(), "QUIESCE tick must not ship sealed");
+			assertEquals(0, migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH));
 			assertEquals(ShardPlacementMap.DrainState.CATCH_UP,
 					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			assertEquals(1, sealedShips.get());
@@ -255,14 +269,18 @@ class LocusAndSwarmSoakTest {
 
 	@Test
 	void loadGateBlocksMigrateIoUnderQueuePressure() {
-		assertFalse(SwarmMigrateLoadGate.isPressureCalm(0.0d, 0.0d, 0.0d), "lag floor required");
+		assertFalse(SwarmMigrateLoadGate.isPressureCalm(
+				0.0d, 0.0d, SwarmMigrateLoadGate.MAX_APPLY_LAG_FOR_MIGRATE),
+				"lag at suppress floor is not calm");
 		assertTrue(SwarmMigrateLoadGate.isPressureCalm(
-				SwarmMigrateLoadGate.MAX_QUEUE_DEPTH_FOR_MIGRATE, 0.5d,
-				SwarmMigrateLoadGate.MIN_APPLY_LAG_FOR_MIGRATE));
+				SwarmMigrateLoadGate.MAX_QUEUE_DEPTH_FOR_MIGRATE, 0.5d, 0.0d));
 		final SwarmMigrateLoadGate gate = new SwarmMigrateLoadGate();
 		final PlacementScore calm = new PlacementScore(
-				SwarmMigrateLoadGate.MIN_APPLY_LAG_FOR_MIGRATE, 0.0d, 0.1d, 1.0d, 0.0d, 0.0d);
+				0.0d, 0.0d, 0.1d, 1.0d, 0.0d, 0.0d);
+		final PlacementScore highLag = new PlacementScore(
+				SwarmMigrateLoadGate.MAX_APPLY_LAG_FOR_MIGRATE, 0.0d, 0.1d, 1.0d, 0.0d, 0.0d);
 		assertFalse(gate.allowMigrateIo(calm, PlacementHint.KEEP));
+		assertFalse(gate.allowMigrateIo(highLag, PlacementHint.SHED_LOAD), "high lag suppresses");
 		assertFalse(gate.allowMigrateIo(calm, PlacementHint.SHED_LOAD));
 		assertFalse(gate.allowMigrateIo(calm, PlacementHint.SHED_LOAD));
 		assertTrue(gate.allowMigrateIo(calm, PlacementHint.SHED_LOAD), "third calm SHED tick arms migrate I/O");
@@ -273,7 +291,7 @@ class LocusAndSwarmSoakTest {
 	void cutoverCooldownSuppressesImmediateRemigrate() throws Exception {
 		try (OpLog opLog = new OpLog(temp.resolve("oplog-cool"), false)) {
 			final ShardMigrator migrator = new ShardMigrator(opLog, new RecordingTransport(new AtomicReference<>()), 2);
-			migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
+			driveMigrate(migrator, MIGRATE_PEER, DOMAIN, SHARD);
 			assertTrue(migrator.getCooldown().isCooling(DOMAIN, SHARD));
 			// Force a different target so CUTOVER_DONE no-op would not apply — cooldown still blocks.
 			migrator.getPlacementMap().setOwner(DOMAIN, SHARD, "other-owner");
@@ -312,6 +330,10 @@ class LocusAndSwarmSoakTest {
 
 			final AtomicReference<OpLogSegment> pushed = new AtomicReference<>();
 			final ShardMigrator migrator = new ShardMigrator(opLog, new RecordingTransport(pushed));
+			assertEquals(0, migrator.migrateRange(
+					MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH));
+			assertEquals(ShardPlacementMap.DrainState.QUIESCE,
+					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			final int shipped = migrator.migrateRange(
 					MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
 			assertEquals(0, shipped);
@@ -330,9 +352,7 @@ class LocusAndSwarmSoakTest {
 			final RecordingTransport transport = new RecordingTransport(pushed, targetPeer);
 			final ShardMigrator migrator = new ShardMigrator(opLog, transport);
 			migrator.getPlacementMap().setAffinity(DOMAIN, SHARD, PINNED_PEER);
-			final int shipped = migrator.migrateRange(
-					MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
-			assertEquals(0, shipped);
+			assertEquals(0, driveMigrate(migrator, MIGRATE_PEER, DOMAIN, SHARD));
 			assertEquals(PINNED_PEER, migrator.getPlacementMap().owner(DOMAIN, SHARD));
 			assertNull(targetPeer.get());
 			assertNull(pushed.get());
@@ -346,8 +366,8 @@ class LocusAndSwarmSoakTest {
 					new ShardMigrator(opLog, new RecordingTransport(new AtomicReference<>()));
 			migrator.getPlacementMap().setAffinity(DOMAIN, SHARD, PINNED_PEER);
 
-			migrator.migrateRange(MIGRATE_PEER, DOMAIN, SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
-			migrator.migrateRange(MIGRATE_PEER, DOMAIN, OTHER_SHARD, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
+			driveMigrate(migrator, MIGRATE_PEER, DOMAIN, SHARD);
+			driveMigrate(migrator, MIGRATE_PEER, DOMAIN, OTHER_SHARD);
 
 			assertEquals(PINNED_PEER, migrator.getPlacementMap().owner(DOMAIN, SHARD));
 			assertEquals(MIGRATE_PEER, migrator.getPlacementMap().owner(DOMAIN, OTHER_SHARD));
@@ -375,6 +395,14 @@ class LocusAndSwarmSoakTest {
 			migrateCalls.incrementAndGet();
 		}
 		assertEquals(1, migrateCalls.get());
+	}
+
+	/**
+	 * QUIESCE hold then CATCH_UP/cutover — two migrate ticks as product path requires.
+	 */
+	private static int driveMigrate(ShardMigrator migrator, String peer, String domain, int shard) {
+		migrator.migrateRange(peer, domain, shard, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
+		return migrator.migrateRange(peer, domain, shard, MIGRATE_FROM_SEQ, MIGRATE_BATCH);
 	}
 
 	private static byte[] bytes(String value) {

@@ -6,7 +6,7 @@ Curated Grid measurements from the lab host: JMH latency tracks, the sealed quer
 
 | Profile | Band (lab host, `fsync: true`) |
 |---------|--------------------------------|
-| HA write (WRITE_ONLY) | ≈**6371**/s |
+| HA write (WRITE_ONLY) | ≈**4676**/s (regression floor ≈**4442**/s) |
 | HA read (READ_ONLY) | ≈**52261…59430**/s (living ≈**54013**/s) |
 | Mixed Capacity QG | ≈**8772…11519**/s |
 | HA mix sizing | ≈**9896**/s |

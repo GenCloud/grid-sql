@@ -21,7 +21,10 @@ import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.client.Savepoint;
+import org.genfork.grid.sql.client.SqlClientMessages;
+import org.genfork.grid.sql.client.SqlSavepointSql;
 import org.genfork.grid.sql.client.transport.TransportConnection;
 import org.genfork.grid.sql.client.transport.TransportOutcome;
 
@@ -33,10 +36,6 @@ import org.genfork.grid.sql.client.transport.TransportOutcome;
  * @since: 1.0
  */
 public final class SyncTxContext implements AutoCloseable {
-	private static final String SQL_SAVEPOINT = "SAVEPOINT ";
-	private static final String SQL_ROLLBACK_TO = "ROLLBACK TO SAVEPOINT ";
-	private static final String SQL_RELEASE = "RELEASE SAVEPOINT ";
-
 	private final TransportConnection transport;
 	private final int sessionId;
 	private final long prepareHandle;
@@ -98,19 +97,40 @@ public final class SyncTxContext implements AutoCloseable {
 		return SyncConnection.wrapOutcomes(List.of(outcome), timeout, syncExecutor);
 	}
 
+	public long executeUpdate(String sql) {
+		ensureOpen();
+		final TransportOutcome outcome =
+				SyncAwait.await(transport.exec(sessionId, sql, null, 0), timeout, null, syncExecutor);
+		if (outcome instanceof TransportOutcome.Dml dml) {
+			return dml.affected();
+		}
+		return 0L;
+	}
+
+	/**
+	 * In-TX SELECT (or other result-set SQL) → dense cell rows.
+	 */
+	public List<Object[]> query(String sql) {
+		final List<SyncResult> results = execute(sql);
+		if (results.isEmpty()) {
+			return List.of();
+		}
+		return results.getFirst().objectRows();
+	}
+
 	public void commit() {
-		finish("COMMIT");
+		finish(SqlStatementTag.COMMIT.wire());
 	}
 
 	public void rollback() {
-		finish("ROLLBACK");
+		finish(SqlStatementTag.ROLLBACK.wire());
 	}
 
 	public Savepoint savepoint(String name) {
 		ensureOpen();
 		final Savepoint handle = Savepoint.of(name);
 		SyncAwait.await(
-				transport.exec(sessionId, SQL_SAVEPOINT + handle.name(), null, 0),
+				transport.exec(sessionId, SqlSavepointSql.savepoint(handle.name()), null, 0),
 				timeout, null, syncExecutor);
 		return handle;
 	}
@@ -118,20 +138,20 @@ public final class SyncTxContext implements AutoCloseable {
 	public void rollbackTo(Savepoint savepoint) {
 		ensureOpen();
 		if (savepoint == null) {
-			throw new IllegalArgumentException("savepoint required");
+			throw new IllegalArgumentException(SqlClientMessages.SAVEPOINT_REQUIRED);
 		}
 		SyncAwait.await(
-				transport.exec(sessionId, SQL_ROLLBACK_TO + savepoint.name(), null, 0),
+				transport.exec(sessionId, SqlSavepointSql.rollbackTo(savepoint.name()), null, 0),
 				timeout, null, syncExecutor);
 	}
 
 	public void release(Savepoint savepoint) {
 		ensureOpen();
 		if (savepoint == null) {
-			throw new IllegalArgumentException("savepoint required");
+			throw new IllegalArgumentException(SqlClientMessages.SAVEPOINT_REQUIRED);
 		}
 		SyncAwait.await(
-				transport.exec(sessionId, SQL_RELEASE + savepoint.name(), null, 0),
+				transport.exec(sessionId, SqlSavepointSql.release(savepoint.name()), null, 0),
 				timeout, null, syncExecutor);
 	}
 
@@ -169,7 +189,7 @@ public final class SyncTxContext implements AutoCloseable {
 
 	private void ensureOpen() {
 		if (closed.get() || completed.get()) {
-			throw new IllegalStateException("TxContext closed");
+			throw new IllegalStateException(SqlClientMessages.TX_CLOSED);
 		}
 	}
 }

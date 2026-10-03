@@ -19,6 +19,7 @@ import org.genfork.grid.metrics.SqlTxMetrics;
 import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.ReplicaAccessGate;
 import org.genfork.grid.replication.ReplicationCoordinator;
+import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.sql.ast.Stmt;
 import org.genfork.grid.sql.client.SessionRole;
 import org.genfork.grid.sql.netty.SqlWireErrorCodes;
@@ -35,6 +36,8 @@ import org.genfork.grid.sql.tx.LockWaitTimeoutException;
 public final class SqlReplicaAdmission {
 	public static final String READ_REPLICA_DML_DENIED_MSG =
 			"READ_REPLICA session allows SELECT/EXPLAIN only";
+	public static final String READ_REPLICA_FOR_UPDATE_DENIED_MSG =
+			"READ_REPLICA session rejects FOR UPDATE";
 	private static final String MSG_REPLICA_READS_DISABLED = "replica reads disabled";
 	private static final String MSG_STALE_REPLICA = "stale replica";
 	private static final String MSG_APPLY_LAG = "apply lag";
@@ -53,6 +56,10 @@ public final class SqlReplicaAdmission {
 		final SessionRole role = session == null ? SessionRole.PRIMARY : session.sessionRole();
 		final SqlStatementTag tag = SqlStatementTagger.tagOf(stmt);
 		if (role.isReadReplica()) {
+			if (stmt instanceof SelectSql select && select.forUpdate()) {
+				SqlTxMetrics.recordReplicaReadDenied();
+				throw new SqlReplicaDmlDeniedException(READ_REPLICA_FOR_UPDATE_DENIED_MSG);
+			}
 			if (!ReplicaReadStatementTags.allows(tag)) {
 				SqlTxMetrics.recordReplicaReadDenied();
 				throw new SqlReplicaDmlDeniedException(READ_REPLICA_DML_DENIED_MSG);

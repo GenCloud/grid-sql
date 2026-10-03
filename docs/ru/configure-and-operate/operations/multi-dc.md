@@ -33,7 +33,7 @@
 | `ASYNC_SHIP` | Транзакция фиксируется локально, журнал уходит в резервный ЦОД асинхронно | Отставание резерва: часть последних записей может не доехать |
 | `SYNC_VOTERS_ACROSS_DC` | Commit ждёт подтверждения от удалённых голосующих узлов (потолок ожидания — `remote-ack-timeout-ms`) | Каждая запись оплачивает круговую задержку WAN |
 
-**Захват роли и RPO (на этой странице).** Claim: Active молчит дольше `claim-timeout-ms` → кворум подтверждений на Hold → `regionEpoch` +1 → новый Active. Клиент вызывает `rediscoverWriter()` (не следующий host в URL). RPO: при `ASYNC_SHIP` Hold может не получить свежие коммиты в пределах отставания доставки (`rpoEstimateMs` / apply lag); при `SYNC_VOTERS_ACROSS_DC` коммиты, прошедшие кворум, уже на Hold, но каждая запись платит WAN. Учебная проверка и возврат: [отказ Active-ЦОД](#отказ-active-цод) ниже; нагрузка: [несколько ЦОД под нагрузкой](cluster-multidc-highload.md).
+**Захват роли и RPO (на этой странице).** Захват: Active молчит дольше `claim-timeout-ms` → кворум подтверждений на Hold → `regionEpoch` +1 → новый Active. Клиент вызывает `rediscoverWriter()` (не следующий хост в URL). RPO: при `ASYNC_SHIP` Hold может не получить свежие коммиты в пределах отставания доставки (`rpoEstimateMs` / apply lag); при `SYNC_VOTERS_ACROSS_DC` коммиты, прошедшие кворум, уже на Hold, но каждая запись платит WAN. Учебная проверка и возврат: [отказ Active-ЦОД](#отказ-active-цод) ниже; нагрузка: [несколько ЦОД под нагрузкой](cluster-multidc-highload.md).
 
 ```mermaid
 flowchart LR
@@ -78,7 +78,9 @@ YAML и нагрузка: [несколько ЦОД под нагрузкой](
 
 ## Подключение клиента
 
-Клиент закрепляется на узле с `writerEligible` и актуальным `regionEpoch`. Список хостов в URL — кандидаты на reconnect, а не «round-robin писателей». После смены Active вызывайте `rediscoverWriter()`, а не следующий адрес вручную.
+Клиент закрепляется на узле с `writerEligible` и актуальным `regionEpoch`. Список хостов в URL — кандидаты на reconnect, а не перебор пишущих по кругу. После смены Active вызывайте `rediscoverWriter()`, а не следующий адрес вручную.
+
+**Допуск записи после старта / захвата.** Readiness UP само по себе недостаточно: перед клиентской записью дождитесь ровно одного `writerEligible=true` (AUTH / `ServerMeta` / readiness). Лабораторный гейт: [`wait-writer-eligible.ps1`](../../../../benchmarks/jepsen/scripts/wait-writer-eligible.ps1) / [`wait-writer-eligible.sh`](../../../../benchmarks/jepsen/scripts/wait-writer-eligible.sh) — переменные `WRITER_SETTLE_DEADLINE_SEC` (по умолчанию 180), `WRITER_SETTLE_POLL_SEC` (5), `POST_READY_SLEEP_SEC` (8; для Multi-DC часто поднимают до **20**), `WRITER_SETTLE_HOST`. После кворума захвата Hold рост `regionEpoch` не гарантирует мгновенную запись: пока tip догоняет, `writerEligible=false`. При **ASYNC** потере Active, если канал к бывшему Active-ЦОД ещё не восстановился, взаимные tip только среди Hold **не** снимают ограждение (`regionClaimAwaitRemoteDc`): запись вернётся, когда снова виден удалённый ЦОД и `localTip ≥ peerTip`. Клиент ждёт или вызывает `rediscoverWriter()`.
 
 | Конфигурация | Что писать в строке подключения |
 |--------------|----------------------------------|
@@ -92,7 +94,7 @@ YAML и нагрузка: [несколько ЦОД под нагрузкой](
 
 ## Отказ Active-ЦОД
 
-Когда Active замолкает дольше `claim-timeout-ms`, Hold набирает кворум подтверждений (`quorum-size`), `regionEpoch` увеличивается на единицу, и новый Active принимает запись. Клиент **не** крутит следующий host в URL: вызывает `rediscoverWriter()` и закрепляется на узле с `writerEligible` и новым epoch. Подробный YAML и нагрузка — [несколько ЦОД под нагрузкой](cluster-multidc-highload.md).
+Когда Active замолкает дольше `claim-timeout-ms`, Hold набирает кворум подтверждений (`quorum-size`), `regionEpoch` увеличивается на единицу, и новый Active принимает запись. Клиент **не** крутит следующий хост в URL: вызывает `rediscoverWriter()` и закрепляется на узле с `writerEligible` и новым epoch. Подробный YAML и нагрузка — [несколько ЦОД под нагрузкой](cluster-multidc-highload.md).
 
 **ASYNC_SHIP.** Commit остаётся локальным; журнал уходит на Hold асинхронно. При потере Active возможна потеря свежих коммитов в пределах отставания (RPO на Hold) — это плата за низкую задержку записи.
 
@@ -104,8 +106,8 @@ YAML и нагрузка: [несколько ЦОД под нагрузкой](
 
 1. Зафиксировать одного Active и известный `regionEpoch` до проверки.
 2. Сымитировать молчание Active дольше `claim-timeout-ms` (или корректно остановить узлы Active на стенде).
-3. Проверить claim на Hold: новый Active, `regionEpoch` +1, readiness UP, `writerEligible` у победителя.
-4. Клиент: `rediscoverWriter()` — не следующий host в URL; проверочная запись проходит только на новом Active.
+3. Проверить захват на Hold: новый Active, `regionEpoch` +1, readiness UP, затем `writerEligible` у победителя (не путать epoch bump с правом писать — tip может ещё догонять).
+4. Клиент: `rediscoverWriter()` — не следующий хост в URL; проверочная запись проходит только на новом Active.
 5. Возврат (подробно):
    - Поднимите бывший Active с ролью **Hold** (в том же семействе `regionEpoch`, что у нового Active — не запускайте второго Active).
    - Дождитесь подтягивания OpLog / repair до приемлемого отставания; не ставьте его в URL записи как пишущий.
@@ -119,7 +121,7 @@ YAML и нагрузка: [несколько ЦОД под нагрузкой](
 
 1. Ровно один Active; Hold/Witness не в URL записи как писатели.
 2. Режим выбран осознанно: `ASYNC_SHIP` (RPO на Hold) vs `SYNC_VOTERS_ACROSS_DC` (WAN на каждый commit).
-3. После claim: readiness UP, `writerEligible` у победителя, `regionEpoch` вырос, клиенты вызывают `rediscoverWriter()`.
+3. После захвата: readiness UP, затем `writerEligible` у победителя (tip может ещё догонять), `regionEpoch` вырос, клиенты вызывают `rediscoverWriter()`.
 4. Перед закрытием учебной потери Active снимите RPO (`rpoEstimateMs` / apply lag).
 5. Полный YAML и нагрузка: [несколько ЦОД под нагрузкой](cluster-multidc-highload.md).
 

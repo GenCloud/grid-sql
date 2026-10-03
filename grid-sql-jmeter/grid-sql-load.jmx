@@ -129,6 +129,16 @@
                 <stringProp name="Argument.value">${GRID_URL}</stringProp>
                 <stringProp name="Argument.metadata">=</stringProp>
               </elementProp>
+              <elementProp name="SETUP_GRID_URL" elementType="Argument">
+                <stringProp name="Argument.name">SETUP_GRID_URL</stringProp>
+                <stringProp name="Argument.value">${__P(SETUP_GRID_URL,)}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+              <elementProp name="READ_REPLICA_SESSION" elementType="Argument">
+                <stringProp name="Argument.name">READ_REPLICA_SESSION</stringProp>
+                <stringProp name="Argument.value">${__P(READ_REPLICA_SESSION,false)}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
               <elementProp name="USER" elementType="Argument">
                 <stringProp name="Argument.name">USER</stringProp>
                 <stringProp name="Argument.value">${USER}</stringProp>
@@ -249,6 +259,16 @@
                 <elementProp name="GRID_URL" elementType="Argument">
                   <stringProp name="Argument.name">GRID_URL</stringProp>
                   <stringProp name="Argument.value">${GRID_URL}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="SETUP_GRID_URL" elementType="Argument">
+                  <stringProp name="Argument.name">SETUP_GRID_URL</stringProp>
+                  <stringProp name="Argument.value">${__P(SETUP_GRID_URL,)}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+                <elementProp name="READ_REPLICA_SESSION" elementType="Argument">
+                  <stringProp name="Argument.name">READ_REPLICA_SESSION</stringProp>
+                  <stringProp name="Argument.value">${__P(READ_REPLICA_SESSION,false)}</stringProp>
                   <stringProp name="Argument.metadata">=</stringProp>
                 </elementProp>
                 <elementProp name="USER" elementType="Argument">

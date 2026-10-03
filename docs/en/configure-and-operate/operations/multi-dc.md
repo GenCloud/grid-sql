@@ -80,6 +80,8 @@ YAML and load: [multi-DC under load](cluster-multidc-highload.md).
 
 The client sticks to a node with `writerEligible` and a matching `regionEpoch`. Hosts in the URL are reconnect candidates, not a round-robin of writers. After Active changes, call `rediscoverWriter()` — do not rotate the next URL host by hand.
 
+**Write admission after boot / claim.** Readiness UP alone is not enough: before client writes, wait until exactly one node reports `writerEligible=true` (AUTH / `ServerMeta` / readiness). Lab gate: [`wait-writer-eligible.ps1`](../../../../benchmarks/jepsen/scripts/wait-writer-eligible.ps1) / [`wait-writer-eligible.sh`](../../../../benchmarks/jepsen/scripts/wait-writer-eligible.sh) — env `WRITER_SETTLE_DEADLINE_SEC` (default 180), `WRITER_SETTLE_POLL_SEC` (5), `POST_READY_SLEEP_SEC` (8; Multi-DC often **20**), `WRITER_SETTLE_HOST`. After a Hold claim quorum, a bumped `regionEpoch` does not guarantee immediate writes while tip catch-up is pending. Under **ASYNC** Active loss, if the former Active site link is still down, Hold-only mutual tips must **not** clear the fence (`regionClaimAwaitRemoteDc`): write admission returns when a remote-DC peer is seen again and `localTip ≥ peerTip`. Clients wait or call `rediscoverWriter()`.
+
 | Configuration | What to put in the URL |
 |---------------|------------------------|
 | Fencing off | Only Active-site node addresses |
@@ -104,7 +106,7 @@ On a lab or secondary stand (not during peak write on the only live Active), per
 
 1. Confirm one Active and a known `regionEpoch` before the drill.
 2. Simulate Active silence past `claim-timeout-ms` (or stop Active nodes cleanly on the stand).
-3. Verify Hold claim: new Active, `regionEpoch` +1, readiness UP, `writerEligible` on the winner.
+3. Verify Hold claim: new Active, `regionEpoch` +1, readiness UP, then `writerEligible` on the winner (do not confuse epoch bump with write admission — tip may still be catching up).
 4. Client path: `rediscoverWriter()` — not the next URL host; smoke write succeeds only on the new Active.
 5. Failback (detail):
    - Bring the former Active back with role **Hold** (same `regionEpoch` family as the new Active — do not start a second Active).
@@ -119,7 +121,7 @@ On a lab or secondary stand (not during peak write on the only live Active), per
 
 1. Exactly one Active; Hold/Witness not in the write URL as writers.
 2. Mode chosen deliberately: `ASYNC_SHIP` (Hold RPO) vs `SYNC_VOTERS_ACROSS_DC` (WAN on every commit).
-3. After claim: readiness UP, `writerEligible` on the winner, `regionEpoch` advanced, clients call `rediscoverWriter()`.
+3. After claim: readiness UP, then `writerEligible` on the winner (tip may still catch up), `regionEpoch` advanced, clients call `rediscoverWriter()`.
 4. Measure RPO (`rpoEstimateMs` / apply lag) before closing an Active-loss drill.
 5. Full YAML and load stamps: [multi-site under load](cluster-multidc-highload.md).
 

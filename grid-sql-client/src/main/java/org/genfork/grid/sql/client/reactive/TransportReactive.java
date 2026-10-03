@@ -37,8 +37,6 @@ import org.genfork.grid.sql.client.transport.TransportOutcome;
  * @since: 1.0
  */
 public final class TransportReactive {
-	private static final String CANCEL_TAG = "CANCEL";
-
 	private TransportReactive() {
 	}
 
@@ -51,7 +49,7 @@ public final class TransportReactive {
 			case TransportOutcome.SessionClose ignored ->
 					new EngineResult(SqlResult.ddl(SqlStatementTag.SESSION_CLOSE));
 			case TransportOutcome.Dml dml -> {
-				if (CANCEL_TAG.equalsIgnoreCase(dml.tag())) {
+				if (TransportOutcome.CANCEL_TAG.equalsIgnoreCase(dml.tag())) {
 					yield new EngineResult(SqlResult.affected(SqlStatementTag.SELECT, 0L));
 				}
 				yield new EngineResult(SqlResult.affected(SqlStatementTag.fromWire(dml.tag()), dml.affected()));

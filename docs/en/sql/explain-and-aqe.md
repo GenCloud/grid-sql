@@ -25,6 +25,14 @@ The planner does not dry-run a physical EXPLAIN just to estimate heaviness: `EXP
 2. Those markers absent — ordinary local path (index or scan without AQE).
 3. Correctness does not depend on the markers; only how work is split changes.
 
+`EXPLAIN ANALYZE` runs the product `SELECT` path (so heavy scans can hit AQE / `DIST_MAP`) and adds an `AQE_TIMINGS` row with `elapsedUs`, mid-flight `resplit` / `coalesce` deltas, and `mapReduce` call deltas for that statement.
+
+Open TX SELECT uses the same committed AQE/`DIST_MAP` path as autocommit; dirty overlay (DELETE / UPSERT / insert-only) stays serial after the committed residual.
+
+Mid-flight resplit uses **size-balanced** contiguous chunks (not hash buckets) so parallel map stages stay even when residual cost ≈ |keys|.
+
+Micrometer: `grid.sql.aqe.resplit`, `grid.sql.aqe.coalesce`, `grid.sql.distributed.map_reduce_*` — see [monitoring](../configure-and-operate/monitoring.md).
+
 ## When AQE fires
 
 Estimation runs **before** full key materialization — from ANALYZE stats (if any) and filter / JOIN / subquery cardinality.

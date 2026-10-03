@@ -130,12 +130,41 @@ write_artifacts() {
   return 0
 }
 
+stamp_outcome() {
+  local outcome="$1"
+  local notes="$2"
+  export STAMP="${STAMP:-$(date +%Y-%m-%d)-jepsen-nochao}"
+  export MODE=1dc-nochao OUTCOME="$outcome" NOTES="$notes"
+  export COMMAND="run-jepsen-nochao.sh (time-limit=${TIME_LIMIT})"
+  export FULL="$outcome" COMPOSE_STATUS=up CHAOS="none"
+  if [[ -x "$JEPSEN_DIR/scripts/stamp-results.sh" ]]; then
+    "$JEPSEN_DIR/scripts/stamp-results.sh" || true
+  fi
+}
+
 install_sql_client
 ensure_cluster
 echo "=== no-chaos register ==="
+set +e
 run_workload register
+reg_code=$?
+set -e
 ensure_cluster
 echo "=== no-chaos append ==="
+set +e
 run_workload append
+app_code=$?
+set -e
 echo "no-chaos done; collect latency from store/*/history.edn"
 write_artifacts || true
+REG_OUTCOME=FAIL
+APP_OUTCOME=FAIL
+[[ "$reg_code" -eq 0 ]] && REG_OUTCOME=PASS
+[[ "$app_code" -eq 0 ]] && APP_OUTCOME=PASS
+NOTES="register=$REG_OUTCOME; append=$APP_OUTCOME; no-nemesis; time-limit=$TIME_LIMIT"
+if [[ "$REG_OUTCOME" == "PASS" && "$APP_OUTCOME" == "PASS" ]]; then
+  stamp_outcome PASS "$NOTES"
+  exit 0
+fi
+stamp_outcome FAIL "$NOTES"
+exit 1

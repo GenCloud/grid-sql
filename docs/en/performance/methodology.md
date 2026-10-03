@@ -33,7 +33,9 @@ If the relevant percentiles fail, optimize the code instead of moving the thresh
 - Module: `grid-server-core`
 - Latency harness: `AbstractLatencyBenchmark` (`forks=1`, `threads=1`)
 - Latency tracks: `scripts/run-jmh-latency.{ps1,sh}`, output under `grid-server-core/benchmarks/lab/`
-- Jepsen: `benchmarks/jepsen/` plus `scripts/run-jepsen-smoke.{ps1,sh}`
+- Heavy AQE map-merge: JUnit JMH `index.benchmarks.AdaptiveParallelScanBenchmark` (calm host; compare parallel vs serial at ≥10k keys)
+- Jepsen: `benchmarks/jepsen/` — smoke `scripts/run-jepsen-smoke.{ps1,sh}`; full A–M matrix `scripts/run-jepsen-all-profiles.ps1` (cells in [`COVERAGE.md`](../../../benchmarks/jepsen/COVERAGE.md))
+- Settle before admitting write traffic: [`wait-writer-eligible.ps1`](../../../benchmarks/jepsen/scripts/wait-writer-eligible.ps1) / `.sh` (exactly one `writerEligible=true`), not readiness alone. Knobs: `WRITER_SETTLE_DEADLINE_SEC` (default 180), `WRITER_SETTLE_POLL_SEC` (5), `POST_READY_SLEEP_SEC` (8; Multi-DC often **20**), `WRITER_SETTLE_HOST`.
 - Vector kernels: `--add-modules=jdk.incubator.vector` (already set in surefire/failsafe and in the Jepsen compose)
 
 SQL load comes from Apache JMeter over `grid-sql-client` (`grid://`), not JDBC. Plan and flags: [JMeter](../tools/jmeter-load-slo.md). Host rules: [capacity](capacity-slo.md).
@@ -64,8 +66,8 @@ Planning tables are never edited by hand: re-run the load on a calm host and rep
 
 ## Jepsen
 
-Stand: [`benchmarks/jepsen/README.md`](../../../benchmarks/jepsen/README.md). The smoke run appends to [`RESULTS.md`](../../../benchmarks/jepsen/RESULTS.md); multi-site results go to [`multidc/RESULTS.md`](../../../benchmarks/jepsen/multidc/RESULTS.md).
+Stand: [`benchmarks/jepsen/README.md`](../../../benchmarks/jepsen/README.md). The smoke run appends to [`RESULTS.md`](../../../benchmarks/jepsen/RESULTS.md); multi-site results go to [`multidc/RESULTS.md`](../../../benchmarks/jepsen/multidc/RESULTS.md). Full edge matrix A–M: `run-jepsen-all-profiles.ps1` — stamp **2026-10-03** reported **13/13** safety PASS (`:valid? true`; A–K restamp **2026-10-02** was **11/11**). Profile **J** (swarm) is append-only by design (Elle list-append; no register) — see [`COVERAGE.md`](../../../benchmarks/jepsen/COVERAGE.md).
 
-`:valid? true` states consistency. It is not a throughput figure and not a load floor.
+`:valid? true` states consistency. It is not a throughput figure and not a load floor. Under calm Multi-DC `*-nochao`, `:no-proposer` / connect fails discarded by Elle are settle/availability issues — fix the admit gate, do not weaken quorum/`fsync`.
 
 Russian: [methodology.md](../../ru/performance/methodology.md).

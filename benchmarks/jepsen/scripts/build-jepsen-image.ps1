@@ -33,9 +33,14 @@ Write-Host "Staged $($jar.Name) -> benchmarks/jepsen/docker-staging/app.jar"
 Write-Host "docker build runtime-hostjar ..."
 Push-Location $ROOT
 try {
+  # Docker progress goes to stderr; with Stop that becomes terminating NativeCommandError.
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   docker build -f benchmarks/jepsen/Dockerfile --target runtime-hostjar `
     --build-arg "APP_JAR=benchmarks/jepsen/docker-staging/app.jar" -t $Image .
-  if ($LASTEXITCODE -ne 0) { throw "docker build failed: $LASTEXITCODE" }
+  $buildCode = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($buildCode -ne 0) { throw "docker build failed: $buildCode" }
 } finally {
   Pop-Location
 }

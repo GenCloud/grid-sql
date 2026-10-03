@@ -15,20 +15,26 @@
  */
 package org.genfork.grid.sql.jepsen.config;
 
-import org.genfork.grid.sql.SqlEngine;
-import org.genfork.grid.common.WriterFenceSignals;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import org.genfork.grid.common.WriterFenceSignals;
+import org.genfork.grid.replication.ReplicationCoordinator;
+import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.threading.ThreadService;
+
 /**
- * DDL bootstrap for Jepsen register table on profile {@code jepsen}.
+ * DDL bootstrap for Jepsen register/join tables on profile {@code jepsen}.
  * <p>
- * Hold / learner / region-fenced nodes skip DDL quietly (TD-REPL-001) — sticky discovery
- * routes writes to the Active writer.
+ * Non-writer nodes skip DDL quietly until promotion / tip catch-up — then retry so a
+ * Hold claim or late phase-rank never serves {@code Unknown table} after sticky pin.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -38,44 +44,155 @@ import org.springframework.stereotype.Component;
 @Profile("jepsen")
 public class JepsenSqlBootstrap {
 	private static final Logger log = LoggerFactory.getLogger(JepsenSqlBootstrap.class);
+
+	private static final String TABLE_REGISTER = "jepsen_register";
+	private static final String TABLE_PARENT = "jepsen_parent";
+	private static final String TABLE_CHILD = "jepsen_child";
+
 	private static final int SEED_ID_FROM = 2;
-	private static final int SEED_ID_TO = 16;
+	/** Matches Clojure {@code append-keys-join} (2..32) so join reads have parents without first append. */
+	private static final int SEED_ID_TO = 32;
+	/** Offset so child PK and parent PK hash to different shards (defaultShards=8). */
+	private static final int PARENT_ID_OFFSET = 100;
+	private static final int RETRY_MAX_ATTEMPTS = 120;
+	private static final long RETRY_SLEEP_MS = 500L;
 
 	private final SqlEngine sqlEngine;
+	private final ObjectProvider<ReplicationCoordinator> replicationProvider;
+	private final AtomicBoolean ready = new AtomicBoolean(false);
+	private final AtomicBoolean retryScheduled = new AtomicBoolean(false);
 
-	public JepsenSqlBootstrap(SqlEngine sqlEngine) {
+	public JepsenSqlBootstrap(
+			SqlEngine sqlEngine,
+			ObjectProvider<ReplicationCoordinator> replicationProvider) {
 		this.sqlEngine = sqlEngine;
+		this.replicationProvider = replicationProvider;
 	}
 
 	@EventListener(ApplicationReadyEvent.class)
 	public void onReady() {
+		final ReplicationCoordinator repl = replicationProvider.getIfAvailable();
+		if (repl != null) {
+			repl.addPromotionListener(this::tryBootstrapSafe);
+		}
+		tryBootstrapSafe();
+		scheduleRetryLoop();
+	}
+
+	private void scheduleRetryLoop() {
+		if (!retryScheduled.compareAndSet(false, true)) {
+			return;
+		}
+		// Platform I/O pool: long sleep retry must not pin logic VT carriers.
+		ThreadService.getNetworkExecutor().execute(() -> {
+			for (int attempt = 0; attempt < RETRY_MAX_ATTEMPTS && !ready.get(); attempt++) {
+				try {
+					Thread.sleep(RETRY_SLEEP_MS);
+				} catch (InterruptedException interrupted) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+				tryBootstrapSafe();
+			}
+			if (!ready.get()) {
+				log.warn("Jepsen SQL DDL bootstrap still incomplete after {} attempts",
+						RETRY_MAX_ATTEMPTS);
+			}
+		});
+	}
+
+	private void tryBootstrapSafe() {
+		if (ready.get()) {
+			return;
+		}
 		try {
-			sqlEngine.execute("""
-					CREATE TABLE IF NOT EXISTS jepsen_register (
+			if (tryBootstrap()) {
+				ready.set(true);
+			}
+		} catch (RuntimeException ex) {
+			if (WriterFenceSignals.requiresWriterRediscover(ex)) {
+				log.debug("Jepsen DDL deferred (writer fence): {}", ex.toString());
+				return;
+			}
+			log.warn("Jepsen DDL bootstrap attempt failed: {}", ex.toString());
+		}
+	}
+
+	/**
+	 * @return true when register + parent/child exist (seed best-effort)
+	 */
+	private boolean tryBootstrap() {
+		if (!ensureTables()) {
+			return false;
+		}
+		seedRows();
+		log.info("Jepsen SQL DDL ready: {} + {}/{} (seeded {}..{})",
+				TABLE_REGISTER, TABLE_PARENT, TABLE_CHILD, SEED_ID_FROM, SEED_ID_TO);
+		return true;
+	}
+
+	private boolean ensureTables() {
+		try {
+			sqlEngine.execute("CREATE TABLE IF NOT EXISTS " + TABLE_REGISTER + """
+					 (
 					  id INT PRIMARY KEY,
 					  number VARCHAR,
 					  status VARCHAR
 					)
 					""");
+			sqlEngine.execute("CREATE TABLE IF NOT EXISTS " + TABLE_PARENT + """
+					 (
+					  id INT PRIMARY KEY,
+					  name VARCHAR
+					)
+					""");
+			sqlEngine.execute("CREATE TABLE IF NOT EXISTS " + TABLE_CHILD + """
+					 (
+					  id INT PRIMARY KEY,
+					  parent_id INT,
+					  number VARCHAR,
+					  status VARCHAR
+					)
+					""");
+			return true;
 		} catch (RuntimeException ex) {
 			if (WriterFenceSignals.requiresWriterRediscover(ex)) {
-				log.debug("Jepsen DDL skipped on non-writer: {}", ex.toString());
-				return;
+				// Tables may already be present via replicated DDL apply.
+				return tablesPresent();
 			}
 			throw ex;
 		}
+	}
+
+	private boolean tablesPresent() {
+		return sqlEngine.catalog().getStore(TABLE_REGISTER) != null
+				&& sqlEngine.catalog().getStore(TABLE_PARENT) != null
+				&& sqlEngine.catalog().getStore(TABLE_CHILD) != null;
+	}
+
+	private void seedRows() {
 		for (int id = SEED_ID_FROM; id <= SEED_ID_TO; id++) {
 			try {
-				sqlEngine.execute("INSERT INTO jepsen_register (id, number, status) VALUES ("
-						+ id + ", '', 'seed')");
+				sqlEngine.execute("INSERT INTO " + TABLE_REGISTER
+						+ " (id, number, status) VALUES (" + id + ", '', 'seed')");
 			} catch (RuntimeException ex) {
 				if (WriterFenceSignals.requiresWriterRediscover(ex)) {
-					log.debug("Jepsen seed skipped on non-writer id={}: {}", id, ex.toString());
 					return;
 				}
 				// already present / conflict
 			}
+			try {
+				final int parentId = id + PARENT_ID_OFFSET;
+				sqlEngine.execute("INSERT INTO " + TABLE_PARENT
+						+ " (id, name) VALUES (" + parentId + ", 'p" + id + "')");
+				sqlEngine.execute("INSERT INTO " + TABLE_CHILD
+						+ " (id, parent_id, number, status) VALUES ("
+						+ id + ", " + parentId + ", '', 'seed')");
+			} catch (RuntimeException ex) {
+				if (WriterFenceSignals.requiresWriterRediscover(ex)) {
+					return;
+				}
+			}
 		}
-		log.info("Jepsen SQL DDL ready: jepsen_register (seeded {}..{})", SEED_ID_FROM, SEED_ID_TO);
 	}
 }

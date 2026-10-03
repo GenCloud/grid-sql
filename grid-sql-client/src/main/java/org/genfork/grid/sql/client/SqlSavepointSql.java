@@ -22,7 +22,7 @@ package org.genfork.grid.sql.client;
  * @date: 2026/08
  * @since: 1.0
  */
-final class SqlSavepointSql {
+public final class SqlSavepointSql {
 	private static final String SAVEPOINT = "SAVEPOINT ";
 	private static final String ROLLBACK_TO = "ROLLBACK TO SAVEPOINT ";
 	private static final String RELEASE = "RELEASE SAVEPOINT ";
@@ -33,19 +33,19 @@ final class SqlSavepointSql {
 	private SqlSavepointSql() {
 	}
 
-	static String savepoint(String name) {
+	public static String savepoint(String name) {
 		return SAVEPOINT + requireIdent(name);
 	}
 
-	static String rollbackTo(String name) {
+	public static String rollbackTo(String name) {
 		return ROLLBACK_TO + requireIdent(name);
 	}
 
-	static String release(String name) {
+	public static String release(String name) {
 		return RELEASE + requireIdent(name);
 	}
 
-	static String requireIdent(String name) {
+	public static String requireIdent(String name) {
 		if (name == null || name.isBlank()) {
 			throw new IllegalArgumentException(ERR_NAME);
 		}

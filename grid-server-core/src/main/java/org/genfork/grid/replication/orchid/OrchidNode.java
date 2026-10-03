@@ -156,6 +156,11 @@ public class OrchidNode {
 	private long proposeChainPrev;
 	private volatile double phase;
 	private volatile long lastCommittedSeq;
+	/**
+	 * High-water of peer-advertised tips; survives {@link #forgetPeer} so ASYNC Hold
+	 * cannot clear tip-catch-up after Active DC disconnect (Elle G2 / silent RPO read).
+	 */
+	private final AtomicLong maxObservedPeerCommittedSeq = new AtomicLong(0L);
 	private volatile Thread tickThread;
 
 	public OrchidNode(String nodeId, double coupling, double naturalFreqHz, double orderThreshold, long tickMs, DigestQuorum digestQuorum, OrchidTransport transport, List<String> peerIds) {
@@ -625,6 +630,7 @@ public class OrchidNode {
 			view.proposeId = msg.proposeId();
 			view.digest = msg.digest();
 			view.seen = true;
+			noteObservedPeerCommittedSeq(msg.lastCommittedSeq());
 			if (msg.proposeId() > 0) {
 				recordDigestAck(msg.nodeId(), msg.proposeId(), msg.digest());
 			}
@@ -727,16 +733,24 @@ public class OrchidNode {
 	}
 
 	/**
-	 * Highest {@code lastCommittedSeq} advertised by seen peers (phase / HELLO path).
+	 * Highest peer-advertised tip: live {@code seen} peers plus durable high-water
+	 * retained across {@link #forgetPeer} (cross-DC ASYNC Active loss).
 	 */
 	public long maxSeenPeerCommittedSeq() {
-		long max = 0L;
+		long max = maxObservedPeerCommittedSeq.get();
 		for (PeerView peer : peers.values()) {
 			if (peer != null && peer.seen && peer.lastCommittedSeq > max) {
 				max = peer.lastCommittedSeq;
 			}
 		}
 		return max;
+	}
+
+	private void noteObservedPeerCommittedSeq(long committedSeq) {
+		if (committedSeq <= 0L) {
+			return;
+		}
+		maxObservedPeerCommittedSeq.updateAndGet(prev -> Math.max(prev, committedSeq));
 	}
 
 	/**
@@ -755,6 +769,7 @@ public class OrchidNode {
 		if (committedSeq > view.lastCommittedSeq) {
 			view.lastCommittedSeq = committedSeq;
 		}
+		noteObservedPeerCommittedSeq(committedSeq);
 	}
 
 	/**

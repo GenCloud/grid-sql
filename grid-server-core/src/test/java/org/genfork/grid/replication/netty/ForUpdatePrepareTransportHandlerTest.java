@@ -20,6 +20,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.ForUpdatePrepareAck;
+import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil.TableKey;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -79,9 +80,24 @@ class ForUpdatePrepareTransportHandlerTest {
 		transport.handleForUpdateLockReq(
 				ReplicationRpcCodec.encodeForUpdateLockReq(TX_ID, false, TABLE, KEY));
 		final byte[] ackBody = transport.handleForUpdatePrepareReq(
-				ReplicationRpcCodec.encodeForUpdatePrepareReq(TX_ID, "coord"));
+				ReplicationRpcCodec.encodeForUpdatePrepareReq(
+						TX_ID, "coord", List.of(new TableKey(TABLE, KEY))));
 		final ForUpdatePrepareAck ack = ReplicationRpcCodec.decodeForUpdatePrepareAck(ackBody);
 		assertTrue(ack.prepared());
+	}
+
+	@Test
+	void prepareNacksWhenPartialKeySetHeld() {
+		transport.handleForUpdateLockReq(
+				ReplicationRpcCodec.encodeForUpdateLockReq(TX_ID, false, TABLE, KEY));
+		final byte[] missing = new byte[]{9, 9, 9};
+		final byte[] ackBody = transport.handleForUpdatePrepareReq(
+				ReplicationRpcCodec.encodeForUpdatePrepareReq(
+						TX_ID,
+						"coord",
+						List.of(new TableKey(TABLE, KEY), new TableKey(TABLE, missing))));
+		final ForUpdatePrepareAck ack = ReplicationRpcCodec.decodeForUpdatePrepareAck(ackBody);
+		assertFalse(ack.prepared());
 	}
 
 	@Test

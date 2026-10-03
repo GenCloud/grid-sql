@@ -15,11 +15,13 @@
  */
 package org.genfork.grid.sql.client;
 
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
+import org.genfork.grid.sql.SqlStatementTag;
 
 /**
  * Remote {@link TxContext}: SESSION_OPEN already done; owns BEGIN/COMMIT/ROLLBACK + CLOSE.
@@ -55,19 +57,19 @@ public final class RemoteTxContext implements TxContext {
     @Override
     public Flux<Result> executeBatch(List<String> sqls) {
         if (closed.get()) {
-            return Flux.error(new IllegalStateException("TxContext closed"));
+            return Flux.error(new IllegalStateException(SqlClientMessages.TX_CLOSED));
         }
         return connection.execBatch(sessionId, sqls);
     }
 
 	@Override
 	public Mono<Void> commit() {
-		return finish("COMMIT");
+		return finish(SqlStatementTag.COMMIT.wire());
 	}
 
 	@Override
 	public Mono<Void> rollback() {
-		return finish("ROLLBACK");
+		return finish(SqlStatementTag.ROLLBACK.wire());
 	}
 
 	@Override
@@ -80,7 +82,7 @@ public final class RemoteTxContext implements TxContext {
 	@Override
 	public Mono<Void> rollbackTo(Savepoint savepoint) {
 		if (savepoint == null) {
-			return Mono.error(new IllegalArgumentException("savepoint required"));
+			return Mono.error(new IllegalArgumentException(SqlClientMessages.SAVEPOINT_REQUIRED));
 		}
 		return control(SqlSavepointSql.rollbackTo(savepoint.name()));
 	}
@@ -88,7 +90,7 @@ public final class RemoteTxContext implements TxContext {
 	@Override
 	public Mono<Void> release(Savepoint savepoint) {
 		if (savepoint == null) {
-			return Mono.error(new IllegalArgumentException("savepoint required"));
+			return Mono.error(new IllegalArgumentException(SqlClientMessages.SAVEPOINT_REQUIRED));
 		}
 		return control(SqlSavepointSql.release(savepoint.name()));
 	}
@@ -105,7 +107,7 @@ public final class RemoteTxContext implements TxContext {
 	/** Control SQL that must keep the TX open (unlike COMMIT/ROLLBACK). */
 	private Mono<Void> control(String sql) {
 		if (closed.get() || completed.get()) {
-			return Mono.error(new IllegalStateException("TxContext closed"));
+			return Mono.error(new IllegalStateException(SqlClientMessages.TX_CLOSED));
 		}
 		return connection.exec(sessionId, sql, null).then();
 	}
@@ -143,7 +145,7 @@ public final class RemoteTxContext implements TxContext {
         @Override
         public Flux<Result> execute() {
             if (closed.get()) {
-                return Flux.error(new IllegalStateException("TxContext closed"));
+                return Flux.error(new IllegalStateException(SqlClientMessages.TX_CLOSED));
             }
 
             return connection.exec(sessionId, sql, boundArgs(), fetchWindowOrZero());

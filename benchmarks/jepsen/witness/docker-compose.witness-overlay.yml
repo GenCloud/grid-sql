@@ -5,11 +5,26 @@
 #   docker compose -f docker-compose.yml -f ../witness/docker-compose.witness-overlay.yml up -d
 #
 # Requires image jamoa-grid-jepsen:local with /app/config/witness/ baked (see Dockerfile).
-# Stamp PASS only in RESULTS.md after lein chaos (kill-dc-a) shows single claim winner.
+# Peer lists for a*/b* use witness/async/* (include w1); base multidc configs omit phantom w1.
 #
 # Health: management.endpoints.web.base-path=/ -> /health/liveness (not /replication/status).
 
 services:
+  a1:
+    command:
+      - --spring.config.additional-location=file:/app/config/witness/async/application-a1.yml
+  a2:
+    command:
+      - --spring.config.additional-location=file:/app/config/witness/async/application-a2.yml
+  a3:
+    command:
+      - --spring.config.additional-location=file:/app/config/witness/async/application-a3.yml
+  b1:
+    command:
+      - --spring.config.additional-location=file:/app/config/witness/async/application-b1.yml
+  b2:
+    command:
+      - --spring.config.additional-location=file:/app/config/witness/async/application-b2.yml
   w1:
     image: jamoa-grid-jepsen:local
     container_name: jamoa-multidc-w1

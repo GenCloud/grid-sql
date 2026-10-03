@@ -32,7 +32,7 @@ try (SyncConnectionFactory factory = SyncConnectionFactory.fromUrl(
 }
 ```
 
-`fromUrl` shares URL semantics with `ConnectionFactory.fromUrl` (including `readEndpoints`). Obtain waits on `RemoteConnectionFactory.obtainStage()` via `SyncAwait` — never `Mono.toFuture`. On shutdown close the factory (`AutoCloseable`). Reactive path: [Java client](java-client.md).
+`fromUrl` shares URL semantics with `ConnectionFactory.fromUrl` (including `readEndpoints`). Obtain waits on `RemoteConnectionFactory.obtainStage()` via `SyncAwait` — never `Mono.toFuture`. Writer rediscover on Sync path: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` — details in [Java client](java-client.md). On shutdown close the factory (`AutoCloseable`). Reactive path: [Java client](java-client.md).
 
 ## Service example
 

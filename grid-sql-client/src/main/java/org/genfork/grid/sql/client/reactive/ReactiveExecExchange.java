@@ -41,8 +41,6 @@ import org.genfork.grid.sql.netty.SqlWire;
  * @since: 1.0
  */
 public final class ReactiveExecExchange implements PendingExchange {
-	private static final String CANCEL_TAG = "CANCEL";
-
 	private final int fetchWindow;
 	private final IntConsumer fetchSender;
 	private final Runnable cancelSender;
@@ -137,8 +135,8 @@ public final class ReactiveExecExchange implements PendingExchange {
 			return true;
 		}
 
-		if (tag != null && CANCEL_TAG.equalsIgnoreCase(tag)) {
-			emitOutcome(new TransportOutcome.Dml(0L, CANCEL_TAG));
+		if (tag != null && TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
+			emitOutcome(new TransportOutcome.Dml(0L, TransportOutcome.CANCEL_TAG));
 			return true;
 		}
 

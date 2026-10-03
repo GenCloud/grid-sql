@@ -14,8 +14,11 @@ export JEPSEN_SCRIPTS=/jepsen/scripts
 export JEPSEN_USE_LOCALHOST=0
 export JEPSEN_MULTIDC=1
 export JEPSEN_MULTI_HOST=1
-# Propagate ASYNC vs SYNC so nemesis-dc-link.sh kill-voter targets the right node.
+# Propagate ASYNC vs SYNC / async-swarm so compose + nemesis target the right profile.
 export MULTIDC_MODE="${MULTIDC_MODE:-async}"
+# Optional edge flags (swarm bounce schedule / join key space).
+export JEPSEN_SWARM="${JEPSEN_SWARM:-}"
+export JEPSEN_JOIN_SHARDS="${JEPSEN_JOIN_SHARDS:-}"
 export JEPSEN_GRID_URL="grid://grid:grid@a1:15432,a2:15433,a3:15434,b1:15435/public?maxConnections=1&maxTxContexts=64"
 if [[ "${JEPSEN_WITNESS:-}" == "1" ]]; then
   export JEPSEN_NODES=a1,a2,a3,b1,b2,w1
@@ -29,7 +32,12 @@ NEM_MODE="${3:-}"
 command -v lein
 command -v docker || true
 # Third arg: empty | chaos => nemesis ON; nochao | 1 | no-nemesis => --no-nemesis
+# Calm nochao: discover only Active DC-A (a1-a3) — Hold b* amplify connect/:no-proposer.
 if [[ "$NEM_MODE" == "nochao" || "$NEM_MODE" == "1" || "$NEM_MODE" == "no-nemesis" ]]; then
+  export JEPSEN_NODES=a1,a2,a3
+  export JEPSEN_HTTP_PORTS=7777,7778,7779
+  export JEPSEN_SQL_PORTS=15432,15433,15434
+  export JEPSEN_GRID_URL="grid://grid:grid@a1:15432,a2:15433,a3:15434/public?maxConnections=1&maxTxContexts=64"
   lein run -m jamoa-jepsen.core test --workload "$WL" --time-limit "$TL" --no-nemesis
 else
   lein run -m jamoa-jepsen.core test --workload "$WL" --time-limit "$TL"

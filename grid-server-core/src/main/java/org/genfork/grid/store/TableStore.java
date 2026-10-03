@@ -363,12 +363,12 @@ public final class TableStore {
 	 * Upsert row; when {@code rejectExistingPk} is false, overwrite an existing PK (ON CONFLICT / MERGE).
 	 */
 	public long upsert(Object[] values, boolean rejectExistingPk) {
-		ensureWriterEligible();
 		final Object[] coerced = coerceRow(values);
 		final byte[] keyBytes = PrimaryKeyCodec.encodeRow(schema, coerced);
 		validateConstraints(coerced, keyBytes, rejectExistingPk);
 		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
 		if (mutationRecorder == null) {
 			// Map + sync index only — never stage-queue + indexNow (double-mutates BPTree → CME).
@@ -388,11 +388,11 @@ public final class TableStore {
 	 * Staged {@link #upsert} remains the durable/replication product path.
 	 */
 	public long putIndexed(Object... values) {
-		ensureWriterEligible();
 		final Object[] coerced = coerceRow(values);
 		final byte[] keyBytes = PrimaryKeyCodec.encodeRow(schema, coerced);
 		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		processors[shard].putMapOnly(keyBytes, valueBytes);
 		indexWorker.indexNowFromValues(keyBytes, coerced);
 		return 1L;
@@ -403,9 +403,9 @@ public final class TableStore {
 	 * Used by MATERIALIZED VIEW refresh clear path.
 	 */
 	public long removeIndexed(Object pkValue) {
-		ensureWriterEligible();
 		final byte[] keyBytes = PrimaryKeyCodec.encodeArgument(schema, pkValue);
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		processors[shard].removeMapOnly(keyBytes);
 		indexWorker.indexNow(keyBytes, null);
 		return 1L;
@@ -592,9 +592,9 @@ public final class TableStore {
 	}
 
 	public long deleteByKeyBytes(byte[] keyBytes) {
-		ensureWriterEligible();
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		final GridEntriesProcessor processor = getProcessor(keyBytes);
 		if (mutationRecorder == null) {
 			processor.removeMapOnly(keyBytes);
@@ -607,10 +607,10 @@ public final class TableStore {
 	}
 
 	public long updateSetLiteralsByKey(byte[] keyBytes, Map<String, Object> sets) {
-		ensureWriterEligible();
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		Objects.requireNonNull(sets, "sets");
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
 		final GridEntriesProcessor.KeyEntry keyLock = new GridEntriesProcessor.KeyEntry(keyBytes);
 		final Object lock = fieldModifyLocks.computeIfAbsent(keyLock, k -> new Object());
@@ -660,7 +660,6 @@ public final class TableStore {
 	 * Install a pre-merged UPSERT blob (one encode → one put; no second rewrite).
 	 */
 	public long installEncodedUpsert(EncodedRow encoded) {
-		ensureWriterEligible();
 		Objects.requireNonNull(encoded, "encoded");
 		Objects.requireNonNull(encoded.keyBytes(), "keyBytes");
 		Objects.requireNonNull(encoded.valueBytes(), "valueBytes");
@@ -668,6 +667,7 @@ public final class TableStore {
 		final byte[] keyBytes = encoded.keyBytes();
 		final byte[] valueBytes = encoded.valueBytes();
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
 		final GridEntriesProcessor.KeyEntry keyLock = new GridEntriesProcessor.KeyEntry(keyBytes);
 		final Object lock = fieldModifyLocks.computeIfAbsent(keyLock, k -> new Object());
@@ -682,9 +682,9 @@ public final class TableStore {
 	}
 
 	public long applyFieldModify(Object keyObj, List<ModifyPayload.Decoded> assigns) {
-		ensureWriterEligible();
 		final byte[] keyArray = SqlWireUtil.toGenericArray(keyObj);
 		final int shard = getShard(keyArray);
+		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
 		final GridEntriesProcessor.KeyEntry keyLock = new GridEntriesProcessor.KeyEntry(keyArray);
 		final Object lock = fieldModifyLocks.computeIfAbsent(keyLock, k -> new Object());
@@ -998,11 +998,11 @@ public final class TableStore {
 	 * Call only from {@code SqlTxCommitter} after TX_BEGIN markers when replicated.
 	 */
 	public PriorBytes flushTxUpsert(byte[] keyBytes, byte[] valueBytes) {
-		ensureWriterEligible();
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		validateEncodedChecks(valueBytes);
 		maybeInjectFlushFail();
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
 		final byte[] prior = processor.getCommitted(keyBytes);
 		if (mutationRecorder == null) {
@@ -1024,10 +1024,10 @@ public final class TableStore {
 	 * else sync map+index remove with undo snapshot.
 	 */
 	public PriorBytes flushTxDelete(byte[] keyBytes) {
-		ensureWriterEligible();
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		maybeInjectFlushFail();
 		final int shard = getShard(keyBytes);
+		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
 		final byte[] prior = processor.getCommitted(keyBytes);
 		if (mutationRecorder == null) {
@@ -1043,7 +1043,6 @@ public final class TableStore {
 	 * replication is on; otherwise per-key local install with undo snapshots.
 	 */
 	public List<PriorBytes> flushTxBatch(List<TxFlushOp> ops) {
-		ensureWriterEligible();
 		Objects.requireNonNull(ops, "ops");
 		if (ops.isEmpty()) {
 			return List.of();
@@ -1064,6 +1063,7 @@ public final class TableStore {
 		}
 		final TableStoreFlushSupport.PreparedBatch prepared = TableStoreFlushSupport.prepareRecorderBatch(
 				ops, this::getShard, shard -> processors[shard], this::validateEncodedChecks, false);
+		ensureWritable(prepared.shard());
 		mutationRecorder.recordCommittedBatchBlocking(prepared.shard(), prepared.entries());
 		for (TxFlushOp op : ops) {
 			if (!op.delete()) {
@@ -1078,7 +1078,6 @@ public final class TableStore {
 	 * groupForce; single-op autocommit (no envelope) → data-only path (no markers).
 	 */
 	public List<PriorBytes> flushTxUnit(long txId, byte[] beginValue, List<TxFlushOp> ops) {
-		ensureWriterEligible();
 		Objects.requireNonNull(ops, "ops");
 		if (ops.isEmpty()) {
 			return List.of();
@@ -1089,6 +1088,7 @@ public final class TableStore {
 		}
 		final TableStoreFlushSupport.PreparedBatch prepared = TableStoreFlushSupport.prepareRecorderBatch(
 				ops, this::getShard, shard -> processors[shard], this::validateEncodedChecks, true);
+		ensureWritable(prepared.shard());
 		mutationRecorder.recordTxUnitBlocking(prepared.shard(), txId, beginValue, prepared.entries());
 		for (TxFlushOp op : ops) {
 			if (!op.delete()) {
@@ -1152,6 +1152,11 @@ public final class TableStore {
 
 	private void ensureWriterEligible() {
 		ReplicaAccessGate.ensureWrite(replicationCoordinator);
+	}
+
+	private void ensureWritable(int shard) {
+		ensureWriterEligible();
+		ReplicaAccessGate.ensureShardWritable(replicationCoordinator, schema.catalogKey(), shard);
 	}
 
 	/** Convenience for lit SET assigns not covered by RMW UpdatePlan forms. */

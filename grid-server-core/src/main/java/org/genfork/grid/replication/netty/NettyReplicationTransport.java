@@ -27,6 +27,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import org.genfork.grid.metrics.SqlLockMetrics;
 import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.apply.ReplicaApplier;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -48,7 +49,9 @@ import org.genfork.grid.replication.repair.VersionLocus;
 import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
 import org.genfork.grid.replication.transport.ReplicationPeer;
+import org.genfork.grid.sql.tx.ForUpdateLockWaiterKeyUtil;
 import org.genfork.grid.sql.tx.ForUpdatePeerHeldKeys;
+import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil;
 import org.genfork.grid.sql.tx.LockWaitCancelledException;
 import org.genfork.grid.sql.tx.LockWaitTimeoutException;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
@@ -96,11 +99,11 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 * when waiting for {@link ReplicationMessageType#FOR_UPDATE_LOCK_ACK} (logic VT only).
 	 */
 	private static final long FOR_UPDATE_LOCK_ACK_SLACK_MS = 1000L;
+	private static final long MIN_ACK_TIMEOUT_MS = 1L;
 	/**
 	 * Fallback ACK wait when no lock manager is bound.
 	 */
 	private static final long FOR_UPDATE_LOCK_ACK_TIMEOUT_MS = SqlRecordLockManager.DEFAULT_LOCK_WAIT_MS + FOR_UPDATE_LOCK_ACK_SLACK_MS;
-	private static final String FOR_UPDATE_WAITER_SEP = "@";
 	private final String localNodeId;
 	private final String clusterId;
 	private final String localDc;
@@ -149,6 +152,7 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 */
 	private final ConcurrentHashMap<String, CompletableFuture<Boolean>> forUpdateLockWaiters = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, CompletableFuture<Boolean>> forUpdatePrepareWaiters = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, CompletableFuture<Boolean>> forUpdateReleaseWaiters = new ConcurrentHashMap<>();
 	/**
 	 * VT/logic-thread coalesce of APPLY_ACK while applying an OpLog segment (not Netty EL).
 	 */
@@ -490,11 +494,17 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 */
 	public void setForUpdateLockManager(SqlRecordLockManager locks) {
 		forUpdateLockManager.set(locks);
+		forUpdatePeerHeldKeys.bindLockManager(locks);
 	}
 
 	@VisibleForTesting
 	public SqlRecordLockManager forUpdateLockManager() {
 		return forUpdateLockManager.get();
+	}
+
+	@VisibleForTesting
+	public ForUpdatePeerHeldKeys forUpdatePeerHeldKeys() {
+		return forUpdatePeerHeldKeys;
 	}
 
 	/**
@@ -515,7 +525,7 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 			}
 			throw new LockWaitTimeoutException("FOR UPDATE peer channel inactive peerId=" + peerId + " table=" + table);
 		}
-		final String waiterKey = forUpdateWaiterKey(peerId, txId);
+		final String waiterKey = ForUpdateLockWaiterKeyUtil.lockOrPrepareKey(peerId, txId);
 		final CompletableFuture<Boolean> waiter = new CompletableFuture<>();
 		final CompletableFuture<Boolean> prev = forUpdateLockWaiters.putIfAbsent(waiterKey, waiter);
 		if (prev != null) {
@@ -555,7 +565,8 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	}
 
 	/**
-	 * Fire-and-forget {@link ReplicationMessageType#FOR_UPDATE_LOCK_RELEASE}.
+	 * Fire-and-forget release (commit success path). Prefer {@link #sendForUpdateLockReleaseAwait}
+	 * on abort.
 	 */
 	public void sendForUpdateLockRelease(String peerId, long txId, String table, byte[] key) {
 		Objects.requireNonNull(peerId, "peerId");
@@ -563,6 +574,44 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		Objects.requireNonNull(key, "key");
 		final byte[] body = ReplicationRpcCodec.encodeForUpdateLockRelease(txId, table, key);
 		write(peerId, new WireMessage(ReplicationMessageType.FOR_UPDATE_LOCK_RELEASE.opcode(), body));
+	}
+
+	/**
+	 * Abort-path release with ACK (logic VT). Fail-closed: miss/timeout recorded as metric + false.
+	 * Waiter correlator includes table+key so multi-key abort on one peer does not collide.
+	 */
+	public boolean sendForUpdateLockReleaseAwait(String peerId, long txId, String table, byte[] key) {
+		Objects.requireNonNull(peerId, "peerId");
+		Objects.requireNonNull(table, "table");
+		Objects.requireNonNull(key, "key");
+		if (!hasActivePeerChannel(peerId)) {
+			SqlLockMetrics.recordPeerReleaseMiss();
+			return false;
+		}
+
+		final String waiterKey = ForUpdateLockWaiterKeyUtil.releaseKey(peerId, txId, table, key);
+		final CompletableFuture<Boolean> waiter = new CompletableFuture<>();
+		final CompletableFuture<Boolean> prev = forUpdateReleaseWaiters.putIfAbsent(waiterKey, waiter);
+		if (prev != null) {
+			throw new IllegalStateException(
+					"overlapping FOR_UPDATE_LOCK_RELEASE await peerId=" + peerId
+							+ " txId=" + txId + " table=" + table);
+		}
+
+		final byte[] body = ReplicationRpcCodec.encodeForUpdateLockRelease(txId, table, key);
+		write(peerId, new WireMessage(ReplicationMessageType.FOR_UPDATE_LOCK_RELEASE.opcode(), body));
+		try {
+			final Boolean ok = waiter.get(forUpdateLockAckTimeoutMs(), TimeUnit.MILLISECONDS);
+			return Boolean.TRUE.equals(ok);
+		} catch (TimeoutException | InterruptedException | ExecutionException ex) {
+			if (ex instanceof InterruptedException) {
+				Thread.currentThread().interrupt();
+			}
+			SqlLockMetrics.recordPeerReleaseMiss();
+			return false;
+		} finally {
+			forUpdateReleaseWaiters.remove(waiterKey, waiter);
+		}
 	}
 
 	/**
@@ -597,7 +646,16 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 */
 	public void handleForUpdateLockAck(byte[] body) {
 		final ReplicationRpcCodec.ForUpdateLockAck ack = ReplicationRpcCodec.decodeForUpdateLockAck(body);
-		final String waiterKey = forUpdateWaiterKey(ack.fromNodeId(), ack.txId());
+		if (ack.table() != null && ack.key() != null) {
+			final String releaseKey = ForUpdateLockWaiterKeyUtil.releaseKey(
+					ack.fromNodeId(), ack.txId(), ack.table(), ack.key());
+			final CompletableFuture<Boolean> releaseWaiter = forUpdateReleaseWaiters.remove(releaseKey);
+			if (releaseWaiter != null) {
+				releaseWaiter.complete(ack.granted());
+				return;
+			}
+		}
+		final String waiterKey = ForUpdateLockWaiterKeyUtil.lockOrPrepareKey(ack.fromNodeId(), ack.txId());
 		final CompletableFuture<Boolean> waiter = forUpdateLockWaiters.remove(waiterKey);
 		if (waiter != null) {
 			waiter.complete(ack.granted());
@@ -606,38 +664,61 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 
 	/**
 	 * Inbound {@link ReplicationMessageType#FOR_UPDATE_LOCK_RELEASE} on logic VT.
+	 * Completes optional release waiter and ACKs via {@link ReplicationMessageType#FOR_UPDATE_LOCK_ACK}
+	 * with table+key trailer for demux.
 	 */
-	public void handleForUpdateLockRelease(byte[] body) {
+	public void handleForUpdateLockRelease(byte[] body, String fromPeerId) {
 		final ReplicationRpcCodec.ForUpdateLockRelease rel = ReplicationRpcCodec.decodeForUpdateLockRelease(body);
 		forUpdatePeerHeldKeys.forget(rel.txId(), rel.table(), rel.key());
 		final SqlRecordLockManager locks = forUpdateLockManager.get();
-		if (locks == null) {
-			return;
+		if (locks != null) {
+			try {
+				locks.unlock(rel.table(), rel.key());
+			} catch (RuntimeException ignored) {
+			}
 		}
-		try {
-			locks.unlock(rel.table(), rel.key());
-		} catch (RuntimeException ignored) {
+		if (fromPeerId != null && !fromPeerId.isBlank()) {
+			final byte[] ack = ReplicationRpcCodec.encodeForUpdateLockAck(
+					rel.txId(), true, localNodeId, rel.table(), rel.key());
+			write(fromPeerId, new WireMessage(ReplicationMessageType.FOR_UPDATE_LOCK_ACK.opcode(), ack));
 		}
-		// idempotent release
+	}
+
+	@VisibleForTesting
+	void handleForUpdateLockRelease(byte[] body) {
+		handleForUpdateLockRelease(body, null);
 	}
 
 	/**
-	 * Send {@link ReplicationMessageType#FOR_UPDATE_PREPARE_REQ} and wait for ACK (logic VT only).
+	 * Send {@link ReplicationMessageType#FOR_UPDATE_PREPARE_REQ} with key-set and wait for ACK (logic VT only).
 	 *
 	 * @return {@code true} when peer prepared
 	 */
+	/**
+	 * Send prepare with empty key-set (always NACK under fail-closed {@code containsAll}).
+	 * Prefer {@link #sendForUpdatePrepareReq(String, long, List)}.
+	 */
+	@VisibleForTesting
 	public boolean sendForUpdatePrepareReq(String peerId, long txId) {
+		return sendForUpdatePrepareReq(peerId, txId, List.of());
+	}
+
+	public boolean sendForUpdatePrepareReq(
+			String peerId,
+			long txId,
+			List<ForUpdatePrepareWireUtil.TableKey> keys
+	) {
 		Objects.requireNonNull(peerId, "peerId");
 		if (!hasActivePeerChannel(peerId)) {
 			return false;
 		}
-		final String waiterKey = forUpdateWaiterKey(peerId, txId);
+		final String waiterKey = ForUpdateLockWaiterKeyUtil.lockOrPrepareKey(peerId, txId);
 		final CompletableFuture<Boolean> waiter = new CompletableFuture<>();
 		final CompletableFuture<Boolean> prev = forUpdatePrepareWaiters.putIfAbsent(waiterKey, waiter);
 		if (prev != null) {
 			throw new IllegalStateException("overlapping FOR_UPDATE_PREPARE_REQ peerId=" + peerId + " txId=" + txId);
 		}
-		final byte[] body = ReplicationRpcCodec.encodeForUpdatePrepareReq(txId, localNodeId);
+		final byte[] body = ReplicationRpcCodec.encodeForUpdatePrepareReq(txId, localNodeId, keys);
 		write(peerId, new WireMessage(ReplicationMessageType.FOR_UPDATE_PREPARE_REQ.opcode(), body));
 		try {
 			final Boolean prepared = waiter.get(forUpdateLockAckTimeoutMs(), TimeUnit.MILLISECONDS);
@@ -665,17 +746,18 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	}
 
 	/**
-	 * Inbound prepare: vote yes when this peer still holds ≥1 FOR UPDATE key for {@code txId}.
+	 * Inbound prepare: vote yes when this peer holds every key in the request set.
 	 */
 	public byte[] handleForUpdatePrepareReq(byte[] body) {
 		final ReplicationRpcCodec.ForUpdatePrepareReq req = ReplicationRpcCodec.decodeForUpdatePrepareReq(body);
-		final boolean prepared = forUpdateLockManager.get() != null && forUpdatePeerHeldKeys.hasAny(req.txId());
+		final boolean prepared = forUpdateLockManager.get() != null
+				&& forUpdatePeerHeldKeys.containsAll(req.txId(), req.keys());
 		return ReplicationRpcCodec.encodeForUpdatePrepareAck(req.txId(), prepared, localNodeId);
 	}
 
 	public void handleForUpdatePrepareAck(byte[] body) {
 		final ReplicationRpcCodec.ForUpdatePrepareAck ack = ReplicationRpcCodec.decodeForUpdatePrepareAck(body);
-		final String waiterKey = forUpdateWaiterKey(ack.fromNodeId(), ack.txId());
+		final String waiterKey = ForUpdateLockWaiterKeyUtil.lockOrPrepareKey(ack.fromNodeId(), ack.txId());
 		final CompletableFuture<Boolean> waiter = forUpdatePrepareWaiters.remove(waiterKey);
 		if (waiter != null) {
 			waiter.complete(ack.prepared());
@@ -696,7 +778,8 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	@VisibleForTesting
 	CompletableFuture<Boolean> offerForUpdateLockWaiter(String peerId, long txId) {
 		final CompletableFuture<Boolean> waiter = new CompletableFuture<>();
-		final CompletableFuture<Boolean> prev = forUpdateLockWaiters.putIfAbsent(forUpdateWaiterKey(peerId, txId), waiter);
+		final CompletableFuture<Boolean> prev = forUpdateLockWaiters.putIfAbsent(
+				ForUpdateLockWaiterKeyUtil.lockOrPrepareKey(peerId, txId), waiter);
 		return prev != null ? prev : waiter;
 	}
 
@@ -708,13 +791,9 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	private long forUpdateLockAckTimeoutMs() {
 		final SqlRecordLockManager locks = forUpdateLockManager.get();
 		if (locks != null) {
-			return Math.max(1L, locks.lockWaitTimeoutMs() + FOR_UPDATE_LOCK_ACK_SLACK_MS);
+			return Math.max(MIN_ACK_TIMEOUT_MS, locks.lockWaitTimeoutMs() + FOR_UPDATE_LOCK_ACK_SLACK_MS);
 		}
 		return FOR_UPDATE_LOCK_ACK_TIMEOUT_MS;
-	}
-
-	private static String forUpdateWaiterKey(String peerId, long txId) {
-		return peerId + FOR_UPDATE_WAITER_SEP + txId;
 	}
 
 	private void write(String peerId, WireMessage message) {
@@ -853,6 +932,7 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	@Override
 	public void close() {
 		started.set(false);
+		forUpdatePeerHeldKeys.stopLeaseSweeper();
 		for (CompletableFuture<Boolean> waiter : forUpdateLockWaiters.values()) {
 			waiter.complete(false);
 		}
@@ -861,6 +941,10 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 			waiter.complete(false);
 		}
 		forUpdatePrepareWaiters.clear();
+		for (CompletableFuture<Boolean> waiter : forUpdateReleaseWaiters.values()) {
+			waiter.complete(false);
+		}
+		forUpdateReleaseWaiters.clear();
 		channelsByPeer.values().forEach(Channel::close);
 		channelsByPeer.clear();
 		if (serverChannel != null) {

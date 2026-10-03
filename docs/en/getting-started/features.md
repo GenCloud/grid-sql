@@ -1,6 +1,6 @@
 # Features
 
-What Grid supports today: SQL, storage, transactions, cluster behaviour, and clients.
+Need a short answer: what Grid does today, and what it deliberately leaves outside. Below — SQL, storage, transactions, cluster behaviour, and clients — without promising “full Postgres”.
 
 ## Scope at a glance
 
@@ -29,7 +29,7 @@ See [SQL fundamentals](../sql/fundamentals.md), [DDL](../sql/ddl.md), [DML](../s
 - Data is sharded in memory; indexes are updated through a queue.
 - On disk: sealed map files (GMAP) and the mutation journal (OpLog).
 - Startup either preloads everything (`FULL`) or maps files and loads on demand (`LAZY`).
-- A working-set ceiling evicts cold keys and reloads them from disk on miss.
+- A working-set ceiling evicts cold keys with **CLOCK** (not LRU) and reloads them from disk on miss.
 - B+ tree indexes over one or several columns; bitmap indexes only via an explicit `CREATE BITMAP INDEX`.
 - Secondary indexes can be sealed as well, so an index miss does not fall back to a partition scan.
 - Local durability and peer replication are separate switches: one node can persist without replicas.

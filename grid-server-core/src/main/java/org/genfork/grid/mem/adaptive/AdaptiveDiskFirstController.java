@@ -16,6 +16,7 @@
 package org.genfork.grid.mem.adaptive;
 
 import org.genfork.grid.mem.stage.WorkingSetBudget;
+import org.genfork.grid.replication.metrics.DurabilityMetrics;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.threading.ThreadService;
 import org.slf4j.Logger;
@@ -93,6 +94,15 @@ public final class AdaptiveDiskFirstController {
 		return effectiveMaxEntries.get();
 	}
 
+	/** Sum of registered working-set live sizes (CLOCK entries). */
+	public int workingSetSize() {
+		int total = 0;
+		for (WorkingSetBudget budget : budgets) {
+			total += budget.size();
+		}
+		return total;
+	}
+
 	/**
 	 * True when HIGH (or configured LAZY floor): shard-touch hydrate, no FULL preload expectation.
 	 */
@@ -134,25 +144,6 @@ public final class AdaptiveDiskFirstController {
 		}
 	}
 
-	/**
-	 * After DROP / domain purge: clear sealed-only preference and restore LOW ceiling.
-	 * Atomically relaxes mode so the next Capacity seed is not pinned in HIGH from a
-	 * prior warm write that filled the NORMAL budget while heap free-ratio stayed healthy.
-	 */
-	public void relaxAfterDomainPurge() {
-		final AdaptiveDiskFirstMode current = mode.get();
-		if (current == AdaptiveDiskFirstMode.LOW) {
-			return;
-		}
-		if (mode.compareAndSet(current, AdaptiveDiskFirstMode.LOW)) {
-			final int cap = capFor(AdaptiveDiskFirstMode.LOW);
-			effectiveMaxEntries.set(cap);
-			applyAll(AdaptiveDiskFirstMode.LOW, cap);
-			ReplicationMetrics.recordAdaptiveModeChange();
-			log.info("AdaptiveDiskFirst relaxAfterDomainPurge {} → LOW effectiveMax={}", current, cap);
-		}
-	}
-
 	/** Test / ops: force free-ratio sample ({@code null} = live MemoryMXBean). */
 	public void setFreeRatioOverride(Double freeRatio) {
 		this.freeRatioOverride = freeRatio;
@@ -166,6 +157,8 @@ public final class AdaptiveDiskFirstController {
 			wsSize += b.size();
 		}
 		final int wsCap = Math.max(1, effectiveMaxEntries.get());
+		DurabilityMetrics.setWsSize(wsSize);
+		DurabilityMetrics.setWsMaxEntries(wsCap);
 		final long sealedMisses = ReplicationMetrics.sealedMisses();
 		final long prev = sealedMissSnapshot.getAndSet(sealedMisses);
 		final long sealedMissDelta = Math.max(0L, sealedMisses - prev);
