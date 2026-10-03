@@ -23,6 +23,8 @@ EXPLAIN SELECT * FROM t WHERE name = 'x';
 2. Нет этих меток — обычный (локальный) путь: индекс или скан без AQE.
 3. Корректность результата не зависит от меток; меняется только способ разбиения работы.
 
+`EXPLAIN ANALYZE` добавляет SUMMARY и строку `AQE_TIMINGS` (elapsedUs / resplit / coalesce / mapReduce). Micrometer: `grid.sql.aqe.*` — см. [мониторинг](../configure-and-operate/monitoring.md).
+
 ## Когда срабатывает AQE
 
 Оценка идёт **до** полной материализации ключей — по статистике ANALYZE (если есть) и кардинальности фильтра / JOIN / подзапроса.

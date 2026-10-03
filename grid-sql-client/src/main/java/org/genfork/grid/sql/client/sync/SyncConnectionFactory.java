@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.sql.client.sync;
 
-import org.genfork.grid.sql.client.*;
-
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -25,11 +23,23 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.genfork.grid.sql.client.Connection;
+import org.genfork.grid.sql.client.ConnectionOptions;
+import org.genfork.grid.sql.client.GridSqlUri;
+import org.genfork.grid.sql.client.HostEndpoint;
+import org.genfork.grid.sql.client.ReadEndpointRingUtil;
+import org.genfork.grid.sql.client.ReadPreference;
+import org.genfork.grid.sql.client.RemoteConnection;
+import org.genfork.grid.sql.client.RemoteConnectionFactory;
+import org.genfork.grid.sql.client.ServerMeta;
+import org.genfork.grid.sql.client.SessionRole;
+
 /**
  * Blocking factory over writer (+ optional READ_REPLICA) {@link RemoteConnectionFactory}.
  * <p>
  * Sole sync edge for obtain/park: uses {@link RemoteConnectionFactory#obtainStage()} —
- * never {@code Mono.toFuture}. Canonical entry: {@link #fromUrl(String)} (product URL parity).
+ * never {@code Mono.toFuture}. Canonical entry: {@link #fromUrl(String)} (product URL parity /
+ * JDBC TCP floor). Harness / CLI exclusive entry: {@link #exclusiveFromUrl(String)}.
  * {@link #shared} interns one factory per target (Driver and DataSource share).
  *
  * @author: GenCloud
@@ -98,6 +108,47 @@ public final class SyncConnectionFactory implements AutoCloseable {
 				parsed.schema());
 	}
 
+	/**
+	 * Exclusive (non-interned) factory from product URL — preserves URL options, does
+	 * <strong>not</strong> apply JDBC {@link #MIN_TCP_CHANNELS} floor. Owns dispose on
+	 * {@link #close()}. Prefer for CLI / Jepsen / tools; JDBC keeps {@link #fromUrl}.
+	 */
+	public static SyncConnectionFactory exclusiveFromUrl(String gridUrl) {
+		return exclusiveFromUrl(gridUrl, null);
+	}
+
+	public static SyncConnectionFactory exclusiveFromUrl(String gridUrl, Duration timeout) {
+		final GridSqlUri parsed = GridSqlUri.parse(gridUrl);
+		final ConnectionOptions options = parsed.options();
+		final RemoteConnectionFactory writer = new RemoteConnectionFactory(
+				parsed.endpoints(),
+				parsed.user(),
+				parsed.password(),
+				options,
+				parsed.schema());
+		final RemoteConnectionFactory read =
+				createReadFactoryOrNull(parsed.endpoints(), options, parsed.user(), parsed.password(), parsed.schema());
+		final Duration effective = timeout == null ? resolveTimeout(writer) : timeout;
+		return new SyncConnectionFactory(writer, read, effective, null, true, null);
+	}
+
+	/**
+	 * Exclusive factory that owns dispose of the given writer (and optional read) on {@link #close()}.
+	 */
+	public static SyncConnectionFactory exclusiveOf(RemoteConnectionFactory writer) {
+		return exclusiveOf(writer, null, null);
+	}
+
+	public static SyncConnectionFactory exclusiveOf(
+			RemoteConnectionFactory writer,
+			RemoteConnectionFactory readFactory,
+			Duration timeout
+	) {
+		Objects.requireNonNull(writer, "writer");
+		final Duration effective = timeout == null ? resolveTimeout(writer) : timeout;
+		return new SyncConnectionFactory(writer, readFactory, effective, null, true, null);
+	}
+
 	public static SyncConnectionFactory openLocal(
 			String host,
 			int port,
@@ -130,7 +181,8 @@ public final class SyncConnectionFactory implements AutoCloseable {
 		final ConnectionOptions floored = applyTcpFloor(options);
 		final RemoteConnectionFactory writer =
 				new RemoteConnectionFactory(endpoints, user, password, floored, defaultSchema);
-		final RemoteConnectionFactory read = createReadFactoryOrNull(floored, user, password, defaultSchema);
+		final RemoteConnectionFactory read =
+				createReadFactoryOrNull(endpoints, floored, user, password, defaultSchema);
 		return new SyncConnectionFactory(writer, read, resolveTimeout(writer), null, true, null);
 	}
 
@@ -154,7 +206,8 @@ public final class SyncConnectionFactory implements AutoCloseable {
 		final SharedEntry entry = SHARED.computeIfAbsent(key, ignored -> {
 			final RemoteConnectionFactory writer =
 					new RemoteConnectionFactory(endpoints, user, password, floored, schema);
-			final RemoteConnectionFactory read = createReadFactoryOrNull(floored, user, password, schema);
+			final RemoteConnectionFactory read =
+					createReadFactoryOrNull(endpoints, floored, user, password, schema);
 			final SyncConnectionFactory created = new SyncConnectionFactory(
 					writer, read, resolveTimeout(writer), null, true, key);
 			return new SharedEntry(created);
@@ -163,6 +216,7 @@ public final class SyncConnectionFactory implements AutoCloseable {
 	}
 
 	private static RemoteConnectionFactory createReadFactoryOrNull(
+			List<HostEndpoint> authority,
 			ConnectionOptions floored,
 			String user,
 			String password,
@@ -174,28 +228,10 @@ public final class SyncConnectionFactory implements AutoCloseable {
 		if (floored.readPreference() != ReadPreference.REPLICA) {
 			return null;
 		}
-		final List<HostEndpoint> readEps = floored.readEndpoints();
-		final int minTcp = Math.max(MIN_TCP_CHANNELS, floored.minConnections());
-		final int maxRead = Math.max(minTcp, floored.maxReadConnections());
-		final ConnectionOptions readOpts = ConnectionOptions.builder()
-				.minConnections(minTcp)
-				.maxConnections(maxRead)
-				.maxTxContexts(floored.maxTxContexts())
-				.warmup(true)
-				.execTimeout(floored.execTimeout())
-				.connectTimeout(floored.connectTimeout())
-				.readTimeout(floored.readTimeout())
-				.writeTimeout(floored.writeTimeout())
-				.maxRetries(floored.maxRetries())
-				.retryDelay(floored.retryDelay())
-				.retryMode(floored.retryMode())
-				.timezone(floored.timezone())
-				.readPreference(ReadPreference.REPLICA)
-				.staleReadPolicy(floored.staleReadPolicy())
-				.maxReadConnections(maxRead)
-				.fetchWindow(floored.fetchWindow())
-				.readEndpoints(readEps)
-				.build();
+		final List<HostEndpoint> readEps =
+				ReadEndpointRingUtil.mergeReadRing(floored.readEndpoints(), authority);
+		final ConnectionOptions readOpts = ReadEndpointRingUtil.buildReadReplicaOptions(
+				floored, readEps, MIN_TCP_CHANNELS);
 		return new RemoteConnectionFactory(
 				readEps, user, password, readOpts, schema, SessionRole.READ_REPLICA);
 	}
@@ -247,12 +283,9 @@ public final class SyncConnectionFactory implements AutoCloseable {
 	 * Blocking obtain of a multiplexed TCP {@link SyncConnection} (writer channel + optional read pool).
 	 */
 	public SyncConnection open() {
-		final org.genfork.grid.sql.client.Connection connection =
+		final Connection connection =
 				SyncAwait.await(writerFactory.obtainStage(), timeout, null, syncExecutor);
-		if (!(connection instanceof RemoteConnection remote)) {
-			throw new IllegalStateException("obtainStage must return RemoteConnection");
-		}
-		return new SyncConnection(remote, writerFactory, readFactory, timeout, syncExecutor);
+		return wrapRemote(connection);
 	}
 
 	/**
@@ -269,6 +302,19 @@ public final class SyncConnectionFactory implements AutoCloseable {
 		return open();
 	}
 
+	/**
+	 * Mid-op orchid / region fence: destroy live channels and AUTH-rediscover writer
+	 * ({@link RemoteConnectionFactory#rediscoverWriterStage()}).
+	 * <p>
+	 * Callers that need one transparent retry should use
+	 * {@link SyncSession#callWithWriterRediscover} (holds the rediscovered channel).
+	 */
+	public SyncConnection rediscoverWriter() {
+		final Connection connection =
+				SyncAwait.await(writerFactory.rediscoverWriterStage(), timeout, null, syncExecutor);
+		return wrapRemote(connection);
+	}
+
 	public Duration timeout() {
 		return timeout;
 	}
@@ -279,6 +325,14 @@ public final class SyncConnectionFactory implements AutoCloseable {
 
 	public ServerMeta lastServerMeta() {
 		return writerFactory.lastServerMeta();
+	}
+
+	public boolean writerEligible() {
+		return writerFactory.writerEligible();
+	}
+
+	public String promoteHint() {
+		return writerFactory.promoteHint();
 	}
 
 	/** Optional READ_REPLICA factory when URL routing is enabled. */
@@ -330,6 +384,13 @@ public final class SyncConnectionFactory implements AutoCloseable {
 
 	RemoteConnectionFactory remoteFactory() {
 		return writerFactory;
+	}
+
+	private SyncConnection wrapRemote(Connection connection) {
+		if (!(connection instanceof RemoteConnection remote)) {
+			throw new IllegalStateException("factory stage must return RemoteConnection");
+		}
+		return new SyncConnection(remote, writerFactory, readFactory, timeout, syncExecutor);
 	}
 
 	@Override

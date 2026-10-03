@@ -62,7 +62,7 @@ curl http://127.0.0.1:7778/health/readiness
 | Check | Expect |
 |-------|--------|
 | Both readiness probes UP | SQL listening; with replication — ORCHID synced |
-| One `writerEligible: true` | Usually the primary; client meta matches |
+| One `writerEligible: true` | Usually the primary; client meta matches. Readiness UP alone is **not** enough — admit writes only after this field |
 | Smoke write on **15432**, read via `readEndpoints=…:15433` | Row visible after catch-up (`applyLagStale` false) |
 
 | Symptom | Likely cause |

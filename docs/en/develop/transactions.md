@@ -89,7 +89,7 @@ Mono<Void> partial = Mono.usingWhen(
 
 Locks are taken per record key through `SqlRecordLockManager`: a fair queue on `(table, key)`. Waiting happens on a logic virtual thread, never on the Netty event loop.
 
-`FOR UPDATE` and `SKIP LOCKED` execute **on the writer only** — a read replica rejects such a statement. With replication on, peer-lock agents are wired from **replication `peers`** (not `grid.sql.distributed-peers` — that knob is read-only SELECT/JOIN fan-out); the same indexed wire keys are locked on peers via `DistForUpdateCoordinator`. A Netty error on a peer lock is a **reject to the client**, not a silent local-only commit. Without agents, behaviour stays local-only. Multi-table / INNER JOIN `FOR UPDATE` locks are supported. Prepare/commit-dec peer votes are product-wired (2PC-lite for peer row locks) — not external XA. Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
+`FOR UPDATE` and `SKIP LOCKED` execute **on the writer only** — a read replica rejects such a statement. With replication on, peer-lock agents are wired from **replication `peers`** (not `grid.sql.distributed-peers` — that knob is read-only SELECT/JOIN fan-out); the same indexed wire keys are locked on peers via `DistForUpdateCoordinator`. Prepare votes carry a per-peer key-set; peer leases expire after **30s** TTL (no sidecar prepare journal). A Netty error on a peer lock is a **reject to the client**, not a silent local-only commit. Without agents, behaviour stays local-only. Multi-table / INNER JOIN `FOR UPDATE` locks are supported. Prepare/commit-dec peer votes are product-wired (2PC-lite for peer row locks) — not external XA. Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 A typical queue pattern:
 

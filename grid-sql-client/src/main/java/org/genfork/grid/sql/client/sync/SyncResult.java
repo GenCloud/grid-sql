@@ -16,6 +16,7 @@
 package org.genfork.grid.sql.client.sync;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Executor;
@@ -67,6 +68,29 @@ public final class SyncResult {
 		}
 		final Executor executor = syncExecutor == null ? SyncExecutors.executor() : syncExecutor;
 		return SyncExecutors.call(executor, () -> SyncConnection.drainPortal(rs, timeout));
+	}
+
+	/**
+	 * Drain result-set rows as dense {@code Object[]} cells (column order = metadata).
+	 */
+	public List<Object[]> objectRows() {
+		if (!(outcome instanceof TransportOutcome.ResultSet rs)) {
+			return List.of();
+		}
+		final int cols = rs.columns().size();
+		final List<Row> rows = rows();
+		if (rows.isEmpty()) {
+			return List.of();
+		}
+		final List<Object[]> out = new ArrayList<>(rows.size());
+		for (Row row : rows) {
+			final Object[] cells = new Object[cols];
+			for (int i = 0; i < cols; i++) {
+				cells[i] = row.get(i);
+			}
+			out.add(cells);
+		}
+		return out;
 	}
 
 	public void cancel() {

@@ -15,10 +15,13 @@
  */
 package org.genfork.grid.serial;
 
+import org.genfork.grid.utils.ArrayVectors;
+
 /**
  * Range hash / equals for wire byte spans (same polynomial as {@link java.util.Arrays#hashCode(byte[])}).
  * <p>
  * Shared by {@link WireSpan} and owned-copy {@link WireFieldBytes} — one algorithm, no duplication.
+ * Equals uses Vector API via {@link ArrayVectors#bytesEqualRange}.
  *
  * @author: GenCloud
  * @date: 2025/06
@@ -50,7 +53,7 @@ public final class WireRangeOps {
 	}
 
 	/**
-	 * Equality of two ranges (length and content).
+	 * Equality of two ranges (length and content) — vectorized when incubator.vector is present.
 	 */
 	public static boolean equals(
 			byte[] left,
@@ -63,18 +66,13 @@ public final class WireRangeOps {
 		if (leftLen != rightLen) {
 			return false;
 		}
-		if (left == right && leftOff == rightOff) {
+		if (leftLen <= 0) {
 			return true;
 		}
 		if (left == null || right == null) {
-			return leftLen == 0;
+			return false;
 		}
-		for (int i = 0; i < leftLen; i++) {
-			if (left[leftOff + i] != right[rightOff + i]) {
-				return false;
-			}
-		}
-		return true;
+		return ArrayVectors.bytesEqualRange(left, leftOff, leftLen, right, rightOff, rightLen);
 	}
 
 	/**

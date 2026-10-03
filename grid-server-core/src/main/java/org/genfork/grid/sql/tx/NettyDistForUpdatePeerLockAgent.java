@@ -56,6 +56,13 @@ public final class NettyDistForUpdatePeerLockAgent implements DistForUpdatePeerL
 		transport.sendForUpdateLockRelease(peerId, txId, table, key);
 	}
 
+	@Override
+	public boolean unlockAwait(long txId, String table, byte[] key) {
+		Objects.requireNonNull(table, "table");
+		Objects.requireNonNull(key, "key");
+		return transport.sendForUpdateLockReleaseAwait(peerId, txId, table, key);
+	}
+
 	public String peerId() {
 		return peerId;
 	}

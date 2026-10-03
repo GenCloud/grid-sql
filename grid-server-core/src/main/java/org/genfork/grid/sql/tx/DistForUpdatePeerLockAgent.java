@@ -37,6 +37,16 @@ public interface DistForUpdatePeerLockAgent {
 	 */
 	boolean lock(long txId, String table, byte[] key, boolean skipLocked);
 
-	/** Release a previously acquired peer lock (idempotent). */
+	/** Release a previously acquired peer lock (idempotent, best-effort on Netty). */
 	void unlock(long txId, String table, byte[] key);
+
+	/**
+	 * Abort-path release: await peer ACK (fail-closed). Default = {@link #unlock} then {@code true}.
+	 *
+	 * @return {@code true} when peer ACK'd (or in-process unlock); {@code false} on miss/timeout
+	 */
+	default boolean unlockAwait(long txId, String table, byte[] key) {
+		unlock(txId, table, key);
+		return true;
+	}
 }

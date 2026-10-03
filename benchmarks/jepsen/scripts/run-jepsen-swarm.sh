@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Jepsen 1-DC swarm-cutover (COVERAGE J): append multi-mop TX + swarm-bounce nemesis.
+# Compose: docker-compose.yml + docker-compose.swarm.yml. GHA: JEPSEN_REBUILD=0 (shared image).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+JEPSEN_DIR="$ROOT/benchmarks/jepsen"
+cd "$JEPSEN_DIR"
+
+TIME_LIMIT="${JEPSEN_TIME_LIMIT:-60}"
+if [[ "$TIME_LIMIT" -lt 60 ]]; then
+  TIME_LIMIT=60
+fi
+REBUILD=0
+for arg in "$@"; do
+  if [[ "$arg" == "--rebuild" || "$arg" == "-Rebuild" ]]; then
+    REBUILD=1
+  fi
+done
+if [[ "${JEPSEN_REBUILD:-0}" == "1" ]]; then
+  REBUILD=1
+fi
+
+export COMPOSE_FILE="docker-compose.yml:docker-compose.swarm.yml"
+export JEPSEN_SWARM=1
+unset JEPSEN_JOIN_SHARDS || true
+unset JEPSEN_UNCLEAN_REVIVE || true
+unset JEPSEN_MULTIDC || true
+
+run_mvn() {
+  if command -v mvn.cmd >/dev/null 2>&1; then
+    mvn.cmd "$@"
+  else
+    mvn "$@"
+  fi
+}
+
+stamp_outcome() {
+  local outcome="$1"
+  local notes="$2"
+  export STAMP="${STAMP:-$(date +%Y-%m-%d)-jepsen-swarm-chaos}"
+  export MODE=1dc-swarm-chaos OUTCOME="$outcome" NOTES="$notes"
+  export COMMAND="run-jepsen-swarm.sh append (time-limit=${TIME_LIMIT})"
+  export FULL="$outcome" COMPOSE_STATUS=up-swarm CHAOS="partition+kill+swarm-bounce"
+  if [[ -x "$JEPSEN_DIR/scripts/stamp-results.sh" ]]; then
+    "$JEPSEN_DIR/scripts/stamp-results.sh" || true
+  fi
+}
+
+ensure_cluster() {
+  echo "Ensuring swarm Compose cluster (fresh volumes)..."
+  docker compose down -v --remove-orphans || true
+  if [[ "$REBUILD" == "1" ]]; then
+    echo "Rebuilding images..."
+    export DOCKER_BUILDKIT=1
+    docker compose up -d --build --force-recreate n1 n2 n3
+    REBUILD=0
+  else
+    echo "Using existing jamoa-grid-jepsen:local..."
+    docker compose up -d --force-recreate n1 n2 n3
+  fi
+  sleep "${JEPSEN_SETTLE_SEC:-12}"
+}
+
+ensure_control() {
+  docker compose --profile control up -d jepsen
+  local ready=0
+  local i=0
+  while (( i < 90 )); do
+    if MSYS_NO_PATHCONV=1 docker compose --profile control exec -T jepsen \
+        test -f /tmp/jepsen-control-ready >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 2
+    i=$((i + 1))
+  done
+  if [[ "$ready" != "1" ]]; then
+    echo "ERROR: jepsen control did not become ready" >&2
+    return 1
+  fi
+}
+
+run_append() {
+  ensure_control
+  local script_name="run-workload-chaos-swarm-append.sh"
+  cat > "$JEPSEN_DIR/scripts/$script_name" <<EOF
+#!/bin/bash
+set +e
+export PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export JAVA_HOME=/opt/java/openjdk JAVA_CMD=/opt/java/openjdk/bin/java
+export JVM_OPTS="-Xmx2g -XX:+UseG1GC" LEIN_JVM_OPTS="-Xmx1g"
+export JAVA_TOOL_OPTIONS="--enable-preview -Xmx2g"
+cd /jepsen/jamoa
+export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=15432,15433,15434
+export JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0
+export JEPSEN_SWARM=1
+pkill -9 -f 'jamoa-jepsen.core' 2>/dev/null || true
+sleep 1
+lein run -m jamoa-jepsen.core test --workload append --time-limit ${TIME_LIMIT}
+echo LEIN_EXIT=$?
+EOF
+  chmod +x "$JEPSEN_DIR/scripts/$script_name"
+  set +e
+  local out
+  out="$(MSYS_NO_PATHCONV=1 docker compose --profile control exec -T jepsen bash "/jepsen/scripts/$script_name" 2>&1)"
+  local code=$?
+  set -e
+  printf '%s\n' "$out"
+  if printf '%s' "$out" | grep -q 'Analysis invalid'; then return 1; fi
+  if printf '%s' "$out" | grep -q 'Everything looks good'; then return 0; fi
+  if printf '%s' "$out" | grep -Eq '^ :valid\? true'; then return 0; fi
+  local lein_exit
+  lein_exit="$(printf '%s' "$out" | sed -n 's/^LEIN_EXIT=\([0-9]\+\)/\1/p' | tail -1)"
+  if [[ -n "$lein_exit" ]]; then return "$lein_exit"; fi
+  return "$code"
+}
+
+release_ports() {
+  unset COMPOSE_FILE || true
+  unset JEPSEN_SWARM || true
+  if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
+    bash "$JEPSEN_DIR/scripts/jepsen-purge.sh" 1dc || true
+  else
+    docker compose down -v --remove-orphans || true
+  fi
+}
+trap release_ports EXIT
+
+echo "Installing grid-sql-client..."
+(cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
+
+ensure_cluster
+echo "=== Jepsen swarm-cutover: append multi-key TX ==="
+set +e
+run_append
+code=$?
+set -e
+if [[ "$code" -eq 0 ]]; then
+  stamp_outcome PASS "swarm-append=PASS"
+  exit 0
+fi
+stamp_outcome FAIL "swarm-append=FAIL"
+exit 1

@@ -112,4 +112,11 @@ public class ReplicaAccessGateTest {
 		assertDoesNotThrow(() -> ReplicaAccessGate.ensureReplicaReadState(
 				true, false, true, true));
 	}
+
+	@Test
+	void shardWritableRejectsWhileDraining() {
+		assertThrows(OrchidNotSyncedException.class,
+				() -> ReplicaAccessGate.ensureShardWritableState(true));
+		assertDoesNotThrow(() -> ReplicaAccessGate.ensureShardWritableState(false));
+	}
 }

@@ -74,14 +74,26 @@ I/O архива — синхронно на вызывающем потоке; 
 
 | Класс | Пакет | Роль |
 |-------|-------|------|
-| `OpLogArchiveUtil` | `org.genfork.grid.replication.util` | Архив / archive-before-truncate |
-| `OpLogArchiveStreamer` | `org.genfork.grid.replication.util` | Поток OpLog на дозапись за пределы узла |
-| `SealedBaseBackupUtil` | `org.genfork.grid.replication.snapshot` | Base backup / install `dataDir` |
-| `PitrRestoreMain` | `org.genfork.grid.replication.pitr` | CLI restore до seq |
+| `OpLogArchiveUtil` | `org.genfork.grid.replication.util` | Локальный архив сегментов / archive-before-truncate |
+| `OpLogArchiveStreamer` | `org.genfork.grid.replication.pitr` | Поток OpLog на дозапись (`append.bin`) за пределы замены сегмента |
+| `OpLogArchiveCoverageUtil` | `org.genfork.grid.replication.pitr` | Проверка покрытия + слияние segment/stream для restore |
+| `SealedBaseBackupUtil` / `SealedBaseBackupMain` | `org.genfork.grid.replication.snapshot` | Base backup / install / clear CLI |
+| `PitrRestoreMain` | `org.genfork.grid.replication.pitr` | CLI restore до seq (segment + stream `[W+1…T]`) |
 | `PitrCoordinatedRestore` | `org.genfork.grid.replication.pitr` | Восстановление между ЦОД при ограждении Active |
 | `PitrActiveFence` | `org.genfork.grid.replication.pitr` | Отказ при ошибке: Active / два пишущих |
 
+**Сегмент и поток.** Безопасный truncate может **заменить** `segment.bin` только следующим окном. История нескольких seal живёт в потоке (`{archive}/stream` по умолчанию). `PitrRestoreMain` сливает оба источника и отказывает при дыре в `[W+1…T]`. Перед restore проверяйте покрытие:
+
 ```text
+OpLogArchiveCoverageUtil.coversEnvelope(W, T, mergedCoverage(segmentCoverage(...), streamCoverage(...)))
+```
+
+Покрытие по min/max — только ориентир; restore всё равно fail-closed на дырах через `mergeOpsForRestore` / `PitrRestoreMain`.
+
+```text
+java --enable-preview -cp ... org.genfork.grid.replication.snapshot.SealedBaseBackupMain \
+  --mode backup --data-dir ./data/.../node --backup-dir ./backup/base-W --watermark 1000
+
 java --enable-preview -cp ... org.genfork.grid.replication.pitr.PitrRestoreMain \
   --base ./backup/base-W \
   --archive ./data/oplog-archive \
@@ -109,5 +121,6 @@ java --enable-preview -cp ... org.genfork.grid.replication.pitr.PitrRestoreMain 
 | Узел не догоняет peers | Чужой `cluster-id` / epoch; общий dataDir; смотреть HomologousRepair |
 | После restore «пропали» открытые TX | Ожидаемо: dirty до COMMIT не в OpLog |
 | Restore отклонён (ограждение Active) | ЦОД Hold/Witness или два пишущих / два Active |
+| После `DROP TABLE` sealed остались на диске | Ожидаемо: DROP не чистит sealed; reclaim — явный retire — [хранение](../../understand/storage-sealed-gmap.md) |
 
 Дальше: [долговременное хранение](../configuration/durability.md), [хранение GMAP](../../understand/storage-sealed-gmap.md), [отказы](failures.md), [обновление узла](upgrade.md).

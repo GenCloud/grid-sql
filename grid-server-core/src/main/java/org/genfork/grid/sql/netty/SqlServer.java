@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.sql.netty;
 
+import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -43,7 +44,8 @@ public final class SqlServer implements AutoCloseable {
 	private static final int DEFAULT_MAX_TX_CONTEXTS = 8;
 
 	private final String host;
-	private final int port;
+	/** Listen port; updated from the bound channel when ctor port is {@code 0}. */
+	private volatile int port;
 	private final SqlEngine engine;
 	private final String user;
 	private final String password;
@@ -131,7 +133,10 @@ public final class SqlServer implements AutoCloseable {
 							applyLagStaleOverride
 					));
 			channel = b.bind(host, port).sync().channel();
-			log.info("SQL server listening on {}:{}", host, port);
+			if (channel.localAddress() instanceof InetSocketAddress bound) {
+				this.port = bound.getPort();
+			}
+			log.info("SQL server listening on {}:{}", host, this.port);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			close();

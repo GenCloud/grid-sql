@@ -29,6 +29,7 @@ import org.genfork.grid.replication.transport.ApplyAckSender;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -57,9 +58,13 @@ import java.util.function.Function;
  * @since: 1.0
  */
 public class ReplicaApplier {
+	private static final String ERR_APPLIER_BY_DOMAIN_UNSET =
+			"applierByDomain unset; cannot flush multi-stream envelope";
+	private static final String ERR_APPLIER_MISSING_PREFIX = "no ReplicaApplier for domain ";
+
 	private final ReplicationNodeState nodeState;
 	private final OpLog opLog;
-    private final Function<Integer, GridEntriesProcessor> processorByShard;
+	private final Function<Integer, GridEntriesProcessor> processorByShard;
 	private final ApplyAckSender ackSender;
 	private final boolean applyToLocalMap;
 
@@ -71,6 +76,11 @@ public class ReplicaApplier {
 	private final Map<String, Long> openTxIdByStream = new ConcurrentHashMap<>();
 	private volatile CatalogDdlHandler catalogDdlHandler;
 	private volatile TxEnvelopeCoordinator envelopeCoordinator;
+	/**
+	 * Resolve peer domain appliers so multi-stream envelope flush installs keys into the
+	 * owning table processors (not the last TX_COMMIT stream's map).
+	 */
+	private volatile Function<String, ReplicaApplier> applierByDomain;
 	/**
 	 * LAZY OpLog hydrate: map-only install + deferred batch index (no async queue / no full reindex).
 	 */
@@ -152,6 +162,14 @@ public class ReplicaApplier {
 
 	public void setEnvelopeCoordinator(TxEnvelopeCoordinator envelopeCoordinator) {
 		this.envelopeCoordinator = envelopeCoordinator;
+	}
+
+	/**
+	 * Wire domain → applier lookup for multi-table envelope flush (set from
+	 * {@code ReplicationCoordinator} after registerDomain).
+	 */
+	public void setApplierByDomain(Function<String, ReplicaApplier> applierByDomain) {
+		this.applierByDomain = applierByDomain;
 	}
 
 	/**
@@ -242,7 +260,7 @@ public class ReplicaApplier {
 					openTxIdByStream.remove(lockKey);
 					txStaging.remove(lockKey);
 					if (gate.noteApplyCommit(txId, stream)) {
-						flushEnvelopeStaging(gate.takeApplyStaging(txId));
+						flushEnvelopeStagingByOwningDomain(gate.takeApplyStagingByStream(txId));
 					}
 					return;
 				}
@@ -406,7 +424,7 @@ public class ReplicaApplier {
 			}
 			throw new IllegalStateException("DDL op missing SQL value opSeq=" + op.opSeq());
 		}
-		final String ddlSql = new String(value, java.nio.charset.StandardCharsets.UTF_8);
+		final String ddlSql = new String(value, StandardCharsets.UTF_8);
 		try {
 			handler.applyCatalogDdl(ddlSql, op.schemaEpoch());
 		} catch (RuntimeException ex) {
@@ -446,10 +464,37 @@ public class ReplicaApplier {
 		}
 	}
 
-	private void flushEnvelopeStaging(List<TxEnvelopeCoordinator.StagedMutation> staging) {
-		if (staging == null || staging.isEmpty()) {
+	/**
+	 * Install each stream's staged mutations via that stream's domain applier.
+	 * Never fall back to {@code this} for a foreign domain (cross-table TX / Elle G2).
+	 */
+	private void flushEnvelopeStagingByOwningDomain(
+			Map<TxEnvelopeCodec.StreamRef, List<TxEnvelopeCoordinator.StagedMutation>> byStream
+	) {
+		if (byStream == null || byStream.isEmpty()) {
 			return;
 		}
+		final Function<String, ReplicaApplier> resolver = applierByDomain;
+		if (resolver == null) {
+			throw new IllegalStateException(ERR_APPLIER_BY_DOMAIN_UNSET);
+		}
+		for (Map.Entry<TxEnvelopeCodec.StreamRef, List<TxEnvelopeCoordinator.StagedMutation>> e
+				: byStream.entrySet()) {
+			final TxEnvelopeCodec.StreamRef ref = e.getKey();
+			final List<TxEnvelopeCoordinator.StagedMutation> staging = e.getValue();
+			if (ref == null || staging == null || staging.isEmpty()) {
+				continue;
+			}
+			final ReplicaApplier owner = resolver.apply(ref.domain());
+			if (owner == null) {
+				throw new IllegalStateException(ERR_APPLIER_MISSING_PREFIX + ref.domain());
+			}
+			owner.installOwnedEnvelopeStaging(staging);
+		}
+	}
+
+	/** Map+index install for envelope staging owned by this domain applier. */
+	private void installOwnedEnvelopeStaging(List<TxEnvelopeCoordinator.StagedMutation> staging) {
 		for (TxEnvelopeCoordinator.StagedMutation m : staging) {
 			installToMap(m.shard(), m.type(), m.key(), m.value());
 		}

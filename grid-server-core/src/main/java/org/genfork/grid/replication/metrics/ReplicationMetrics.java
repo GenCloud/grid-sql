@@ -49,6 +49,8 @@ public final class ReplicationMetrics {
 	private static final LongAdder SEALED_MISSES = new LongAdder();
 	/** Adaptive disk-first LOW/NORMAL/HIGH transitions. */
 	private static final LongAdder ADAPTIVE_MODE_CHANGES = new LongAdder();
+	/** Overlay PIN blocked a swarmTick migrate for a shard. */
+	private static final LongAdder MIGRATE_IO_SUPPRESSED_PIN = new LongAdder();
 
 	private static final long[] ORCHID_WAIT_NS = new long[LATENCY_SAMPLES];
 	private static final AtomicInteger ORCHID_WAIT_IDX = new AtomicInteger();
@@ -110,6 +112,14 @@ public final class ReplicationMetrics {
 
 	public static long shipBackpressure() {
 		return SHIP_BACKPRESSURE.sum();
+	}
+
+	public static void recordMigrateIoSuppressedPin() {
+		MIGRATE_IO_SUPPRESSED_PIN.increment();
+	}
+
+	public static long migrateIoSuppressedPin() {
+		return MIGRATE_IO_SUPPRESSED_PIN.sum();
 	}
 
 	/** Apply delta to live overlay pin gauge (usually {@code +1} / {@code -1}). */

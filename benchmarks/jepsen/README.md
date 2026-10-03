@@ -108,7 +108,7 @@ Multi-DC: `scripts/nemesis-dc-link.sh isolate|heal|kill-voter|kill-dc-a` (wired 
 
 Separate workflow [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) — **not** unit CI (`.github/workflows/ci.yml`). Never co-run with Load / JMH / OSS compare-all.
 
-Full matrix (A–I): see [COVERAGE.md](COVERAGE.md).
+Full matrix (**A–M**): see [COVERAGE.md](COVERAGE.md). GHA: `.github/workflows/jepsen-qg.yml` (`workflow_dispatch` `profiles=` filter; always-on `validate-matrix`).
 
 | Matrix `config` | Entrypoint | What it gates |
 |-----------------|------------|---------------|

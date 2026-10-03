@@ -141,7 +141,7 @@ Comparing locus digests between nodes is an operator action over SQL TCP and adm
 
 | Situation | What happens |
 |-----------|--------------|
-| Writer unreachable | The client rediscovers an eligible writer via `PROMOTE_NOTIFY` / AUTH — [promote a node](../configure-and-operate/operations/ha-promote.md) |
+| Writer unreachable | The client calls `rediscoverWriter()` (or follows `PROMOTE_NOTIFY` / AUTH) — [promote a node](../configure-and-operate/operations/ha-promote.md) |
 | Replica lagging | `maxApplyLag` grows; a replica SELECT may be refused past `maxStaleLag` — [replica reads](../configure-and-operate/operations/replica-reads.md) |
 | Peer down, then back | Catch-up ships the missing range; a full journal resend is not required |
 | Hole in the OpLog | `HomologousRepair` and sparse catch-up ship a range, not the whole log |

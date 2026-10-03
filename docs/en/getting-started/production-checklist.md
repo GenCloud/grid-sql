@@ -10,7 +10,7 @@ Everything to settle before a Grid cluster takes production traffic. Each item n
 | `fsync` on the OpLog | `grid.replication.op-log.fsync: true` | Without it, commits acknowledged just before a crash can be lost. `fsync: false` is a lab tool for isolating a bottleneck |
 | One `dataDir` per node, on local disk | `grid.replication.op-log.data-dir`, node `dataDir` | Two processes over one directory, or a cluster-wide NFS/SAN volume, corrupt segments and sealed files |
 | Hydrate mode matched to the dataset | `grid.durability.hydrate-mode: LAZY` | `LAZY` maps sealed files and loads keys on miss — the usual production choice. `FULL` preloads everything and can make start slow or run out of memory on a large sealed set |
-| Working-set ceiling set | `grid.durability.working-set-max-entries` | Caps RAM by evicting cold committed keys; dirty and staging entries are never evicted |
+| Working-set ceiling set | `grid.durability.working-set-max-entries` | Caps RAM by **CLOCK** eviction (not LRU) of cold committed keys; dirty and staging entries are never evicted |
 | Disk headroom for OpLog plus sealed files plus archive | — | Truncate only happens through the seal watermark, and with archiving on, a copy failure cancels truncate |
 
 Full reference: [durability](../configure-and-operate/configuration/durability.md), [storage](../understand/storage-sealed-gmap.md).
@@ -21,7 +21,7 @@ Full reference: [durability](../configure-and-operate/configuration/durability.m
 |-------|---------|-----|
 | Durability and replication decided separately | `grid.durability.enabled`, `grid.replication.enabled` | A solo durable node is a supported mode; replication adds peer shipping, quorum, and catch-up on top |
 | `node-id`, `cluster-id`, `transport`, and `peers` set per node | node YAML | Starter profiles are demos; a foreign `cluster-id` blocks catch-up |
-| Exactly one writer | — | The phase-ranked writer is the only writer; there is no dual-master merge |
+| Exactly one writer | `writerEligible=true` on one node | The writer among synced peers (`min(nodeId)`) is the only writer; there is no dual-master merge. Readiness UP is not enough — wait for write eligibility (lab: `wait-writer-eligible`) |
 | Clients pin the writer from protocol metadata | `ServerMeta`, `PROMOTE_NOTIFY` | HTTP health is for orchestrators, not for writer discovery |
 | SQL and replication ports kept distinct | SQL **15432** / **15433**, replication **5615** / **5616** | A client that lands on a replication port gets `bad frameLen …` |
 | Region roles and quorum reviewed for multi-site | `grid.replication.region.*` | Active/Hold fencing and the claim quorum decide who may write after a site is lost |

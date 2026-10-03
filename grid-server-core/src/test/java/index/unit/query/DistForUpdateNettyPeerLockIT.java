@@ -149,6 +149,20 @@ public class DistForUpdateNettyPeerLockIT {
 	}
 
 	@Test
+	void prepareNacksWhenPeerMissingRequestedKey() {
+		final SqlSession session = openTx();
+		final SqlTxBuffer buf = session.requireTx();
+		final NettyDistForUpdatePeerLockAgent agent =
+				new NettyDistForUpdatePeerLockAgent(transportA, NODE_B);
+		// Remember lease for KEY without actually locking it on peer → prepare must NACK.
+		buf.rememberPeerLock(new DistForUpdatePeerLockLease(agent, buf.txId(), TABLE, KEY));
+		final IllegalStateException ex = assertThrows(
+				IllegalStateException.class,
+				() -> DistForUpdatePrepareVotes.prepareOrThrow(session, buf, transportA));
+		assertTrue(ex.getMessage().contains("FOR UPDATE prepare"));
+	}
+
+	@Test
 	void peerChannelDownFailsClosedOnLock() {
 		transportB.close();
 		transportB = null;

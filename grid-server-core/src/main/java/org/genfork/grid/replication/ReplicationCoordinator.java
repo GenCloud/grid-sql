@@ -38,6 +38,7 @@ import org.genfork.grid.replication.netty.NettyReplicationTransport;
 import org.genfork.grid.replication.orchid.DigestQuorum;
 import org.genfork.grid.replication.orchid.OrchidMultiDcConfig;
 import org.genfork.grid.replication.orchid.OrchidNode;
+import org.genfork.grid.replication.pitr.OpLogArchivePathUtil;
 import org.genfork.grid.replication.pitr.OpLogArchiveStreamer;
 import org.genfork.grid.replication.region.RegionRoleCoordinator;
 import org.genfork.grid.replication.repair.HomologousRepair;
@@ -94,7 +95,6 @@ public class ReplicationCoordinator {
 	/**
 	 * Default archive root when enabled but {@code dir} blank.
 	 */
-	private static final String DEFAULT_OPLOG_ARCHIVE_DIR = "./data/oplog-archive";
 	private final ReplicationNodeState nodeState;
 	private final OpLog opLog;
 	/**
@@ -316,8 +316,8 @@ public class ReplicationCoordinator {
 
         final SnapshotService snapshotService = new SnapshotService(opLog, nodeState);
         final IndexCheckpointService indexCheckpointService = new IndexCheckpointService(dataDir.resolve("index-ckpt"));
-		this.opLogArchiveRoot = resolveOpLogArchiveRoot(durability);
-		this.opLogArchiveStreamRoot = resolveOpLogArchiveStreamRoot(durability, opLogArchiveRoot);
+		this.opLogArchiveRoot = OpLogArchivePathUtil.resolveArchiveRoot(durability);
+		this.opLogArchiveStreamRoot = OpLogArchivePathUtil.resolveStreamRoot(durability, opLogArchiveRoot);
 		this.sealedGridMapService = new SealedGridMapService(dataDir.resolve("sealed"), opLogArchiveRoot);
 		this.homologousRepair = repairEnabled ? new HomologousRepair(dataDir.resolve("locus")) : null;
 		final long maxStaleLag = cfg.getHa() == null ? 10000L : Math.max(0L, cfg.getHa().getMaxStaleLag());
@@ -522,6 +522,7 @@ public class ReplicationCoordinator {
 		};
 		final ReplicaApplier applier = new ReplicaApplier(nodeState, opLog, processorByShard, ackSender, applyRemoteToLocalMap);
 		applier.setEnvelopeCoordinator(txEnvelopeCoordinator);
+		applier.setApplierByDomain(appliers::get);
 		if (CATALOG_DOMAIN.equals(domainType) && catalogDdlHandler != null) {
 			applier.setCatalogDdlHandler(catalogDdlHandler);
 		}
@@ -596,13 +597,41 @@ public class ReplicationCoordinator {
 	}
 
 	/**
-	 * Configured / effective hydrate mode label for readiness ({@code FULL}|{@code LAZY}|{@code n/a}).
+	 * Configured hydrate mode label for readiness ({@code FULL}|{@code LAZY}|{@code n/a}).
 	 */
 	public String hydrateModeLabel() {
 		if (sealedHydrateService == null) {
 			return "n/a";
 		}
 		return sealedHydrateService.hydrateModeLabel();
+	}
+
+	/**
+	 * Effective hydrate semantics (adaptive may force LAZY).
+	 */
+	public String hydrateModeEffective() {
+		if (sealedHydrateService == null) {
+			return "n/a";
+		}
+		return sealedHydrateService.hydrateModeEffective();
+	}
+
+	/**
+	 * Adaptive mode name for readiness; {@code n/a} when adaptive off.
+	 */
+	public String adaptiveModeName() {
+		if (adaptiveDiskFirstController == null) {
+			return "n/a";
+		}
+		return adaptiveDiskFirstController.mode().name();
+	}
+
+	public int hydrateShardsDone() {
+		return sealedHydrateService == null ? 0 : sealedHydrateService.hydrateShardsDone();
+	}
+
+	public int hydrateShardsTotal() {
+		return sealedHydrateService == null ? 0 : sealedHydrateService.hydrateShardsTotal();
 	}
 
 	/**
@@ -622,11 +651,19 @@ public class ReplicationCoordinator {
 		return DurabilityMetrics.wsSize();
 	}
 
-	public int workingSetMaxEntriesConfigured() {
+	/** Effective WS cap (adaptive override when enabled). */
+	public int workingSetMaxEntriesEffective() {
 		if (sealedHydrateService == null) {
 			return 0;
 		}
 		return sealedHydrateService.workingSetMaxEntries();
+	}
+
+	public int workingSetMaxEntriesConfigured() {
+		if (sealedHydrateService == null) {
+			return 0;
+		}
+		return sealedHydrateService.workingSetMaxEntriesConfigured();
 	}
 
 	public boolean isOplogArchiveEnabled() {
@@ -949,6 +986,7 @@ public class ReplicationCoordinator {
 			shardMigrator.getCooldown().tick();
 		}
 		if (peers.isEmpty() || opLog.streamKeys().isEmpty()) {
+			swarm.clearMigrateIoAllowed();
 			return;
 		}
 		final PlacementTopology topology = buildPlacementTopology();
@@ -973,6 +1011,7 @@ public class ReplicationCoordinator {
 		}
 		for (ShardMigrateAction action : plan.migrations()) {
 			if (isOverlayBlockingShardMigrate(action.domainType(), action.shard())) {
+				ReplicationMetrics.recordMigrateIoSuppressedPin();
 				continue;
 			}
 			if (hasOpenTxOnStream(action.domainType(), action.shard())) {
@@ -1048,47 +1087,6 @@ public class ReplicationCoordinator {
 	private static GridConfigurationProperties.PlacementOptimizerProps resolvePlacementOptimizer(GridConfigurationProperties.ReplicationProps cfg) {
 		final GridConfigurationProperties.PlacementOptimizerProps props = cfg.getPlacementOptimizer();
 		return props != null ? props : new GridConfigurationProperties.PlacementOptimizerProps();
-	}
-
-	/**
-	 * Resolve PITR archive root from durability props; {@code null} when disabled.
-	 */
-	private static Path resolveOpLogArchiveRoot(GridConfigurationProperties.DurabilityProps durability) {
-		if (durability == null) {
-			return null;
-		}
-		final GridConfigurationProperties.OpLogArchiveProps archive = durability.getOpLogArchive();
-		if (archive == null || !archive.isEnabled()) {
-			return null;
-		}
-		final String dir = archive.getDir();
-		if (dir == null || dir.isBlank()) {
-			return Path.of(DEFAULT_OPLOG_ARCHIVE_DIR);
-		}
-		return Path.of(dir);
-	}
-
-	/**
-	 * Resolve append-only off-node stream root; {@code null} when stream disabled.
-	 */
-	private static Path resolveOpLogArchiveStreamRoot(GridConfigurationProperties.DurabilityProps durability, Path archiveRoot) {
-		if (durability == null) {
-			return null;
-		}
-		final GridConfigurationProperties.OpLogArchiveProps archive = durability.getOpLogArchive();
-		if (archive == null || !archive.isStreamEnabled()) {
-			return null;
-		}
-		final String streamDir = archive.getStreamDir();
-		if (streamDir != null && !streamDir.isBlank()) {
-			return Path.of(streamDir);
-		}
-		if (archiveRoot != null) {
-			return OpLogArchiveStreamer.defaultStreamRoot(archiveRoot);
-		}
-		final String dir = archive.getDir();
-		final Path base = dir == null || dir.isBlank() ? Path.of(DEFAULT_OPLOG_ARCHIVE_DIR) : Path.of(dir);
-		return OpLogArchiveStreamer.defaultStreamRoot(base);
 	}
 
 	private void repairTick() {
@@ -1199,6 +1197,23 @@ public class ReplicationCoordinator {
 
 	public AdaptiveReplicaSwarm getSwarm() {
 		return this.swarm;
+	}
+
+	/**
+	 * Shard placement / drain map (null when durability+replication off).
+	 */
+	public ShardMigrator getShardMigrator() {
+		return this.shardMigrator;
+	}
+
+	/**
+	 * True while QUIESCE or CATCH_UP for the stream — write admission must fail-closed.
+	 */
+	public boolean isShardDraining(String domainType, int shard) {
+		if (shardMigrator == null || domainType == null) {
+			return false;
+		}
+		return shardMigrator.getPlacementMap().isDraining(domainType, shard);
 	}
 
 	public boolean isEnabled() {

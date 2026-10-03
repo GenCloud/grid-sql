@@ -35,6 +35,7 @@ import org.genfork.grid.catalog.TriggerEvent;
 import org.genfork.grid.catalog.TriggerGranularity;
 import org.genfork.grid.catalog.TriggerTiming;
 import org.genfork.grid.mem.index.IndexType;
+import org.genfork.grid.replication.ReplicaAccessGate;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.sql.SqlNamedQueryExpand;
 import org.genfork.grid.sql.SqlResult;
@@ -108,6 +109,9 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("Table already exists: " + table);
 		}
+		// Fail closed before catalog mutate: non-writer publish used to leave orphan tables
+		// (first CREATE applied locally, OpLog ship threw, remaining CREATE skipped).
+		ensureDdlWriteAdmission();
 		final TableSchema.Builder b = TableSchema.builder(table).schemaEpoch(catalog.nextEpoch());
 		final List<SequenceDef> identitySequences = new ArrayList<>();
 		for (ColumnSpec col : s.columns()) {
@@ -211,6 +215,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult createSequence(SqlSession session, CreateSequenceSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String name = tables.resolveTable(session, s.name());
 		final SequenceDef def = SequenceDef.of(name, s.startValue(), s.increment(), s.reclaim());
@@ -227,6 +232,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult dropSequence(SqlSession session, DropSequenceSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String name = tables.resolveTable(session, s.name());
 		catalog.dropSequence(name, s.ifExists() || applyingReplicatedDdl.get());
@@ -252,6 +258,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult dropTable(SqlSession session, DropTableSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String table = tables.resolveTable(session, s.table());
 		if (!catalog.exists(table)) {
@@ -272,6 +279,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult createIndex(SqlSession session, CreateIndexSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final TableStore store = tables.requireStore(tables.resolveTable(session, s.table()));
 		for (String col : s.columns()) {
@@ -297,6 +305,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult dropIndex(SqlSession session, DropIndexSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String table = s.tableOrNull();
 		if (table == null) {
@@ -319,6 +328,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult createSchema(CreateSchemaSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		if (catalog.schemaExists(s.schema())) {
 			if (s.ifNotExists() || applyingReplicatedDdl.get()) {
@@ -335,6 +345,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult dropSchema(DropSchemaSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		if (!catalog.schemaExists(s.schema())) {
 			if (s.ifExists() || applyingReplicatedDdl.get()) {
@@ -363,6 +374,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult alterTable(SqlSession session, AlterTableSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String table = tables.resolveTable(session, s.table());
 		final TableStore store = tables.requireStore(table);
@@ -438,6 +450,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult createView(SqlSession session, CreateViewSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String table = tables.resolveTable(session, s.table());
 		if (catalog.getView(table) != null || catalog.exists(table)) {
@@ -456,6 +469,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult dropView(SqlSession session, DropViewSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String table = tables.resolveTable(session, s.table());
 		final ViewDef existing = catalog.getView(table);
@@ -478,6 +492,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult createMaterializedView(SqlSession session, CreateMaterializedViewSql s) {
+		ensureDdlWriteAdmission();
 		if (query == null) {
 			throw new IllegalStateException("query executor required for MATERIALIZED VIEW");
 		}
@@ -573,6 +588,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult refreshMaterializedView(SqlSession session, RefreshMaterializedViewSql s) {
+		ensureDdlWriteAdmission();
 		if (query == null) {
 			throw new IllegalStateException("query executor required for REFRESH MATERIALIZED VIEW");
 		}
@@ -621,7 +637,22 @@ public final class SqlDdlExecutor {
 		repl.recordDdl(sql, schemaEpoch);
 	}
 
+	/**
+	 * Gate local DDL mutate+ship: replicated apply skips; disabled replication is local-only.
+	 */
+	private void ensureDdlWriteAdmission() {
+		if (applyingReplicatedDdl.get()) {
+			return;
+		}
+		final ReplicationCoordinator repl = tables.replication();
+		if (repl == null || !repl.isEnabled()) {
+			return;
+		}
+		ReplicaAccessGate.ensureWrite(repl);
+	}
+
 	public SqlResult createTrigger(SqlSession session, CreateTriggerSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String table = tables.resolveTable(session, s.table());
 		if (catalog.getTrigger(s.name()) != null) {
@@ -647,6 +678,7 @@ public final class SqlDdlExecutor {
 	}
 
 	public SqlResult dropTrigger(SqlSession session, DropTriggerSql s) {
+		ensureDdlWriteAdmission();
 		final TableCatalog catalog = tables.catalog();
 		final String tableOrNull = s.tableOrNull() == null
 				? null

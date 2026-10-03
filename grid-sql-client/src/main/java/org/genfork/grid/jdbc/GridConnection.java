@@ -100,11 +100,7 @@ public final class GridConnection implements Connection {
 		this.syncFactory = Objects.requireNonNull(syncFactory, "syncFactory");
 		this.releaseFactoryOnClose = releaseFactoryOnClose;
 		Objects.requireNonNull(sync, "sync");
-		final org.genfork.grid.sql.client.Connection reactive = sync.reactive();
-		if (!(reactive instanceof RemoteConnection remote)) {
-			throw new IllegalArgumentException("GridConnection requires RemoteConnection");
-		}
-		this.spi = remote;
+		this.spi = sync.remote();
 		this.sync = sync;
 		/* URL path schema is applied on SESSION_OPEN; expose it via JDBC getSchema(). */
 		this.schema = syncFactory.defaultSchema();
@@ -709,11 +705,7 @@ public final class GridConnection implements Connection {
 			try {
 				final SyncConnection dead = sync;
 				final SyncConnection next = syncFactory.openOrReplace(dead);
-				final org.genfork.grid.sql.client.Connection reactive = next.reactive();
-				if (!(reactive instanceof RemoteConnection remote)) {
-					throw new SQLException(MSG_RECONNECT_FAILED, SQLSTATE_CONNECT_FAILURE);
-				}
-				spi = remote;
+				spi = next.remote();
 				sync = next;
 				if (!autoCommit) {
 					openTx = sync.begin();

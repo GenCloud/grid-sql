@@ -15,7 +15,6 @@
  */
 package index.sql;
 
-import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
@@ -75,17 +74,20 @@ public class ReplicaReadEndpointsRotateIT {
 
 	@BeforeEach
 	void setUp() throws Exception {
-		primaryPort = freePort();
-		replica0Port = freePort();
-		replica1Port = freePort();
-
 		primaryEngine = newEngine("rr-n-primary");
 		replica0Engine = newEngine("rr-n-r0");
 		replica1Engine = newEngine("rr-n-r1");
 
-		primary = startServer(primaryEngine, primaryPort);
-		replica0 = startServer(replica0Engine, replica0Port);
-		replica1 = startServer(replica1Engine, replica1Port);
+		// Ephemeral bind (port 0) avoids freePort→bind races under parallel surefire.
+		primary = startServer(primaryEngine, 0);
+		replica0 = startServer(replica0Engine, 0);
+		replica1 = startServer(replica1Engine, 0);
+		primaryPort = primary.port();
+		replica0Port = replica0.port();
+		replica1Port = replica1.port();
+		assertTrue(primary.isListening());
+		assertTrue(replica0.isListening());
+		assertTrue(replica1.isListening());
 		TimeUnit.MILLISECONDS.sleep(BOOT_SLEEP_MS);
 	}
 
@@ -107,12 +109,17 @@ public class ReplicaReadEndpointsRotateIT {
 	void rotatePastApplyLagStaleToFreshReplica() {
 		replica0.overrideApplyLagStale(Boolean.TRUE);
 		replica1.overrideApplyLagStale(null);
+		primary.overrideApplyLagStale(Boolean.TRUE);
 
 		final String url = readUrl(replica0Port, replica1Port);
 		readFactory = RemoteConnectionFactory.createReadFactory(url);
 		assertEquals(SessionRole.READ_REPLICA, readFactory.factoryRole());
 		assertEquals(StaleReadPolicy.FAIL_CLOSED, readFactory.options().staleReadPolicy());
-		assertEquals(2, readFactory.endpoints().size());
+		// readEndpoints ∪ authority (createReadFactory mergeReadRing)
+		assertEquals(3, readFactory.endpoints().size());
+		assertEquals(replica0Port, readFactory.endpoints().get(0).port());
+		assertEquals(replica1Port, readFactory.endpoints().get(1).port());
+		assertEquals(primaryPort, readFactory.endpoints().get(2).port());
 
 		final String v = readFactory.obtain()
 				.flatMapMany(conn -> conn.createStatement(SELECT).execute()
@@ -128,10 +135,12 @@ public class ReplicaReadEndpointsRotateIT {
 	void failClosedWhenAllReadEndpointsStale() {
 		replica0.overrideApplyLagStale(Boolean.TRUE);
 		replica1.overrideApplyLagStale(Boolean.TRUE);
+		primary.overrideApplyLagStale(Boolean.TRUE);
 
 		final String url = readUrl(replica0Port, replica1Port);
 		readFactory = RemoteConnectionFactory.createReadFactory(url);
 		assertEquals(StaleReadPolicy.FAIL_CLOSED, readFactory.options().staleReadPolicy());
+		assertEquals(3, readFactory.endpoints().size());
 
 		final Throwable err = assertThrows(Throwable.class, () ->
 				readFactory.obtain().block(TIMEOUT));
@@ -178,12 +187,6 @@ public class ReplicaReadEndpointsRotateIT {
 		final SqlServer server = new SqlServer(BIND_HOST, port, engine, USER, PASS, MAX_TX_CONTEXTS);
 		server.start();
 		return server;
-	}
-
-	private static int freePort() throws Exception {
-		try (ServerSocket socket = new ServerSocket(0)) {
-			return socket.getLocalPort();
-		}
 	}
 
 	private static void closeQuietly(SqlServer server) {

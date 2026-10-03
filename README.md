@@ -44,7 +44,7 @@ JMeter **load** SLO runs still need a local Apache JMeter install on a calm host
 
 ### Jepsen QG — [`.github/workflows/jepsen-qg.yml`](.github/workflows/jepsen-qg.yml)
 
-Matrix: 1-DC chaos / 1-DC nochao (+ `qg-gate`), Multi-DC async / sync, witness. Runs on `push` to `main`/`master`, nightly schedule, and `workflow_dispatch`. On pull requests — only when labeled `jepsen`.
+Matrix **A–M** (1-DC chaos/nochao/unclean/swarm/join, Multi-DC async/sync chaos+nochao, unclean, async-swarm, async-join, witness) — see [`COVERAGE.md`](benchmarks/jepsen/COVERAGE.md). Runs on `push` to `main`/`master`, nightly, and `workflow_dispatch` (`profiles=` filter optional). On pull requests the full Docker matrix runs only with label `jepsen`; every PR still runs the lightweight A–M sync validator in unit CI.
 
 On GitHub Actions, `qg-gate` Ref B **p95** is **CI_ADVISORY** (p50 still hard); living Ref B / algorithm PASS claims need a calm-host re-stamp. Details: [benchmarks/jepsen/README.md](benchmarks/jepsen/README.md) (§ GitHub Actions).
 

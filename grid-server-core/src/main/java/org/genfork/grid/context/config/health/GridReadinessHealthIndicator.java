@@ -59,10 +59,19 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 	public static final String DETAIL_RPO_ESTIMATE_MS = "rpoEstimateMs";
 	public static final String DETAIL_SWARM_HINT = "swarmHint";
 	public static final String DETAIL_HYDRATE_MODE = "hydrateMode";
+	public static final String DETAIL_HYDRATE_MODE_CONFIGURED = "hydrateModeConfigured";
+	public static final String DETAIL_HYDRATE_MODE_EFFECTIVE = "hydrateModeEffective";
 	public static final String DETAIL_ADAPTIVE_MODE = "adaptiveMode";
 	public static final String DETAIL_WORKING_SET_MAX = "workingSetMaxEntries";
+	public static final String DETAIL_WORKING_SET_MAX_CONFIGURED = "workingSetMaxConfigured";
+	public static final String DETAIL_WORKING_SET_MAX_EFFECTIVE = "workingSetMaxEffective";
 	public static final String DETAIL_WORKING_SET_SIZE = "workingSetSize";
+	public static final String DETAIL_HYDRATE_SHARDS_DONE = "hydrateShardsDone";
+	public static final String DETAIL_HYDRATE_SHARDS_TOTAL = "hydrateShardsTotal";
 	public static final String DETAIL_OPLOG_ARCHIVE = "oplogArchiveEnabled";
+	public static final String DETAIL_PROMOTE_HINT = "promoteHint";
+	public static final String DETAIL_REGION_EPOCH = "regionEpoch";
+	public static final String DETAIL_REGION_ROLE = "regionRole";
 
 	private static final String REASON_SQL_TCP_DOWN = "sql_tcp_down";
 	private static final String REASON_ORCHID_NOT_SYNCED = "orchid_not_synced";
@@ -155,10 +164,19 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 			builder.withDetail(DETAIL_RPO_ESTIMATE_MS, STATUS_N_A);
 			builder.withDetail(DETAIL_SWARM_HINT, STATUS_N_A);
 			builder.withDetail(DETAIL_HYDRATE_MODE, STATUS_N_A);
+			builder.withDetail(DETAIL_HYDRATE_MODE_CONFIGURED, STATUS_N_A);
+			builder.withDetail(DETAIL_HYDRATE_MODE_EFFECTIVE, STATUS_N_A);
 			builder.withDetail(DETAIL_ADAPTIVE_MODE, STATUS_N_A);
 			builder.withDetail(DETAIL_WORKING_SET_MAX, STATUS_N_A);
+			builder.withDetail(DETAIL_WORKING_SET_MAX_CONFIGURED, STATUS_N_A);
+			builder.withDetail(DETAIL_WORKING_SET_MAX_EFFECTIVE, STATUS_N_A);
 			builder.withDetail(DETAIL_WORKING_SET_SIZE, STATUS_N_A);
+			builder.withDetail(DETAIL_HYDRATE_SHARDS_DONE, STATUS_N_A);
+			builder.withDetail(DETAIL_HYDRATE_SHARDS_TOTAL, STATUS_N_A);
 			builder.withDetail(DETAIL_OPLOG_ARCHIVE, STATUS_N_A);
+			builder.withDetail(DETAIL_PROMOTE_HINT, STATUS_N_A);
+			builder.withDetail(DETAIL_REGION_EPOCH, STATUS_N_A);
+			builder.withDetail(DETAIL_REGION_ROLE, STATUS_N_A);
 			return;
 		}
 		final ReplicationNodeState state = coordinator.getNodeState();
@@ -176,13 +194,24 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 				? null
 				: swarm.getLastHint().get();
 		builder.withDetail(DETAIL_SWARM_HINT, hint == null ? STATUS_N_A : hint.name());
-		builder.withDetail(DETAIL_HYDRATE_MODE, coordinator.hydrateModeLabel());
-		builder.withDetail(DETAIL_ADAPTIVE_MODE,
-				coordinator.isAdaptiveDiskFirst()
-						? coordinator.adaptiveModeOrdinal()
-						: STATUS_N_A);
-		builder.withDetail(DETAIL_WORKING_SET_MAX, coordinator.workingSetMaxEntriesConfigured());
+		final String hydrateConfigured = coordinator.hydrateModeLabel();
+		final String hydrateEffective = coordinator.hydrateModeEffective();
+		builder.withDetail(DETAIL_HYDRATE_MODE, hydrateEffective);
+		builder.withDetail(DETAIL_HYDRATE_MODE_CONFIGURED, hydrateConfigured);
+		builder.withDetail(DETAIL_HYDRATE_MODE_EFFECTIVE, hydrateEffective);
+		builder.withDetail(DETAIL_ADAPTIVE_MODE, coordinator.adaptiveModeName());
+		final int wsConfigured = coordinator.workingSetMaxEntriesConfigured();
+		final int wsEffective = coordinator.workingSetMaxEntriesEffective();
+		builder.withDetail(DETAIL_WORKING_SET_MAX, wsEffective);
+		builder.withDetail(DETAIL_WORKING_SET_MAX_CONFIGURED, wsConfigured);
+		builder.withDetail(DETAIL_WORKING_SET_MAX_EFFECTIVE, wsEffective);
 		builder.withDetail(DETAIL_WORKING_SET_SIZE, coordinator.workingSetLiveSize());
+		builder.withDetail(DETAIL_HYDRATE_SHARDS_DONE, coordinator.hydrateShardsDone());
+		builder.withDetail(DETAIL_HYDRATE_SHARDS_TOTAL, coordinator.hydrateShardsTotal());
 		builder.withDetail(DETAIL_OPLOG_ARCHIVE, coordinator.isOplogArchiveEnabled());
+		final String promoteHint = coordinator.promoteHint();
+		builder.withDetail(DETAIL_PROMOTE_HINT, promoteHint == null || promoteHint.isEmpty() ? STATUS_N_A : promoteHint);
+		builder.withDetail(DETAIL_REGION_EPOCH, coordinator.regionEpoch());
+		builder.withDetail(DETAIL_REGION_ROLE, Byte.toUnsignedInt(coordinator.regionRoleWire()));
 	}
 }

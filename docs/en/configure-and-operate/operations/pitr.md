@@ -74,14 +74,26 @@ Archive I/O is synchronous on the calling thread; not on the Netty EL.
 
 | Class | Package | Role |
 |-------|---------|------|
-| `OpLogArchiveUtil` | `org.genfork.grid.replication.util` | Archive / archive-before-truncate |
-| `OpLogArchiveStreamer` | `org.genfork.grid.replication.util` | OpLog stream append-only beyond the node |
-| `SealedBaseBackupUtil` | `org.genfork.grid.replication.snapshot` | Base backup / install `dataDir` |
-| `PitrRestoreMain` | `org.genfork.grid.replication.pitr` | CLI restore to seq |
+| `OpLogArchiveUtil` | `org.genfork.grid.replication.util` | Local **segment-replace** archive / archive-before-truncate |
+| `OpLogArchiveStreamer` | `org.genfork.grid.replication.pitr` | Append-only **stream** (`append.bin`) beyond segment replace |
+| `OpLogArchiveCoverageUtil` | `org.genfork.grid.replication.pitr` | Coverage check + segment/stream merge for restore |
+| `SealedBaseBackupUtil` / `SealedBaseBackupMain` | `org.genfork.grid.replication.snapshot` | Base backup / install / clear CLI |
+| `PitrRestoreMain` | `org.genfork.grid.replication.pitr` | CLI restore to seq (segment + stream `[W+1…T]`) |
 | `PitrCoordinatedRestore` | `org.genfork.grid.replication.pitr` | Cross-site restore under Active fencing |
 | `PitrActiveFence` | `org.genfork.grid.replication.pitr` | Fail closed: Active / dual-writer |
 
+**Segment vs stream.** Each safe truncate may **replace** `segment.bin` with only the next window. Multi-seal history lives in the append stream (`{archive}/stream` by default). `PitrRestoreMain` merges both and fail-closes if `[W+1…T]` has a hole. Check coverage before restore:
+
 ```text
+OpLogArchiveCoverageUtil.coversEnvelope(W, T, mergedCoverage(segmentCoverage(...), streamCoverage(...)))
+```
+
+Envelope coverage is min/max only; restore still fail-closes on gaps via `mergeOpsForRestore` / `PitrRestoreMain`.
+
+```text
+java --enable-preview -cp ... org.genfork.grid.replication.snapshot.SealedBaseBackupMain \
+  --mode backup --data-dir ./data/.../node --backup-dir ./backup/base-W --watermark 1000
+
 java --enable-preview -cp ... org.genfork.grid.replication.pitr.PitrRestoreMain \
   --base ./backup/base-W \
   --archive ./data/oplog-archive \
@@ -109,5 +121,6 @@ Coordinated cross-site restore: `PitrCoordinatedRestore.restoreUnderActiveFence(
 | Node does not catch up peers | Foreign `cluster-id` / epoch; shared dataDir; see HomologousRepair |
 | After restore “open TX gone” | Expected: dirty before COMMIT is not in OpLog |
 | Restore rejected (Active fence) | Site is Hold/Witness or dual-writer / two Actives |
+| Sealed files remain after `DROP TABLE` | Expected: DROP does not purge sealed; reclaim needs explicit retire — [storage](../../understand/storage-sealed-gmap.md) |
 
 Next: [durability](../configuration/durability.md), [GMAP storage](../../understand/storage-sealed-gmap.md), [failures](failures.md), [upgrade](upgrade.md).

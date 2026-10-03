@@ -82,11 +82,21 @@ public class AdaptiveChunkSchedulerIT {
 		final List<byte[]> keys = wireKeys(KEY_COUNT);
 		final List<List<byte[]>> resplit = AdaptiveChunkScheduler.resplit(keys, WORKERS);
 		assertEquals(sortedFingerprint(keys), sortedFingerprint(flatten(resplit)));
+		assertSizeBalanced(resplit);
 
 		final List<List<byte[]>> many = AdaptiveChunkScheduler.resplit(keys, COALESCE_OVER_FACTOR_CHUNKS);
 		final List<List<byte[]>> coalesced = AdaptiveChunkScheduler.coalesce(many, COALESCE_TARGET);
 		assertEquals(sortedFingerprint(keys), sortedFingerprint(flatten(coalesced)));
 		assertTrue(coalesced.size() <= Math.max(COALESCE_TARGET, 1));
+	}
+
+	@Test
+	void resplitSizeBalancedKeepsChunkSizesWithinOne() {
+		final List<byte[]> keys = wireKeys(10_000);
+		final List<List<byte[]>> parts = AdaptiveChunkScheduler.resplitSizeBalanced(keys, 8);
+		assertEquals(8, parts.size());
+		assertSizeBalanced(parts);
+		assertEquals(10_000, flatten(parts).size());
 	}
 
 	@Test
@@ -108,6 +118,16 @@ public class AdaptiveChunkSchedulerIT {
 		);
 		assertEquals(KEY_COUNT, parallel.size());
 		assertEquals(sortedFingerprint(serial), sortedFingerprint(parallel));
+	}
+
+	private static void assertSizeBalanced(List<List<byte[]>> parts) {
+		int min = Integer.MAX_VALUE;
+		int max = 0;
+		for (List<byte[]> chunk : parts) {
+			min = Math.min(min, chunk.size());
+			max = Math.max(max, chunk.size());
+		}
+		assertTrue(max - min <= 1, "max=" + max + " min=" + min);
 	}
 
 	private static List<byte[]> wireKeys(int count) {

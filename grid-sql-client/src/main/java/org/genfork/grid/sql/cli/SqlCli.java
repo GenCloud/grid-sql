@@ -15,31 +15,31 @@
  */
 package org.genfork.grid.sql.cli;
 
-import org.genfork.grid.sql.client.Connection;
-import org.genfork.grid.sql.client.ConnectionFactory;
-import org.genfork.grid.sql.client.ConnectionOptions;
-import org.genfork.grid.sql.client.GridSqlUri;
-import org.genfork.grid.sql.client.PreparedHandle;
-import org.genfork.grid.sql.client.RemoteConnectionFactory;
-import org.genfork.grid.sql.client.Row;
-import org.genfork.grid.sql.client.Savepoint;
-import org.genfork.grid.sql.client.Statement;
-import org.genfork.grid.sql.client.TxContext;
-
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import org.genfork.grid.sql.client.ConnectionOptions;
+import org.genfork.grid.sql.client.GridSqlUri;
+import org.genfork.grid.sql.client.RemoteConnectionFactory;
+import org.genfork.grid.sql.client.Row;
+import org.genfork.grid.sql.client.Savepoint;
+import org.genfork.grid.sql.client.sync.SyncConnectionFactory;
+import org.genfork.grid.sql.client.sync.SyncPreparedHandle;
+import org.genfork.grid.sql.client.sync.SyncResult;
+import org.genfork.grid.sql.client.sync.SyncSession;
+import org.genfork.grid.sql.client.sync.SyncStatement;
+import org.genfork.grid.sql.client.sync.SyncTxContext;
+
 /**
- * Thin interactive SQL CLI over the custom TCP protocol.
- * BEGIN/COMMIT/ROLLBACK/SAVEPOINT drive a single current {@link TxContext}.
- * PREPARE/EXECUTE/DEALLOCATE use typed {@link PreparedHandle} (routing-aware via {@code fromUrl}).
+ * Thin interactive SQL CLI over product {@link SyncSession}.
  * <p>
- * Uses reactive SPI ({@link ConnectionFactory#obtain()}) with {@code .block()} only in
- * {@link #main} (harness edge). Does not use Sync* / JDBC.
+ * Blocking only via {@link org.genfork.grid.sql.client.sync.SyncAwait} / {@code obtainStage} —
+ * never {@code Mono.block()}.
  * <p>
  * Args: {@code grid://user:pass@host:port/schema?...} or {@code -h/-p/-u/-P}.
  *
@@ -77,19 +77,23 @@ public final class SqlCli {
 				}
 			}
 		}
-		final ConnectionFactory factory = gridUrl != null
-				? ConnectionFactory.fromUrl(gridUrl)
-				: new RemoteConnectionFactory(host, port, user, password);
-		final String display = gridUrl != null ? gridUrl : (host + ":" + port);
-		TxContext currentTx = null;
+		final SyncSession session;
+		final String display;
+		if (gridUrl != null) {
+			session = SyncSession.exclusiveFromUrl(gridUrl);
+			display = gridUrl;
+		} else {
+			final RemoteConnectionFactory remote =
+					new RemoteConnectionFactory(host, port, user, password);
+			session = new SyncSession(SyncConnectionFactory.exclusiveOf(remote));
+			display = host + ":" + port;
+		}
+		SyncTxContext currentTx = null;
 		final ConcurrentMap<String, Savepoint> savepoints = new ConcurrentHashMap<>();
-		final ConcurrentMap<String, PreparedHandle> prepared = new ConcurrentHashMap<>();
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
-			factory.warmup().block();
-			final Connection conn = factory.obtain().block();
-			if (conn == null) {
-				throw new IllegalStateException("connect failed");
-			}
+		final ConcurrentMap<String, SyncPreparedHandle> prepared = new ConcurrentHashMap<>();
+		try (session; BufferedReader reader = new BufferedReader(
+				new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+			session.ensureOpen();
 			System.out.println("Connected to " + display);
 			String line;
 			while ((line = reader.readLine()) != null) {
@@ -104,7 +108,7 @@ public final class SqlCli {
 							System.err.println("ERROR: transaction already open");
 							continue;
 						}
-						currentTx = conn.begin().block();
+						currentTx = session.begin();
 						savepoints.clear();
 						System.out.println("OK BEGIN");
 						continue;
@@ -114,7 +118,7 @@ public final class SqlCli {
 							System.err.println("ERROR: no transaction in progress");
 							continue;
 						}
-						currentTx.commit().block();
+						currentTx.commit();
 						currentTx = null;
 						savepoints.clear();
 						System.out.println("OK COMMIT");
@@ -132,11 +136,11 @@ public final class SqlCli {
 								System.err.println("ERROR: unknown savepoint: " + name);
 								continue;
 							}
-							currentTx.rollbackTo(sp).block();
+							currentTx.rollbackTo(sp);
 							System.out.println("OK ROLLBACK TO " + name);
 							continue;
 						}
-						currentTx.rollback().block();
+						currentTx.rollback();
 						currentTx = null;
 						savepoints.clear();
 						System.out.println("OK ROLLBACK");
@@ -148,11 +152,9 @@ public final class SqlCli {
 							continue;
 						}
 						final String name = sql.substring("SAVEPOINT ".length()).trim();
-						final Savepoint sp = currentTx.savepoint(name).block();
-						if (sp != null) {
-							savepoints.put(sp.name(), sp);
-							System.out.println("OK SAVEPOINT " + sp.name());
-						}
+						final Savepoint sp = currentTx.savepoint(name);
+						savepoints.put(sp.name(), sp);
+						System.out.println("OK SAVEPOINT " + sp.name());
 						continue;
 					}
 					if (upper.startsWith("RELEASE SAVEPOINT ") || upper.startsWith("RELEASE ")) {
@@ -166,7 +168,7 @@ public final class SqlCli {
 							System.err.println("ERROR: unknown savepoint: " + name);
 							continue;
 						}
-						currentTx.release(sp).block();
+						currentTx.release(sp);
 						System.out.println("OK RELEASE " + name);
 						continue;
 					}
@@ -182,58 +184,70 @@ public final class SqlCli {
 							body = body.substring(3).trim();
 						}
 						final String name = rest.substring(0, sp).trim();
-						final PreparedHandle handle = conn.prepare(name, body).block();
-						if (handle != null) {
-							prepared.put(handle.name(), handle);
-							System.out.println("OK PREPARE " + handle.name());
-						}
+						final SyncPreparedHandle handle = session.connection().prepare(name, body);
+						prepared.put(handle.name(), handle);
+						System.out.println("OK PREPARE " + handle.name());
 						continue;
 					}
 					if (sql.regionMatches(true, 0, CMD_EXECUTE, 0, CMD_EXECUTE.length())) {
 						final String name = sql.substring(CMD_EXECUTE.length()).trim();
-						final PreparedHandle handle = prepared.get(name);
+						final SyncPreparedHandle handle = prepared.get(name);
 						if (handle == null) {
 							System.err.println("ERROR: unknown prepare: " + name);
 							continue;
 						}
-						handle.execute()
-								.flatMap(r -> r.map((row, meta) -> formatRow(row, meta.getColumnCount()))
-										.switchIfEmpty(r.getRowsUpdated().map(n -> "OK rowsAffected=" + n)))
-								.doOnNext(System.out::println)
-								.blockLast();
+						printResults(handle.execute());
 						continue;
 					}
 					if (sql.regionMatches(true, 0, CMD_DEALLOCATE, 0, CMD_DEALLOCATE.length())) {
 						final String name = sql.substring(CMD_DEALLOCATE.length()).trim();
-						final PreparedHandle handle = prepared.remove(name);
+						final SyncPreparedHandle handle = prepared.remove(name);
 						if (handle != null) {
-							handle.deallocate().block();
+							handle.deallocate();
 						} else {
-							conn.deallocate(name).block();
+							session.connection().deallocate(name);
 						}
 						System.out.println("OK DEALLOCATE " + name);
 						continue;
 					}
-					final Statement stmt = currentTx != null
-							? currentTx.createStatement(sql)
-							: conn.createStatement(sql);
-					stmt.execute()
-							.flatMap(r -> r.map((row, meta) -> formatRow(row, meta.getColumnCount()))
-									.switchIfEmpty(r.getRowsUpdated().map(n -> "OK rowsAffected=" + n)))
-							.doOnNext(System.out::println)
-							.blockLast();
+					final SyncStatement stmt = currentTx != null
+							? currentTx.statement(sql)
+							: session.statement(sql);
+					printResults(stmt.execute());
 				} catch (Exception ex) {
 					System.err.println("ERROR: " + ex.getMessage());
 				}
 			}
 			if (currentTx != null) {
-				currentTx.rollback().onErrorComplete().block();
+				try {
+					currentTx.rollback();
+				} catch (Exception ignored) {
+					// best-effort
+				}
 			}
-			for (PreparedHandle h : prepared.values()) {
-				h.deallocate().onErrorComplete().block();
+			for (SyncPreparedHandle h : prepared.values()) {
+				try {
+					h.deallocate();
+				} catch (Exception ignored) {
+					// best-effort
+				}
 			}
-		} finally {
-			factory.dispose();
+		}
+	}
+
+	private static void printResults(List<SyncResult> results) {
+		if (results == null || results.isEmpty()) {
+			return;
+		}
+		for (SyncResult result : results) {
+			if (result.isResultSet() && result.rowMetadata() != null) {
+				final int cols = result.rowMetadata().getColumnCount();
+				for (Row row : result.rows()) {
+					System.out.println(formatRow(row, cols));
+				}
+			} else {
+				System.out.println("OK rowsAffected=" + result.rowsUpdated());
+			}
 		}
 	}
 

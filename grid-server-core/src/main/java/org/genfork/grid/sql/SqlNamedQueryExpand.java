@@ -15,9 +15,13 @@
  */
 package org.genfork.grid.sql;
 
+import org.antlr.v4.runtime.BaseErrorListener;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
+import org.antlr.v4.runtime.RecognitionException;
+import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.misc.Interval;
+import org.antlr.v4.runtime.misc.ParseCancellationException;
 import org.genfork.grid.antlr.SimplifiedSqlLexer;
 import org.genfork.grid.antlr.SimplifiedSqlParser;
 import org.genfork.grid.antlr.SimplifiedSqlParser.CteDefContext;
@@ -57,6 +61,20 @@ public final class SqlNamedQueryExpand {
 	private static final String INTERSECT_ALL_SEP = " INTERSECT ALL ";
 	private static final String EXCEPT_SEP = " EXCEPT ";
 	private static final String EXCEPT_ALL_SEP = " EXCEPT ALL ";
+	/** Bail on first syntax error — no ConsoleErrorListener spam (e.g. SELECT1). */
+	private static final BaseErrorListener BAIL_ERRORS = new BaseErrorListener() {
+		@Override
+		public void syntaxError(
+				Recognizer<?, ?> recognizer,
+				Object offendingSymbol,
+				int line,
+				int charPositionInLine,
+				String msg,
+				RecognitionException e
+		) {
+			throw new ParseCancellationException("line " + line + ":" + charPositionInLine + " " + msg, e);
+		}
+	};
 
 	private SqlNamedQueryExpand() {
 	}
@@ -106,8 +124,12 @@ public final class SqlNamedQueryExpand {
 
 	private static String expandUncached(String sql, Map<String, String> catalogViews) {
 		final SimplifiedSqlLexer lexer = new SimplifiedSqlLexer(CharStreams.fromString(sql));
+		lexer.removeErrorListeners();
+		lexer.addErrorListener(BAIL_ERRORS);
 		final CommonTokenStream tokens = new CommonTokenStream(lexer);
 		final SimplifiedSqlParser parser = new SimplifiedSqlParser(tokens);
+		parser.removeErrorListeners();
+		parser.addErrorListener(BAIL_ERRORS);
 		final StatementContext stmt = parser.statement();
 		final ExecutableContext ex = stmt.executable();
 		if (ex.createViewStmt() != null

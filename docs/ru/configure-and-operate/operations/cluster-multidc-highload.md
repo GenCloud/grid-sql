@@ -16,6 +16,8 @@
 
 `regionEpoch` увеличивается при успешной передаче роли на Hold. Клиент закрепляется на паре `writerEligible` и `regionEpoch`. Если посреди операции epoch разошёлся, соединение не переключают молча — вызывается `rediscoverWriter()`. Источник истины — `ServerMeta` по протоколу и `PROMOTE_NOTIFY`.
 
+Перед нагрузкой записи после compose/старта: readiness UP мало — дождитесь ровно одного `writerEligible=true` (лаборатория: [`wait-writer-eligible.ps1`](../../../../benchmarks/jepsen/scripts/wait-writer-eligible.ps1)). После захвата Hold рост epoch не равен мгновенному праву писать, пока tip догоняет.
+
 ## Два режима репликации между ЦОД
 
 | Режим | Как проходит commit | Роль удалённой стороны | Окно потерь и задержка |

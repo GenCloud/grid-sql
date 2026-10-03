@@ -63,6 +63,12 @@
                        (or (sql-client/current-proposer) ""))
                   (assoc op :type :info :value :killed-proposer))))
 
+          :swarm-bounce
+          (do (info "nemesis swarm bounce follower")
+              (sh! "bash" (str scripts "/nemesis-swarm-bounce.sh")
+                   (or (sql-client/current-proposer) ""))
+              (assoc op :type :info :value :swarm-bounce))
+
           :kill-dc-a
           (if mdc?
             (do (info "nemesis multi-dc kill whole DC-A (leave down)")

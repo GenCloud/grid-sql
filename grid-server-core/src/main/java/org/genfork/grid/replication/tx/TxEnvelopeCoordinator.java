@@ -15,9 +15,6 @@
  */
 package org.genfork.grid.replication.tx;
 
-import org.genfork.grid.replication.codec.ReplicationOp;
-import org.genfork.grid.replication.codec.ReplicationOpType;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,20 +26,23 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import org.genfork.grid.replication.codec.ReplicationOp;
+import org.genfork.grid.replication.codec.ReplicationOpType;
+
 /**
  * Minimal Cross-DC / multi-stream TX envelope coordinator (not external XA).
  * <p>
  * Ship-hold and apply-staging are independent maps so Cross-DC release on the
  * proposer does not discard local/remote apply staging for the same {@code txId}.
  * <p>
- * <b>FOR UPDATE lock-phase (Phase 3 v1):</b> {@link #registerLockPhase} /
+ * <b>FOR UPDATE lock-phase:</b> {@link #registerLockPhase} /
  * {@link #notePeerLockAck} track peer row-lock ACKs for an open TX.
  * Durable commit still uses existing multi-stream ship/apply markers.
  * <p>
  * <b>FOR UPDATE prepare-phase:</b> {@link #registerPreparePhase} /
  * {@link #notePeerPrepareAck} / {@link #recordCommitDecision} track peer prepare
  * votes; Netty ships {@code FOR_UPDATE_PREPARE_*} / {@code FOR_UPDATE_COMMIT_DEC}
- * (product path; not external XA).
+ * (2PC-lite product path; not external XA / not ORCHID tip).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -76,7 +76,7 @@ public final class TxEnvelopeCoordinator {
 	}
 
 	/**
-	 * Peer lock ACK set for distributed FOR UPDATE (scaffold only).
+	 * Peer lock ACK set for distributed FOR UPDATE.
 	 */
 	private static final class LockPhase {
 		private final int expectedPeers;
@@ -88,7 +88,7 @@ public final class TxEnvelopeCoordinator {
 	}
 
 	/**
-	 * Peer prepare votes + commit decision for distributed FOR UPDATE (E2 scaffold).
+	 * Peer prepare votes + commit decision for distributed FOR UPDATE (2PC-lite).
 	 */
 	private static final class PreparePhase {
 		private final int expectedPeers;
@@ -240,7 +240,8 @@ public final class TxEnvelopeCoordinator {
 	/**
 	 * Record stream COMMIT for apply path.
 	 *
-	 * @return {@code true} when envelope is fully committed (caller must {@link #takeApplyStaging})
+	 * @return {@code true} when envelope is fully committed (caller must
+	 * {@link #takeApplyStagingByStream})
 	 */
 	public boolean noteApplyCommit(long txId, TxEnvelopeCodec.StreamRef stream) {
 		final ApplyEnvelope env = applyOpen.get(txId);
@@ -251,17 +252,22 @@ public final class TxEnvelopeCoordinator {
 		return env.committed.containsAll(env.expected);
 	}
 
-	public List<StagedMutation> takeApplyStaging(long txId) {
+	/**
+	 * Drain apply staging grouped by stream so each domain's {@code ReplicaApplier}
+	 * installs only its own keys (cross-table TX must not flush via the last committer).
+	 */
+	public Map<TxEnvelopeCodec.StreamRef, List<StagedMutation>> takeApplyStagingByStream(long txId) {
 		final ApplyEnvelope env = applyOpen.remove(txId);
 		if (env == null) {
-			return List.of();
+			return Map.of();
 		}
-		final List<StagedMutation> all = new ArrayList<>();
-		for (ConcurrentLinkedQueue<StagedMutation> part : env.staging.values()) {
-			all.addAll(part);
+		final Map<TxEnvelopeCodec.StreamRef, List<StagedMutation>> out = new LinkedHashMap<>();
+		for (Map.Entry<TxEnvelopeCodec.StreamRef, ConcurrentLinkedQueue<StagedMutation>> e
+				: env.staging.entrySet()) {
+			out.put(e.getKey(), List.copyOf(e.getValue()));
 		}
 		env.staging.clear();
-		return List.copyOf(all);
+		return Map.copyOf(out);
 	}
 
 	public void discardApply(long txId) {

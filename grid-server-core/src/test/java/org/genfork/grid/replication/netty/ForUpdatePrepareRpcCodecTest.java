@@ -15,11 +15,15 @@
  */
 package org.genfork.grid.replication.netty;
 
+import java.util.List;
+
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.ForUpdateCommitDec;
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.ForUpdatePrepareAck;
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.ForUpdatePrepareReq;
+import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil.TableKey;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -41,6 +45,18 @@ class ForUpdatePrepareRpcCodecTest {
 		final ForUpdatePrepareReq decoded = ReplicationRpcCodec.decodeForUpdatePrepareReq(wire);
 		assertEquals(TX_ID, decoded.txId());
 		assertEquals(NODE, decoded.fromNodeId());
+		assertTrue(decoded.keys().isEmpty());
+	}
+
+	@Test
+	void prepareReqWithKeySetRoundTrip() {
+		final byte[] key = new byte[]{4, 5};
+		final byte[] wire = ReplicationRpcCodec.encodeForUpdatePrepareReq(
+				TX_ID, NODE, List.of(new TableKey("t1", key)));
+		final ForUpdatePrepareReq decoded = ReplicationRpcCodec.decodeForUpdatePrepareReq(wire);
+		assertEquals(1, decoded.keys().size());
+		assertEquals("t1", decoded.keys().get(0).table());
+		assertArrayEquals(key, decoded.keys().get(0).key());
 	}
 
 	@Test

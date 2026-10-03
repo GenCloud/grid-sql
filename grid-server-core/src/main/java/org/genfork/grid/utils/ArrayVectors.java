@@ -55,19 +55,44 @@ public final class ArrayVectors {
 		if (a == null || b == null || a.length != b.length) {
 			return false;
 		}
+		return bytesEqualRange(a, 0, a.length, b, 0, b.length);
+	}
+
+	/**
+	 * Vectorized equals on ranges {@code a[aOff..aOff+len)} vs {@code b[bOff..bOff+len)}.
+	 */
+	public static boolean bytesEqualRange(
+			byte[] a,
+			int aOff,
+			int aLen,
+			byte[] b,
+			int bOff,
+			int bLen
+	) {
+		if (aLen != bLen) {
+			return false;
+		}
+		if (aLen <= 0) {
+			return true;
+		}
+		if (a == null || b == null) {
+			return false;
+		}
+		if (a == b && aOff == bOff) {
+			return true;
+		}
 		final VectorSpecies<Byte> species = VectorLane.SPECIES;
-		final int length = a.length;
-		final int upper = species.loopBound(length);
+		final int upper = species.loopBound(aLen);
 		int i = 0;
 		for (; i < upper; i += species.length()) {
-			final ByteVector va = ByteVector.fromArray(species, a, i);
-			final ByteVector vb = ByteVector.fromArray(species, b, i);
+			final ByteVector va = ByteVector.fromArray(species, a, aOff + i);
+			final ByteVector vb = ByteVector.fromArray(species, b, bOff + i);
 			if (!va.eq(vb).allTrue()) {
 				return false;
 			}
 		}
-		for (; i < length; i++) {
-			if (a[i] != b[i]) {
+		for (; i < aLen; i++) {
+			if (a[aOff + i] != b[bOff + i]) {
 				return false;
 			}
 		}

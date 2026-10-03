@@ -56,7 +56,8 @@ public final class SqlTxCommitter {
 
 	public void commit(SqlSession session) {
 		final SqlTxBuffer buf = session.requireTx();
-		final boolean locksOnly = buf.isEmpty() && !buf.peerLockedLeases().isEmpty();
+		final List<DistForUpdatePeerLockLease> peerLeases = buf.peerLockedLeases();
+		final boolean locksOnly = buf.isEmpty() && !peerLeases.isEmpty();
 		if (buf.isEmpty() && !locksOnly) {
 			catalog.flushSequencesIfDirty();
 			session.endTx();

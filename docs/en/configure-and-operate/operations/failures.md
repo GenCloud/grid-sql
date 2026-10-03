@@ -91,7 +91,11 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 
 ## Consistency drill contours
 
-Jepsen unclean-revive (dirty node restart with local `dataDir`) — PASS on stamp `2026-09-29-jepsen-unclean-revive`; full run covering tip-fence / HELLO sealed rejoin — `2026-09-30-jepsen-full`. Tip-behind symptoms: `writerEligible=false` and refused propose until the local tip catches peers; when ACK is below the truncate watermark — sealed pack on HELLO, then the OpLog tail. Scenarios and coverage: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md), [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md).
+Jepsen unclean-revive (dirty node restart with local `dataDir`) — PASS on stamp `2026-09-29-jepsen-unclean-revive`; full run covering tip-fence / HELLO sealed rejoin — `2026-09-30-jepsen-full`. Profile matrix A–M (**13/13** safety PASS) — `2026-10-03` (`run-jepsen-all-profiles.ps1`, [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md)).
+
+Tip-behind symptoms: `writerEligible=false` and refused propose until the local tip catches peers; when ACK is below the truncate watermark — sealed pack on HELLO, then the OpLog tail. After an ASYNC Hold claim with no live link to the former Active site, Hold-only tips do not clear the fence — wait for a remote-DC peer. Under calm Multi-DC without nemesis (`*-nochao`), `:no-proposer` / connect fails are settle/availability defects (clients admitted too early), not linearizability FAIL: Elle/Knossos discards those `:fail` outcomes. A `prevOpSeq` mismatch NACK is fail-closed triage of OpLog/holdback/tip — do not weaken quorum or `fsync`.
+
+Scenarios: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md).
 
 ## Do not
 

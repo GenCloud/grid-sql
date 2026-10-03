@@ -76,6 +76,7 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 	private SealedGridMapService sealed;
 	private List<Path> listed;
 	private long fingerprint;
+	private byte[] packedBytes;
 
 	@Setup(Level.Trial)
 	public void setup() throws Exception {
@@ -90,6 +91,7 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 		bitmaps.dumpIndex(DOMAIN, SHARD, BITMAP_PROPERTY, bitmap);
 		listed = SealedShardPack.listShardFiles(sealedRoot, DOMAIN, SHARD);
 		fingerprint = SealedPackFingerprint.ofFiles(listed);
+		packedBytes = SealedShardPack.packListed(listed);
 	}
 
 	@TearDown(Level.Trial)
@@ -114,6 +116,15 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 	public void skipUnchangedFingerprint(Blackhole bh) throws Exception {
 		final long again = SealedPackFingerprint.ofFiles(listed);
 		bh.consume(again == fingerprint);
+	}
+
+	@Benchmark
+	public void unpackPacked(Blackhole bh) throws Exception {
+		final Path target = sealedRoot.resolve("unpack-tgt");
+		Files.createDirectories(target);
+		deleteRecursive(target);
+		Files.createDirectories(target);
+		bh.consume(SealedShardPack.unpack(packedBytes, target).size());
 	}
 
 	@Test
@@ -149,7 +160,7 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 		if (root == null || !Files.exists(root)) {
 			return;
 		}
-		try (var walk = Files.walk(root)) {
+		try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
 			walk.sorted((a, b) -> b.compareTo(a)).forEach(p -> {
 				try {
 					Files.deleteIfExists(p);

@@ -42,9 +42,11 @@ import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.serial.SqlWireUtil;
 import org.genfork.grid.serial.WireFieldCompare;
+import org.genfork.grid.serial.WireRangeOps;
+import org.genfork.grid.serial.WireSpan;
 
 /**
- * Indexed + residual predicates on wire field bytes ({@link LogicalFieldCursor#indexKeyBytes}).
+ * Indexed + residual predicates on wire field bytes ({@link LogicalFieldCursor#indexKeySpan}).
  *
  * @author: GenCloud
  * @date: 2025/09
@@ -173,11 +175,28 @@ public class LogicalOperatorCondition implements FilterCondition {
 		}
 		try {
 			final LogicalFieldCursor cursor = LogicalFieldCursor.open(schema, valueBytes);
-			final byte[] actual = cursor.indexKeyBytes(col.ordinal());
-			return matchWire(actual, operator, values);
+			final WireSpan actual = cursor.indexKeySpan(col.ordinal());
+			return matchWireSpan(actual, operator, values);
 		} catch (RuntimeException ex) {
 			return false;
 		}
+	}
+
+	/**
+	 * Residual match on a zero-copy wire span (EQ/NE via {@link WireRangeOps}; other ops own a copy).
+	 */
+	private static boolean matchWireSpan(WireSpan actual, Operator op, Object[] values) {
+		if (actual == null) {
+			return false;
+		}
+		if (op == Operator.EQ || op == Operator.NE) {
+			final byte[] expected = SqlWireUtil.toGenericArray(values[0]);
+			final boolean eq = WireRangeOps.equals(
+					actual.blob(), actual.offset(), actual.length(),
+					expected, 0, expected == null ? 0 : expected.length);
+			return op == Operator.EQ ? eq : !eq;
+		}
+		return matchWire(actual.toOwnedBytes(), op, values);
 	}
 
 	@Override

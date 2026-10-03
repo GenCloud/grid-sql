@@ -20,6 +20,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import org.genfork.grid.sql.client.ConnectionOptions;
 import org.genfork.grid.sql.client.HostEndpoint;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,7 +40,7 @@ class SyncConnectionFactoryTest {
 				List.of(new HostEndpoint("127.0.0.1", 15432)),
 				"u",
 				"p",
-				org.genfork.grid.sql.client.ConnectionOptions.builder()
+				ConnectionOptions.builder()
 						.minConnections(1)
 						.maxConnections(1)
 						.build(),

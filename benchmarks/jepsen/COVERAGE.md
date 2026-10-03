@@ -12,7 +12,7 @@ On **`:ok`** the value is the token list (e.g. `[:r 16 ["t14" ...]]`). Anomalies
 
 | ID | `matrix.config` / entrypoint | Nemesis | Workloads | Checker | Invariants covered |
 |----|------------------------------|---------|-----------|---------|-------------------|
-| A | `1dc-chaos` → `scripts/run-jepsen.sh` | partition, kill-proposer, kill/revive-dc-a (1-DC skips DC-A) | register + append | Knossos + Elle | ORCHID admit, sticky writer, heal catch-up |
+| A | `1dc-chaos` → `scripts/run-jepsen.sh` | partition, kill-proposer, kill/revive-dc-a (1-DC skips DC-A) | register + append (multi-mop SQL TX) | Knossos + Elle | ORCHID admit, sticky writer, heal catch-up, multi-key TX |
 | B | `1dc-unclean-revive` → `scripts/run-jepsen-unclean-revive.sh` | long proposer down, no purge | register + append | Knossos + Elle | unclean revive, sticky/rediscover, list monotonicity |
 | C | `1dc-nochao` → `scripts/run-jepsen-nochao.sh` + `qg-gate.sh` | none | register + append | Knossos + Elle + Ref B latency | baseline consistency + p50 (p95 advisory on GHA) |
 | D | `multidc-async-chaos` → `multidc/scripts/run-multidc-chaos.sh async` | DC-link partition/heal, kill-voter, kill/revive DC-A | register + append | Knossos + Elle | ASYNC_SHIP under faults |
@@ -21,9 +21,15 @@ On **`:ok`** the value is the token list (e.g. `[:r 16 ["t14" ...]]`). Anomalies
 | G | `multidc-sync-nochao` → `multidc/scripts/run-multidc-nochao.sh sync-voters` | none | register + append | Knossos + Elle | SYNC topology wiring |
 | H | `witness-chaos` → `witness/scripts/run-witness-chaos.sh` | multidc + Witness overlay, nemesis ON | register + append | Knossos + Elle | Active/Hold/Witness region |
 | I | `multidc-unclean-revive` → `multidc/scripts/run-multidc-unclean-revive.sh` | unclean long down on writer path | register + append | Knossos + Elle | cross-DC unclean revive |
+| J | `1dc-swarm-chaos` → `scripts/run-jepsen-swarm.ps1` / `.sh` | partition, kill-proposer, **swarm-bounce** (follower kill/start); compose `docker-compose.swarm.yml` | append multi-mop TX | Elle | swarm enabled + auto-cutover under multi-key TX |
+| K | `1dc-join-shards` → `scripts/run-jepsen-join.ps1` / `.sh` | partition + kill-proposer | **join** (Elle list-append via cross-shard `LEFT OUTER JOIN`) | Elle + honesty gate | JOIN + multi-shard parent/child under SQL TX |
+| L | `multidc-async-swarm` → `multidc/scripts/run-multidc-swarm.sh` | DC-link + kill-voter + **swarm-bounce** (Active a*); configs `multidc/configs/async-swarm/` | append multi-mop TX | Elle | Multi-DC ASYNC_SHIP + swarm auto-cutover |
+| M | `multidc-async-join` → `multidc/scripts/run-multidc-join.sh` | DC-link + kill-voter + kill/revive DC-A | **join** (Elle via cross-shard LEFT OUTER JOIN) | Elle + honesty gate | Multi-DC JOIN; Hold tip-fenced after Active loss (no `:ok` seed RPO reads) |
+
+Matrix driver (1-DC A–K + Multi-DC D–G/I + L/M): `scripts/run-jepsen-all-profiles.ps1` (calm host, sequential). Failures → lab summary only (no floor cuts).
 
 Each cell: fresh cluster → register → **fresh cluster** → append → stamp → non-zero exit on FAIL.
-GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) (PR label `jepsen`, push main/master, nightly, workflow_dispatch).
+GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) matrix **A–M** (PR label `jepsen`, push main/master, nightly, workflow_dispatch). Bash entrypoints: `run-jepsen.sh`, `run-jepsen-unclean-revive.sh`, `run-jepsen-nochao.sh` + `qg-gate.sh`, `run-jepsen-swarm.sh`, `run-jepsen-join.sh`, `multidc/scripts/run-multidc-*.sh`, witness wrappers.
 
 ## In-process layer (not Docker Jepsen)
 
@@ -43,4 +49,4 @@ GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) 
 
 ## Calm host session (local)
 
-One session: `mvn verify` → matrix A–I sequentially → **full Load Tests**. No JMH / vs-OSS in this session.
+One session: `mvn verify` → matrix **A–M** sequentially → **full Load Tests**. No JMH / vs-OSS in this session.

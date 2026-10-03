@@ -87,6 +87,7 @@ SealedBaseBackupUtil.installBase(backupDir, dataDir)
 | Симптом | Что проверить |
 |---------|----------------|
 | Узел стартует «пустым» при LAZY | Нормально: истина на sealed + хвосте OpLog; не путать с потерянным `dataDir` |
+| Диск sealed не освободился после `DROP TABLE` | Ожидаемо: DROP не чистит sealed на hot path; reclaim — явный retire (`purgeDomainArtifacts`) — [хранение](../../understand/storage-sealed-gmap.md) |
 | Пиры не принимают узел | Чужой `cluster-id` / epoch; общий `dataDir` на два процесса |
 | «Пропали» открытые TX после restore | Ожидаемо: грязный буфер до COMMIT в OpLog не пишется |
 | Archive пуст, а нужен откат «на час назад» | Данных нет — архив включают **до** нагрузки |

@@ -41,7 +41,6 @@ import org.genfork.grid.sql.netty.SqlWire;
  * @since: 1.0
  */
 public final class ReactiveBatchExchange implements PendingExchange {
-	private static final String CANCEL_TAG = "CANCEL";
 	private static final String ERR_AUTH = "AUTH unexpected on BATCH_EXEC";
 	private static final String ERR_SESSION_OPEN = "SESSION_OPEN unexpected on BATCH_EXEC";
 	private static final String ERR_SESSION_CLOSE = "SESSION_CLOSE unexpected on BATCH_EXEC";
@@ -140,7 +139,7 @@ public final class ReactiveBatchExchange implements PendingExchange {
 			return true;
 		}
 
-		if (tag != null && CANCEL_TAG.equalsIgnoreCase(tag)) {
+		if (tag != null && TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
 			final BatchStatementSlot slot = current;
 			if (slot != null) {
 				slot.portal().complete();

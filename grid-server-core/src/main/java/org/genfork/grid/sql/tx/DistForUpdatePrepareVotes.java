@@ -15,8 +15,10 @@
  */
 package org.genfork.grid.sql.tx;
 
-import java.util.LinkedHashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -25,14 +27,18 @@ import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 import org.genfork.grid.sql.SqlSession;
 
 /**
- * Peer PREPARE / COMMIT_DEC fan-out for distributed {@code FOR UPDATE} (TD-SQL-001 E2).
+ * Peer PREPARE / COMMIT_DEC fan-out for distributed {@code FOR UPDATE} (2PC-lite).
  * <p>
  * Collects unique {@link NettyDistForUpdatePeerLockAgent} peers from held leases, runs
- * prepare votes via {@link NettyReplicationTransport}, then records the commit decision.
- * In-process-only leases keep a local self-ACK prepare scaffold (no Netty).
+ * prepare votes with a per-peer key-set via {@link NettyReplicationTransport}, then records
+ * the commit decision. In-process-only leases keep a local self-ACK prepare (no Netty).
+ * Not ORCHID tip / Kuramoto — SQL TX Dist path only.
+ * <p>
+ * Crash orphans on peers are cleaned by {@link ForUpdatePeerHeldKeys} lease TTL (no sidecar
+ * prepare journal — OpLog TX units remain the durability path for mutations).
  *
  * @author: GenCloud
- * @date: 2026/01
+ * @date: 2026/10
  * @since: 1.0
  */
 public final class DistForUpdatePrepareVotes {
@@ -58,7 +64,8 @@ public final class DistForUpdatePrepareVotes {
 					"FOR UPDATE peer locks require TxEnvelopeCoordinator txId=" + buf.txId());
 		}
 		final long txId = buf.txId();
-		final Set<String> nettyPeers = uniqueNettyPeers(leases);
+		final Map<String, List<ForUpdatePrepareWireUtil.TableKey>> keysByPeer = keysByNettyPeer(leases);
+		final Set<String> nettyPeers = keysByPeer.keySet();
 		final int expected = 1 + nettyPeers.size();
 		envelope.registerPreparePhase(txId, expected);
 		envelope.notePeerPrepareAck(txId, SELF_PEER_INDEX);
@@ -70,8 +77,9 @@ public final class DistForUpdatePrepareVotes {
 			return;
 		}
 		int peerIndex = PEER_INDEX_BASE;
-		for (String peerId : nettyPeers) {
-			final boolean prepared = transport.sendForUpdatePrepareReq(peerId, txId);
+		for (Map.Entry<String, List<ForUpdatePrepareWireUtil.TableKey>> entry : keysByPeer.entrySet()) {
+			final String peerId = entry.getKey();
+			final boolean prepared = transport.sendForUpdatePrepareReq(peerId, txId, entry.getValue());
 			if (!prepared) {
 				envelope.discardPreparePhase(txId);
 				transport.broadcastForUpdateCommitDec(txId, false);
@@ -102,25 +110,38 @@ public final class DistForUpdatePrepareVotes {
 		if (leases.isEmpty()) {
 			return;
 		}
+		final long txId = buf.txId();
 		final TxEnvelopeCoordinator envelope = session.envelopeCoordinator();
 		if (envelope != null) {
-			final long txId = buf.txId();
 			envelope.recordCommitDecision(txId, commit);
 			envelope.discardPreparePhase(txId);
 		}
-		if (transport != null && !uniqueNettyPeers(leases).isEmpty()) {
-			transport.broadcastForUpdateCommitDec(buf.txId(), commit);
+		final Map<String, List<ForUpdatePrepareWireUtil.TableKey>> keysByPeer = keysByNettyPeer(leases);
+		if (transport != null && !keysByPeer.isEmpty()) {
+			transport.broadcastForUpdateCommitDec(txId, commit);
+		}
+		if (!commit) {
+			for (DistForUpdatePeerLockLease lease : leases) {
+				try {
+					lease.releaseAwait();
+				} catch (RuntimeException ignored) {
+					// release miss recorded by transport metric; TTL sweeper cleans orphans
+				}
+			}
 		}
 	}
 
-	private static Set<String> uniqueNettyPeers(List<DistForUpdatePeerLockLease> leases) {
-		final Set<String> peers = new LinkedHashSet<>();
+	private static Map<String, List<ForUpdatePrepareWireUtil.TableKey>> keysByNettyPeer(
+			List<DistForUpdatePeerLockLease> leases
+	) {
+		final LinkedHashMap<String, List<ForUpdatePrepareWireUtil.TableKey>> byPeer = new LinkedHashMap<>();
 		for (DistForUpdatePeerLockLease lease : leases) {
 			final DistForUpdatePeerLockAgent agent = lease.agent();
 			if (agent instanceof NettyDistForUpdatePeerLockAgent netty) {
-				peers.add(netty.peerId());
+				byPeer.computeIfAbsent(netty.peerId(), ignored -> new ArrayList<>())
+						.add(new ForUpdatePrepareWireUtil.TableKey(lease.table(), lease.key()));
 			}
 		}
-		return peers;
+		return byPeer;
 	}
 }

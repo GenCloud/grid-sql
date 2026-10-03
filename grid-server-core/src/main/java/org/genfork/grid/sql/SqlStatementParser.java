@@ -711,10 +711,12 @@ public final class SqlStatementParser {
 		final List<JoinEdge> joins = new ArrayList<>();
 		if (query.joinClause() != null) {
 			for (SimplifiedSqlParser.JoinClauseContext jc : query.joinClause()) {
+				final String rightTable = SqlIdentParseUtil.joinTableName(jc);
+				final String rightAlias = SqlIdentParseUtil.joinTargetAlias(jc.joinTarget());
 				joins.add(new JoinEdge(
-						SqlIdentParseUtil.joinTableName(jc),
-						SqlIdentParseUtil.joinTargetAlias(jc.joinTarget()),
-						SqlIdentParseUtil.joinEqs(jc.joinCond()),
+						rightTable,
+						rightAlias,
+						SqlIdentParseUtil.joinEqs(jc.joinCond(), rightTable, rightAlias),
 						SqlIdentParseUtil.joinKindOf(jc)
 				));
 			}

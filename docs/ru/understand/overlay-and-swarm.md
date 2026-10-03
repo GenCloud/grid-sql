@@ -29,6 +29,23 @@
 
 Подсказки влияют на срочность отправки изменений и на приоритет подтягивания, но **никогда не блокируют** подтягивание журнала при подключении узла. Подсказка `KEEP` не должна уметь отложить подтягивание навсегда — иначе эвристика размещения превратилась бы в проблему согласованности.
 
+### Load gate для migrate I/O
+
+`SwarmMigrateLoadGate` решает, можно ли выпускать sealed/OpLog `migrateRange`. Датчики и подсказки обновляются; гейтится только ship.
+
+| Условие | Эффект |
+|---------|--------|
+| Подсказка не `SHED_LOAD` | Suppress (hint) |
+| `queueDepth` / `heapPressure` выше порогов calm | Suppress (pressure) |
+| `applyLag >= MAX_APPLY_LAG_FOR_MIGRATE` (64) | **Suppress** (lag) — высокий lag не должен включать migrate |
+| Calm SHED выборки `REQUIRED_CALM_TICKS` (3) при lag ниже порога | Allow migrate I/O |
+
+Метрики: `grid.replication.migrate_io_allowed`, `migrate_io_suppressed*`, `migrate_io_suppressed_pin`.
+
+### Забор записи в QUIESCE
+
+`ShardMigrator.migrateRange` держит `QUIESCE` один такт до `CATCH_UP`. Пока `isDraining` (`QUIESCE`/`CATCH_UP`), запись в `TableStore` закрыта через `ReplicaAccessGate.ensureShardWritable` — старый owner не dual-admit'ит writes на draining-шарде.
+
 Если подсказка перерастает в решение о переносе, выполняется `ShardMigrator`.
 
 ## Как переносится владение шардом
@@ -145,7 +162,7 @@ grid.replication.placement-optimizer:
 3. В окне действия пометки нет применённых переносов.
 4. Если сохранение на диск включено, пометка переживает рестарт узла.
 
-Сторону swarm видно через датчик `swarm_hint` и детали проверки готовности. Метрики и дашборды: [мониторинг](../configure-and-operate/monitoring.md).
+Сторону swarm видно через датчик `swarm_hint` и детали проверки готовности. Метрики и дашборды: [мониторинг](../configure-and-operate/monitoring.md). Учебный контур Jepsen для auto-cutover (профиль **J**) гоняет только append — намеренно под Elle list-append, без register: [`COVERAGE.md`](../../../benchmarks/jepsen/COVERAGE.md).
 
 ## Дальше
 

@@ -187,7 +187,7 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			case REGION_CLAIM_ACK -> onRegionClaimAck(msg.body());
 			case FOR_UPDATE_LOCK_REQ -> onForUpdateLockReq(ctx, msg.body());
 			case FOR_UPDATE_LOCK_ACK -> onForUpdateLockAck(msg.body());
-			case FOR_UPDATE_LOCK_RELEASE -> onForUpdateLockRelease(msg.body());
+			case FOR_UPDATE_LOCK_RELEASE -> onForUpdateLockRelease(ctx, msg.body());
 			case FOR_UPDATE_PREPARE_REQ -> onForUpdatePrepareReq(ctx, msg.body());
 			case FOR_UPDATE_PREPARE_ACK -> onForUpdatePrepareAck(msg.body());
 			case FOR_UPDATE_COMMIT_DEC -> onForUpdateCommitDec(msg.body());
@@ -226,8 +226,16 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		ThreadService.getLogicExecutor().execute(() -> transport.handleForUpdateLockAck(body));
 	}
 
-	private void onForUpdateLockRelease(byte[] body) {
-		ThreadService.getLogicExecutor().execute(() -> transport.handleForUpdateLockRelease(body));
+	private void onForUpdateLockRelease(ChannelHandlerContext ctx, byte[] body) {
+		final String peerId = peerIdForChannel(ctx.channel());
+		ThreadService.getLogicExecutor().execute(() -> transport.handleForUpdateLockRelease(body, peerId));
+	}
+
+	private static String peerIdForChannel(Channel channel) {
+		if (channel == null) {
+			return null;
+		}
+		return channel.attr(REMOTE_NODE_ATTR).get();
 	}
 
 	private void onForUpdatePrepareReq(ChannelHandlerContext ctx, byte[] body) {

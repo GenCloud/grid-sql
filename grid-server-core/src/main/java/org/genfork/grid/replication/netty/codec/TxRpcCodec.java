@@ -23,9 +23,11 @@ import org.genfork.grid.replication.netty.ReplicationRpcCodec.ForUpdateLockReq;
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.ForUpdatePrepareAck;
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.ForUpdatePrepareReq;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
+import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -36,6 +38,7 @@ import java.util.Objects;
  * @since: 1.0
  */
 public final class TxRpcCodec {
+	private static final byte FLAG_CLEAR = 0;
 	private static final byte LOCK_FLAG_SKIP = 1;
 	private static final byte LOCK_FLAG_GRANTED = 1;
 	private static final byte PREPARE_FLAG_OK = 1;
@@ -60,7 +63,7 @@ public final class TxRpcCodec {
 				Long.BYTES + Byte.BYTES + Integer.BYTES + tableBytes.length
 						+ Integer.BYTES + key.length);
 		buf.putLong(txId);
-		buf.put(skipLocked ? LOCK_FLAG_SKIP : (byte) 0);
+		buf.put(skipLocked ? LOCK_FLAG_SKIP : FLAG_CLEAR);
 		EncodeBuffers.putLengthPrefixed(buf, tableBytes);
 		EncodeBuffers.putLengthPrefixed(buf, key);
 		return EncodeBuffers.toByteArray(buf);
@@ -81,13 +84,35 @@ public final class TxRpcCodec {
 	}
 
 	public static byte[] encodeForUpdateLockAck(long txId, boolean granted, String fromNodeId) {
+		return encodeForUpdateLockAck(txId, granted, fromNodeId, null, null);
+	}
+
+	/**
+	 * Lock/release ACK. Optional {@code table}/{@code key} trailer demuxes multi-key release waiters.
+	 */
+	public static byte[] encodeForUpdateLockAck(
+			long txId,
+			boolean granted,
+			String fromNodeId,
+			String table,
+			byte[] key
+	) {
 		Objects.requireNonNull(fromNodeId, "fromNodeId");
 		final byte[] from = fromNodeId.getBytes(StandardCharsets.UTF_8);
-		final ByteBuffer buf = EncodeBuffers.allocateWireLe(
-				Long.BYTES + Byte.BYTES + Integer.BYTES + from.length);
+		final boolean withRow = table != null && key != null;
+		final byte[] tableBytes = withRow ? table.getBytes(StandardCharsets.UTF_8) : null;
+		int size = Long.BYTES + Byte.BYTES + Integer.BYTES + from.length;
+		if (withRow) {
+			size += Integer.BYTES + tableBytes.length + Integer.BYTES + key.length;
+		}
+		final ByteBuffer buf = EncodeBuffers.allocateWireLe(size);
 		buf.putLong(txId);
-		buf.put(granted ? LOCK_FLAG_GRANTED : (byte) 0);
+		buf.put(granted ? LOCK_FLAG_GRANTED : FLAG_CLEAR);
 		EncodeBuffers.putLengthPrefixed(buf, from);
+		if (withRow) {
+			EncodeBuffers.putLengthPrefixed(buf, tableBytes);
+			EncodeBuffers.putLengthPrefixed(buf, key);
+		}
 		return EncodeBuffers.toByteArray(buf);
 	}
 
@@ -96,7 +121,17 @@ public final class TxRpcCodec {
 		final long txId = buf.getLong();
 		final boolean granted = buf.get() == LOCK_FLAG_GRANTED;
 		final String fromNodeId = EncodeBuffers.getUtf8(buf);
-		return new ForUpdateLockAck(txId, granted, fromNodeId);
+		if (!buf.hasRemaining()) {
+			return new ForUpdateLockAck(txId, granted, fromNodeId, null, null);
+		}
+		final String table = EncodeBuffers.getUtf8(buf);
+		final int keyLen = buf.getInt();
+		if (keyLen < 0 || keyLen > buf.remaining()) {
+			throw new IllegalArgumentException("invalid FOR UPDATE lock ACK key length: " + keyLen);
+		}
+		final byte[] key = new byte[keyLen];
+		buf.get(key);
+		return new ForUpdateLockAck(txId, granted, fromNodeId, table, key);
 	}
 
 	public static byte[] encodeForUpdateLockRelease(long txId, String table, byte[] key) {
@@ -125,19 +160,20 @@ public final class TxRpcCodec {
 	}
 
 	public static byte[] encodeForUpdatePrepareReq(long txId, String fromNodeId) {
-		Objects.requireNonNull(fromNodeId, "fromNodeId");
-		final byte[] from = fromNodeId.getBytes(StandardCharsets.UTF_8);
-		final ByteBuffer buf = EncodeBuffers.allocateWireLe(Long.BYTES + Integer.BYTES + from.length);
-		buf.putLong(txId);
-		EncodeBuffers.putLengthPrefixed(buf, from);
-		return EncodeBuffers.toByteArray(buf);
+		return encodeForUpdatePrepareReq(txId, fromNodeId, List.of());
+	}
+
+	public static byte[] encodeForUpdatePrepareReq(
+			long txId,
+			String fromNodeId,
+			List<ForUpdatePrepareWireUtil.TableKey> keys
+	) {
+		return ForUpdatePrepareWireUtil.encodeReq(txId, fromNodeId, keys == null ? List.of() : keys);
 	}
 
 	public static ForUpdatePrepareReq decodeForUpdatePrepareReq(byte[] body) {
-		final ByteBuffer buf = EncodeBuffers.wrapLe(body);
-		final long txId = buf.getLong();
-		final String fromNodeId = EncodeBuffers.getUtf8(buf);
-		return new ForUpdatePrepareReq(txId, fromNodeId);
+		final ForUpdatePrepareWireUtil.DecodedPrepareReq decoded = ForUpdatePrepareWireUtil.decodeReq(body);
+		return new ForUpdatePrepareReq(decoded.txId(), decoded.fromNodeId(), decoded.keys());
 	}
 
 	public static byte[] encodeForUpdatePrepareAck(long txId, boolean prepared, String fromNodeId) {
@@ -146,7 +182,7 @@ public final class TxRpcCodec {
 		final ByteBuffer buf = EncodeBuffers.allocateWireLe(
 				Long.BYTES + Byte.BYTES + Integer.BYTES + from.length);
 		buf.putLong(txId);
-		buf.put(prepared ? PREPARE_FLAG_OK : (byte) 0);
+		buf.put(prepared ? PREPARE_FLAG_OK : FLAG_CLEAR);
 		EncodeBuffers.putLengthPrefixed(buf, from);
 		return EncodeBuffers.toByteArray(buf);
 	}
@@ -165,7 +201,7 @@ public final class TxRpcCodec {
 		final ByteBuffer buf = EncodeBuffers.allocateWireLe(
 				Long.BYTES + Byte.BYTES + Integer.BYTES + from.length);
 		buf.putLong(txId);
-		buf.put(commit ? COMMIT_DEC_FLAG_COMMIT : (byte) 0);
+		buf.put(commit ? COMMIT_DEC_FLAG_COMMIT : FLAG_CLEAR);
 		EncodeBuffers.putLengthPrefixed(buf, from);
 		return EncodeBuffers.toByteArray(buf);
 	}

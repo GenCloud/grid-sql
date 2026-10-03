@@ -1,6 +1,6 @@
 # Build + unit/IT gate for Grid SQL (Java 25, --enable-preview).
 # Lab gates (QG / Jepsen / Multi-DC / OSS / JMH / Load) stay host-side; never co-run here.
-# Jepsen QG matrix (1dc-chaos, 1dc-unclean-revive, 1dc-nochao, multidc-*, witness) → jepsen-qg.yml — not this workflow.
+# Jepsen QG matrix A–M (1dc-*, multidc-*, swarm/join, witness) → jepsen-qg.yml — not this workflow.
 name: CI
 
 on:
@@ -47,6 +47,11 @@ jobs:
 
       - name: Test (Surefire unit + IT; JMH excluded by pom)
         run: mvn -B -ntp verify
+
+      - name: Validate Jepsen A–M GHA matrix sync
+        run: |
+          chmod +x benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+          bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
 
       - name: Upload Surefire reports on failure
         if: failure()
