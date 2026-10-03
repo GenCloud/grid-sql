@@ -539,7 +539,15 @@ public class ReplicationCoordinator {
 			}
 		});
 
-		final MutationRecorder recorder = new MutationRecorder(nodeState, opLog, domainType, publisher, crossDcEnabled ? crossDcPublisher : null, homologousRepair, streamOpLogAppender);
+		final MutationRecorder recorder = new MutationRecorder(
+				nodeState,
+				opLog,
+				domainType,
+				publisher,
+				crossDcEnabled ? crossDcPublisher : null,
+				homologousRepair,
+				streamOpLogAppender,
+				streamCommitSerializer);
 		sealedGridMapService.bindProcessor(domainType, processorByShard);
 		final boolean lazy = sealedHydrateService.isLazyHydrate() && !CATALOG_DOMAIN.equals(domainType);
 		if (lazy) {

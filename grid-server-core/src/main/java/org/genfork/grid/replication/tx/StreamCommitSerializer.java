@@ -56,6 +56,22 @@ public final class StreamCommitSerializer {
 		}
 	}
 
+	/**
+	 * Single-stream fast path — no list/sort allocation (hot TX unit admit).
+	 */
+	public <T> T callWithLock(String streamKey, Supplier<T> action) {
+		if (streamKey == null || streamKey.isEmpty()) {
+			return action.get();
+		}
+		final ReentrantLock lock = locks.computeIfAbsent(streamKey, ignored -> new ReentrantLock());
+		lock.lock();
+		try {
+			return action.get();
+		} finally {
+			lock.unlock();
+		}
+	}
+
 	private static List<String> orderedKeys(Collection<String> streamKeys) {
 		if (streamKeys == null || streamKeys.isEmpty()) {
 			return List.of();

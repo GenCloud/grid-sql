@@ -6,6 +6,8 @@ Russian mirror: [`docs/ru/`](ru/README-ru.md). Same page layout in both language
 
 ## Where to start
 
+**5 minutes:** [root README](../README.md) → [quick start](en/getting-started/quick-start.md) → [connect clients](en/getting-started/connect-clients.md). Contributing: [CONTRIBUTING.md](../CONTRIBUTING.md).
+
 ### New to Grid
 
 - [Introduction](en/getting-started/what-is-grid.md)

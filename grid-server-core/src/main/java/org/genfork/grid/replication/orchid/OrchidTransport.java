@@ -94,6 +94,27 @@ public interface OrchidTransport {
 
 	void broadcastPropose(OrchidProposeMessage message);
 
+	/**
+	 * Fan-out a FIFO propose batch to each peer (wire order preserved per peer).
+	 * Default loops {@link #sendPropose}; Netty coalesces flush across the batch.
+	 */
+	default void sendProposeBatchToMany(Collection<String> toNodeIds, List<OrchidProposeMessage> messages) {
+		if (toNodeIds == null || toNodeIds.isEmpty() || messages == null || messages.isEmpty()) {
+			return;
+		}
+		for (int i = 0; i < messages.size(); i++) {
+			final OrchidProposeMessage message = messages.get(i);
+			if (message == null) {
+				continue;
+			}
+			for (String toNodeId : toNodeIds) {
+				if (toNodeId != null) {
+					sendPropose(toNodeId, message);
+				}
+			}
+		}
+	}
+
 	void sendCommit(String toNodeId, OrchidCommitMessage message);
 
 	void broadcastCommit(OrchidCommitMessage message);
@@ -116,6 +137,39 @@ public interface OrchidTransport {
 	record OrchidCommitMessage(String committerId, long proposeId, long digest, long prevOpSeq, long opSeq, ReplicationOp op) {
 	}
 
-	record OrchidNackMessage(String fromNodeId, long proposeId, String reason) {
+	/**
+	 * Structured NACK: wire code + numeric details + optional text (phase-rank active id).
+	 * <p>
+	 * Human message for logs / client fences is {@link #detailMessage()}.
+	 */
+	record OrchidNackMessage(
+			String fromNodeId,
+			long proposeId,
+			OrchidNackCode code,
+			long detailA,
+			long detailB,
+			String detailText
+	) {
+		public OrchidNackMessage {
+			if (code == null) {
+				throw new IllegalArgumentException("OrchidNackCode required");
+			}
+			if (detailText == null) {
+				detailText = "";
+			}
+		}
+
+		/**
+		 * Stable fence text for {@code OrchidNotSyncedException} / Jepsen rediscover.
+		 */
+		public String detailMessage() {
+			return switch (code) {
+				case STALE_PREV_OP_SEQ -> "prevOpSeq mismatch expected=" + detailA + " got=" + detailB;
+				case DIGEST_MISMATCH -> "digest mismatch";
+				case NOT_PHASE_RANKED -> detailText.isEmpty()
+						? "not phase-ranked proposer"
+						: "not phase-ranked proposer; active=" + detailText;
+			};
+		}
 	}
 }

@@ -58,6 +58,7 @@ import org.genfork.grid.sql.tx.SqlRecordLockManager;
 import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -843,18 +844,35 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	}
 
 	private void writeEncodedToMany(Collection<String> toNodeIds, WireMessage message) {
-		if (toNodeIds == null || toNodeIds.isEmpty()) {
+		if (message == null) {
 			return;
 		}
-		final List<String> flushed = new ArrayList<>(toNodeIds.size());
-		for (String peerId : toNodeIds) {
-			if (peerId == null || peerId.equals(localNodeId)) {
+		writeEncodedMessagesToMany(toNodeIds, List.of(message));
+	}
+
+	/**
+	 * FIFO writeNoFlush of each frame to every peer, then one flush per dirty peer.
+	 * Shared by phase fan-out and pipelined propose pump.
+	 */
+	private void writeEncodedMessagesToMany(Collection<String> toNodeIds, List<WireMessage> messages) {
+		if (toNodeIds == null || toNodeIds.isEmpty() || messages == null || messages.isEmpty()) {
+			return;
+		}
+		final LinkedHashSet<String> dirtyPeers = new LinkedHashSet<>(toNodeIds.size() * 2);
+		for (int i = 0; i < messages.size(); i++) {
+			final WireMessage message = messages.get(i);
+			if (message == null) {
 				continue;
 			}
-			writeNoFlush(peerId, message);
-			flushed.add(peerId);
+			for (String peerId : toNodeIds) {
+				if (peerId == null || peerId.equals(localNodeId)) {
+					continue;
+				}
+				writeNoFlush(peerId, message);
+				dirtyPeers.add(peerId);
+			}
 		}
-		for (String peerId : flushed) {
+		for (String peerId : dirtyPeers) {
 			flushPeer(peerId);
 		}
 	}
@@ -907,6 +925,28 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	@Override
 	public void sendPropose(String toNodeId, OrchidProposeMessage message) {
 		write(toNodeId, new WireMessage(ReplicationMessageType.ORCHID_PROPOSE.opcode(), ReplicationRpcCodec.encodePropose(message)));
+	}
+
+	/**
+	 * Pipeline pump: encode each propose once; coalesce flush via {@link #writeEncodedMessagesToMany}.
+	 * Preserves FIFO wire order across the batch.
+	 */
+	@Override
+	public void sendProposeBatchToMany(Collection<String> toNodeIds, List<OrchidProposeMessage> messages) {
+		if (toNodeIds == null || toNodeIds.isEmpty() || messages == null || messages.isEmpty()) {
+			return;
+		}
+		final ArrayList<WireMessage> wires = new ArrayList<>(messages.size());
+		for (int i = 0; i < messages.size(); i++) {
+			final OrchidProposeMessage message = messages.get(i);
+			if (message == null) {
+				continue;
+			}
+			wires.add(new WireMessage(
+					ReplicationMessageType.ORCHID_PROPOSE.opcode(),
+					ReplicationRpcCodec.encodePropose(message)));
+		}
+		writeEncodedMessagesToMany(toNodeIds, wires);
 	}
 
 	@Override

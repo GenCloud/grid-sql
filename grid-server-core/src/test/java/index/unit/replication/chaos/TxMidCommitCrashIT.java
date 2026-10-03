@@ -28,7 +28,11 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -114,6 +118,96 @@ public class TxMidCommitCrashIT {
 			)), false);
 
 			assertTrue(processor.get(new byte[]{10})[0] == 99);
+		}
+	}
+
+	@Test
+	void commitBehindWatermark_stillFlushesStaging() throws Exception {
+		final ReplicationNodeState state = new ReplicationNodeState("tx-wm", "tx-crash", "dc-a", 1L);
+		try (OpLog opLog = new OpLog(tempDir.resolve("oplog-wm"), false)) {
+			final GridEntriesProcessor processor = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+			final ReplicaApplier applier = new ReplicaApplier(state, opLog, shard -> processor, null, true);
+
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 1L, ReplicationOpType.TX_BEGIN, new byte[]{1}, null, 1L, 0L
+			)), false);
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 2L, ReplicationOpType.UPSERT, new byte[]{10}, new byte[]{99}, 1L, 0L
+			)), false);
+			// Simulate tip/repair race: watermark already at COMMIT seq before TX_COMMIT apply.
+			state.advanceApplied("chaos.Tx", 0, 3L);
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 3L, ReplicationOpType.TX_COMMIT, new byte[]{1}, null, 1L, 0L
+			)), false);
+
+			assertNotNull(processor.get(new byte[]{10}), "COMMIT behind watermark must flush staging");
+			assertEquals(99, processor.get(new byte[]{10})[0]);
+			assertFalse(applier.hasOpenTx("chaos.Tx", 0));
+		}
+	}
+
+	@Test
+	void discardOpenTxStaging_perStreamPreservesOtherShard() throws Exception {
+		final ReplicationNodeState state = new ReplicationNodeState("tx-ps", "tx-crash", "dc-a", 1L);
+		try (OpLog opLog = new OpLog(tempDir.resolve("oplog-ps"), false)) {
+			final GridEntriesProcessor p0 = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+			final GridEntriesProcessor p1 = new GridEntriesProcessor(1, new GridScalableMap(), null, null);
+			final ReplicaApplier applier = new ReplicaApplier(state, opLog, shard -> shard == 0 ? p0 : p1, null, true);
+
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 1L, ReplicationOpType.TX_BEGIN, new byte[]{1}, null, 1L, 0L
+			)), false);
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 2L, ReplicationOpType.UPSERT, new byte[]{10}, new byte[]{99}, 1L, 0L
+			)), false);
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 1, 3L, ReplicationOpType.TX_BEGIN, new byte[]{2}, null, 1L, 0L
+			)), false);
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 1, 4L, ReplicationOpType.UPSERT, new byte[]{20}, new byte[]{77}, 1L, 0L
+			)), false);
+
+			applier.discardOpenTxStaging("chaos.Tx", 1);
+			assertEquals(1, applier.openTxStagedCount("chaos.Tx", 0), "shard0 staging must survive");
+			assertFalse(applier.hasOpenTx("chaos.Tx", 1));
+
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 5L, ReplicationOpType.TX_COMMIT, new byte[]{1}, null, 1L, 0L
+			)), false);
+			assertEquals(99, p0.get(new byte[]{10})[0]);
+			assertNull(p1.get(new byte[]{20}));
+		}
+	}
+
+	@Test
+	void interleavedBeginWithNonEmptyStaging_failsClosed() throws Exception {
+		final ReplicationNodeState state = new ReplicationNodeState("tx-4", "tx-crash", "dc-a", 1L);
+		try (OpLog opLog = new OpLog(tempDir.resolve("oplog4"), false)) {
+			final GridEntriesProcessor processor = new GridEntriesProcessor(0, new GridScalableMap(), null, null);
+			final ReplicaApplier applier = new ReplicaApplier(state, opLog, shard -> processor, null, true);
+
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 1L, ReplicationOpType.TX_BEGIN, new byte[]{1}, null, 1L, 0L
+			)), true);
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 2L, ReplicationOpType.UPSERT, new byte[]{10}, new byte[]{99}, 1L, 0L
+			)), true);
+			assertEquals(1, applier.openTxStagedCount("chaos.Tx", 0));
+
+			final IllegalStateException ex = assertThrows(
+					IllegalStateException.class,
+					() -> applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+							"chaos.Tx", 0, 3L, ReplicationOpType.TX_BEGIN, new byte[]{2}, null, 1L, 0L
+					)), true));
+			assertTrue(ex.getMessage().contains("non-empty staging"),
+					() -> "message=" + ex.getMessage());
+			assertEquals(1, applier.openTxStagedCount("chaos.Tx", 0), "prior staging must remain");
+
+			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
+					"chaos.Tx", 0, 4L, ReplicationOpType.TX_COMMIT, new byte[]{1}, null, 1L, 0L
+			)), true);
+			assertNotNull(processor.get(new byte[]{10}));
+			assertEquals(99, processor.get(new byte[]{10})[0]);
 		}
 	}
 }

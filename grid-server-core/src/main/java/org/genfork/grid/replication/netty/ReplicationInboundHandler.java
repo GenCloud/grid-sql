@@ -157,11 +157,8 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			}
 			case ORCHID_PHASE_BATCH -> {
 				if (node != null) {
-					final List<OrchidPhaseMessage> phases =
-							ReplicationRpcCodec.decodePhaseMessageBatch(msg.body());
-					for (OrchidPhaseMessage phase : phases) {
-						node.onPhase(phase);
-					}
+					// One mailbox drain for the whole batch (pipelined tick rebroadcast).
+					node.onPhaseBatch(ReplicationRpcCodec.decodePhaseMessageBatch(msg.body()));
 				}
 			}
 			case ORCHID_PROPOSE -> {
@@ -426,17 +423,31 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			return;
 		}
 		ThreadService.getLogicExecutor().execute(() -> {
+			int applied = 0;
+			int skippedOpenTx = 0;
 			for (ReplicationOp op : reply.ops()) {
+				final ReplicaApplier applier = applierByDomain.apply(op.domainType());
+				// Fail-closed vs in-flight TX unit: forceInstall must not clobber staging/map
+				// mid BEGIN→COMMIT (ASYNC learner REPAIR_REPLY → Elle G-single / HAS≈0).
+				if (applier != null && applier.hasOpenTx(op.domainType(), op.shard())) {
+					skippedOpenTx++;
+					continue;
+				}
+				if (homologousRepair != null && homologousRepair.hasOpenTx(op.domainType(), op.shard())) {
+					skippedOpenTx++;
+					continue;
+				}
 				if (homologousRepair != null) {
 					homologousRepair.observe(op);
 				}
-				final ReplicaApplier applier = applierByDomain.apply(op.domainType());
 				if (applier != null) {
 					applier.apply(op, false, true);
+					applied++;
 				}
 			}
-			log.debug("REPAIR_REPLY from={} commands={} ops={}",
-					reply.fromNodeId(), reply.commands().size(), reply.ops().size());
+			log.debug("REPAIR_REPLY from={} commands={} ops={} applied={} skippedOpenTx={}",
+					reply.fromNodeId(), reply.commands().size(), reply.ops().size(),
+					applied, skippedOpenTx);
 		});
 	}
 

@@ -6,6 +6,8 @@ Grid — распределённая SQL-база данных: скорост�
 
 ## С чего начать
 
+**5 минут:** [корневой README (RU)](../../README.ru.md) → [быстрый старт](getting-started/quick-start.md) → [подключение клиентов](getting-started/connect-clients.md). Участие: [CONTRIBUTING.md](../../CONTRIBUTING.md).
+
 ### Если вы здесь впервые
 
 - [Введение](getting-started/what-is-grid.md)

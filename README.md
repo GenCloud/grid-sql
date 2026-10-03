@@ -5,24 +5,68 @@
 [![CI](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml)
 [![Jepsen QG](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml)
 
-SQL-first in-memory DBMS with durable local storage (OpLog + sealed GridMap) and ORCHID replication. Applications connect over TCP with `grid://` (reactive) or `jdbc:grid://` (stable sync peer).
+**Need SQL speed in Java without a separate cache layer that drifts from the journal?** Grid is a SQL-first in-memory DBMS with durable OpLog + sealed GridMap storage and ORCHID replication — one protocol for apps: `grid://` (reactive) or `jdbc:grid://` (JDBC).
+
+**5 minutes:** [English quick start](docs/en/getting-started/quick-start.md) · [Русский быстрый старт](docs/ru/getting-started/quick-start.md) · [README (RU)](README.ru.md)
 
 Licensed under the Apache License, Version 2.0 — see `LICENSE` and `NOTICE`.
 
 ## Quick start
+
+Requires Java **25** (`--enable-preview`) and Maven **3.9+**.
 
 ```bash
 mvn -pl grid-sql-server-starter -am package -DskipTests
 java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=capacity
 ```
 
-Connect (SQL port **15432**):
+The `capacity` profile listens on SQL port **15432** with durability on and replication off (**open auth** — no users yet).
 
-```
-grid://grid:grid@127.0.0.1:15432/public
+### Hello (JDBC)
+
+```java
+Class.forName("org.genfork.grid.jdbc.GridDriver");
+try (java.sql.Connection c = java.sql.DriverManager.getConnection(
+        "jdbc:grid://127.0.0.1:15432/public")) {
+    c.createStatement().execute(
+            "CREATE TABLE IF NOT EXISTS demo (id BIGINT PRIMARY KEY, name VARCHAR)");
+    c.createStatement().execute("UPSERT INTO demo (id, name) VALUES (1, 'hello')");
+}
 ```
 
-Step-by-step: [English quick start](docs/en/getting-started/quick-start.md) · [Русский быстрый старт](docs/ru/getting-started/quick-start.md).
+### Hello (reactive)
+
+```java
+org.genfork.grid.sql.client.RemoteConnectionFactory factory =
+        new org.genfork.grid.sql.client.RemoteConnectionFactory(
+                "127.0.0.1", 15432, "", "", 8);
+factory.obtain()
+        .flatMap(conn -> conn.createStatement(
+                "UPSERT INTO demo (id, name) VALUES (1, 'hello')").executeUpdate())
+        .block(); // demo only — not in library API
+```
+
+URLs: `grid://127.0.0.1:15432/public` · `jdbc:grid://127.0.0.1:15432/public`.  
+If AUTH is enabled, use `user:pass@` in the authority (for example `grid://grid:grid@…`).
+
+## Proofs (lab host)
+
+| Track | Living figure |
+|-------|----------------|
+| HA WRITE_ONLY | ≈**4676**/s (regression floor ≈**4442**/s) |
+| Consistency | Jepsen matrix — [`COVERAGE.md`](benchmarks/jepsen/COVERAGE.md) |
+
+Details: [capacity SLO](docs/en/performance/capacity-slo.md), [results](docs/en/performance/results.md), [methodology](docs/en/performance/methodology.md).
+
+## Learn more
+
+| Topic | Doc |
+|-------|-----|
+| Spring Boot | [spring-boot](docs/en/develop/spring-boot.md) |
+| ORCHID replication | [orchid-consensus](docs/en/understand/orchid-consensus.md) |
+| Writer hand-off | [ha-promote](docs/en/configure-and-operate/operations/ha-promote.md) |
+| Go-live checklist | [production-checklist](docs/en/getting-started/production-checklist.md) |
+| Docs hub | [docs/README.md](docs/README.md) · [RU hub](docs/ru/README-ru.md) |
 
 ## Requirements
 
@@ -68,12 +112,12 @@ Full knobs: [durability](docs/en/configure-and-operate/configuration/durability.
 
 ## How apps connect
 
-| Client | URL | Use |
-|--------|-----|-----|
-| Reactive | `grid://user:pass@host:15432/public` | Reactor / non-blocking |
-| JDBC | `jdbc:grid://user:pass@host:15432/public` | DataSource / DAO / IDEs |
+| Client | URL (capacity / open auth) | Use |
+|--------|----------------------------|-----|
+| Reactive | `grid://127.0.0.1:15432/public` | Reactor / non-blocking |
+| JDBC | `jdbc:grid://127.0.0.1:15432/public` | DataSource / DAO / IDEs |
 
-Schema is SQL DDL (`CREATE TABLE`). One TCP multiplexes many logical sessions: client `maxTxContexts` soft default **256**, server channel hard-cap **8** (Boot does not raise it from YAML). Details: [connect clients](docs/en/getting-started/connect-clients.md), [JDBC](docs/en/develop/jdbc-tooling.md).
+With AUTH enabled, put `user:pass@` in the authority. Schema is SQL DDL (`CREATE TABLE`). One TCP multiplexes many logical sessions: client `maxTxContexts` soft default **256**, server channel hard-cap **8** (Boot does not raise it from YAML). Details: [connect clients](docs/en/getting-started/connect-clients.md), [JDBC](docs/en/develop/jdbc-tooling.md).
 
 ## Modules
 
@@ -101,3 +145,7 @@ Day-2 operations: [failures](docs/en/configure-and-operate/operations/failures.m
 ## Boundaries
 
 Product clients speak Grid frames over TCP: `grid://` and `jdbc:grid://` (same protocol). No in-process embed factory. Do not put Hikari-style N-socket pools in front of multiplex sessions.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

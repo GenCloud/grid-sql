@@ -30,6 +30,8 @@ import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.transport.ReplicationPublisher;
+import org.genfork.grid.replication.tx.StreamCommitSerializer;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -42,16 +44,19 @@ import java.util.concurrent.CompletionException;
  * Records map mutations into ORCHID consensus + OpLog (when phase-synced).
  * Failures complete the future exceptionally (fail-closed for the commit listener).
  * <p>
- * Batch / TX units use admit→join→publish per op so {@link StreamOpLogAppender} holdback
- * slots clear before the next propose (avoids multi-admit stalls under
- * {@code maxProposeInFlight}). One {@link OpLog#force} + one orchid {@code confirmPersisted}
- * amortize fsync on the commit thread.
+ * Batch / TX units admit all proposes then join→publish so {@link StreamOpLogAppender}
+ * holdback clears as each future completes; one {@link OpLog#force} + one orchid
+ * {@code confirmPersisted} amortize fsync on the commit thread.
+ * TX units with markers hold {@link StreamCommitSerializer} only around the admit
+ * burst (contiguous tip), not during digest join — avoids same-stream lock-through-RTT.
  *
  * @author: GenCloud
  * @date: 2026/03
  * @since: 1.0
  */
 public class MutationRecorder {
+	private static final int TX_MARKER_OVERHEAD_OPS = 2;
+
 	private final ReplicationNodeState nodeState;
 	private final OpLog opLog;
 	private final StreamOpLogAppender streamAppender;
@@ -59,6 +64,7 @@ public class MutationRecorder {
 	private final ReplicationPublisher publisher;
 	private final CrossDcPublisher crossDcPublisher;
 	private final HomologousRepair homologousRepair;
+	private final StreamCommitSerializer streamCommitSerializer;
 
 	public MutationRecorder(ReplicationNodeState nodeState,
 	                        OpLog opLog,
@@ -66,7 +72,8 @@ public class MutationRecorder {
 	                        ReplicationPublisher publisher,
 	                        CrossDcPublisher crossDcPublisher,
 	                        HomologousRepair homologousRepair,
-	                        StreamOpLogAppender streamAppender) {
+	                        StreamOpLogAppender streamAppender,
+	                        StreamCommitSerializer streamCommitSerializer) {
 		this.nodeState = nodeState;
 		this.opLog = opLog;
 		this.streamAppender = Objects.requireNonNull(streamAppender, "streamAppender");
@@ -74,6 +81,7 @@ public class MutationRecorder {
 		this.publisher = publisher;
 		this.crossDcPublisher = crossDcPublisher;
 		this.homologousRepair = homologousRepair;
+		this.streamCommitSerializer = streamCommitSerializer;
 	}
 
 	public CompletableFuture<Long> recordCommitted(int shard, Entry entry) {
@@ -106,7 +114,7 @@ public class MutationRecorder {
 	/**
 	 * Pipelined orchid proposes for a same-stream batch; each join publishes immediately
 	 * so holdback clears before later joins; one group force + tip confirm.
-	 * Multi-shard TX callers hold {@link org.genfork.grid.replication.tx.StreamCommitSerializer}
+	 * Multi-shard TX callers hold {@link StreamCommitSerializer} around the full unit
 	 * so concurrent units cannot interleave {@code TX_BEGIN} on one stream.
 	 */
 	public void recordCommittedBatchBlocking(int shard, List<Entry> entries) {
@@ -114,23 +122,19 @@ public class MutationRecorder {
 			return;
 		}
 		try {
-			final List<OrchidNode.AdmittedPropose> admitted = new ArrayList<>(entries.size());
 			final List<ReplicationOp> templates = new ArrayList<>(entries.size());
 			for (Entry entry : entries) {
-				final ReplicationOp template = toRawOp(shard, entry);
-				admitted.add(orchidAdmitRaw(shard, template));
-				templates.add(template);
+				templates.add(toRawOp(shard, entry));
 			}
-			final List<ReplicationOp> committedOps = new ArrayList<>(admitted.size());
-			joinPublishImmediate(admitted, templates, committedOps, shard);
-			forceDurableThenFinish(shard, committedOps);
+			admitJoinForceAll(shard, templates);
 		} catch (CompletionException ex) {
 			throw unwrap(ex);
 		}
 	}
 
 	/**
-	 * TX unit: admit→join→publish per op (clears holdback before the next propose), then one force.
+	 * TX unit: admit BEGIN+data+COMMIT under a short per-stream lock (contiguous tip),
+	 * then join→publish and one force outside the lock.
 	 * Single data op with no envelope skips markers (autocommit UPSERT path).
 	 */
 	public void recordTxUnitBlocking(int shard, long txId, byte[] beginValue, List<Entry> entries) {
@@ -143,20 +147,59 @@ public class MutationRecorder {
 		}
 		try {
 			final byte[] markerKey = Long.toHexString(txId).getBytes(StandardCharsets.UTF_8);
-			final List<ReplicationOp> committedOps = new ArrayList<>(entries.size() + 2);
-			admitJoinPublish(shard,
-					markerTemplate(shard, ReplicationOpType.TX_BEGIN, markerKey, beginValue),
-					committedOps);
-			for (Entry entry : entries) {
-				admitJoinPublish(shard, toRawOp(shard, entry), committedOps);
+			final List<ReplicationOp> templates =
+					new ArrayList<>(entries.size() + TX_MARKER_OVERHEAD_OPS);
+			templates.add(markerTemplate(shard, ReplicationOpType.TX_BEGIN, markerKey, beginValue));
+			for (int i = 0; i < entries.size(); i++) {
+				templates.add(toRawOp(shard, entries.get(i)));
 			}
-			admitJoinPublish(shard,
-					markerTemplate(shard, ReplicationOpType.TX_COMMIT, markerKey, null),
-					committedOps);
-			forceDurableThenFinish(shard, committedOps);
+			templates.add(markerTemplate(shard, ReplicationOpType.TX_COMMIT, markerKey, null));
+			final String streamKey = OpLogStreamKeyUtil.format(domainType, shard);
+			final List<OrchidNode.AdmittedPropose> admitted;
+			if (streamCommitSerializer != null) {
+				// Templates built outside lock; only tip admits are serialized.
+				admitted = streamCommitSerializer.callWithLock(streamKey,
+						() -> admitAllRaw(shard, templates));
+			} else {
+				admitted = admitAllRaw(shard, templates);
+			}
+			joinForceAll(shard, templates, admitted);
 		} catch (CompletionException ex) {
 			throw unwrap(ex);
 		}
+	}
+
+	/**
+	 * Admit all templates then join→publish→force (no stream lock).
+	 */
+	private void admitJoinForceAll(int shard, List<ReplicationOp> templates) {
+		joinForceAll(shard, templates, admitAllRaw(shard, templates));
+	}
+
+	/**
+	 * Admit every template (tip fence / proposeFlight). Caller holds stream lock when
+	 * contiguous TX markers are required.
+	 */
+	private List<OrchidNode.AdmittedPropose> admitAllRaw(int shard, List<ReplicationOp> templates) {
+		final List<OrchidNode.AdmittedPropose> admitted = new ArrayList<>(templates.size());
+		for (int i = 0; i < templates.size(); i++) {
+			admitted.add(orchidAdmitRaw(shard, templates.get(i)));
+		}
+		return admitted;
+	}
+
+	/**
+	 * Join pipelined admits; publish each op as soon as its future completes so holdback
+	 * does not retain {@code beginJoin} across later joins in the same batch; then force.
+	 */
+	private void joinForceAll(
+			int shard,
+			List<ReplicationOp> templates,
+			List<OrchidNode.AdmittedPropose> admitted
+	) {
+		final List<ReplicationOp> committedOps = new ArrayList<>(admitted.size());
+		joinPublishImmediate(admitted, templates, committedOps, shard);
+		forceDurableThenFinish(shard, committedOps);
 	}
 
 	/**
@@ -181,33 +224,6 @@ public class MutationRecorder {
 		} catch (CompletionException ex) {
 			for (int i = joined; i < admitted.size(); i++) {
 				streamAppender.cancelJoin(domainType, shard, admitted.get(i).expectedOpSeq());
-			}
-			if (!committedOps.isEmpty()) {
-				forceDurableThenFinish(shard, committedOps);
-			}
-			throw ex;
-		}
-	}
-
-	/**
-	 * Admit one propose, join, publish to holdback immediately (refcount-safe).
-	 */
-	private void admitJoinPublish(
-			int shard,
-			ReplicationOp template,
-			List<ReplicationOp> committedOps
-	) {
-		final OrchidNode.AdmittedPropose admitted = orchidAdmitRaw(shard, template);
-		boolean joined = false;
-		try {
-			final long seq = admitted.future().join();
-			joined = true;
-			final ReplicationOp committed = withCommittedSeq(template, seq);
-			streamAppender.publishCommitted(committed);
-			committedOps.add(committed);
-		} catch (CompletionException ex) {
-			if (!joined) {
-				streamAppender.cancelJoin(domainType, shard, admitted.expectedOpSeq());
 			}
 			if (!committedOps.isEmpty()) {
 				forceDurableThenFinish(shard, committedOps);
