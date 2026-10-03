@@ -29,6 +29,23 @@ A combined score is computed over `score-window-ms`, and once it crosses `migrat
 
 Hints affect how urgently changes are shipped and how catch-up is prioritized, but they **never block** journal catch-up when a node joins. A `KEEP` hint must not be able to postpone catch-up indefinitely — that would turn a placement heuristic into a consistency problem.
 
+### Migrate I/O load gate
+
+`SwarmMigrateLoadGate` decides whether sealed/OpLog `migrateRange` I/O may run. Sensors and hints still update; only the ship path is gated.
+
+| Condition | Effect |
+|-----------|--------|
+| Hint is not `SHED_LOAD` | Suppress (hint) |
+| `queueDepth` / `heapPressure` above calm ceilings | Suppress (pressure) |
+| `applyLag >= MAX_APPLY_LAG_FOR_MIGRATE` (64) | **Suppress** (lag) — high lag must not arm migrate |
+| Calm SHED samples for `REQUIRED_CALM_TICKS` (3) with lag below the floor | Allow migrate I/O |
+
+Micrometer: `grid.replication.migrate_io_allowed`, `migrate_io_suppressed*`, `migrate_io_suppressed_pin` (overlay PIN skipped a shard in `swarmTick`).
+
+### QUIESCE write fence
+
+`ShardMigrator.migrateRange` holds `QUIESCE` for one tick before `CATCH_UP`. While `ShardPlacementMap.isDraining` is true (`QUIESCE` or `CATCH_UP`), `TableStore` write admission fails closed via `ReplicaAccessGate.ensureShardWritable` so the old owner does not dual-admit writes during drain.
+
 If a hint grows into a decision to move a shard, `ShardMigrator` runs.
 
 ## How shard ownership moves
@@ -145,7 +162,7 @@ What to check after setting an annotation:
 3. No applied moves within the annotation's window.
 4. If disk persistence is enabled, the annotation survives a node restart.
 
-The swarm side is visible through the `swarm_hint` gauge and the readiness details. Metrics and dashboards: [monitoring](../configure-and-operate/monitoring.md).
+The swarm side is visible through the `swarm_hint` gauge and the readiness details. Metrics and dashboards: [monitoring](../configure-and-operate/monitoring.md). The Jepsen auto-cutover drill (profile **J**) runs append-only on purpose (Elle list-append; no register) — [`COVERAGE.md`](../../../benchmarks/jepsen/COVERAGE.md).
 
 ## Next
 

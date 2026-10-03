@@ -26,7 +26,7 @@ Catch-up-only nodes and Witness never serve client SQL.
 
 ### FOR UPDATE and peer locks
 
-`FOR UPDATE` / `SKIP LOCKED` always run on the **writer** (never a read replica). Indexed wire keys are locked locally via `LockAwareKeyCursor`. When replication is on and the coordinator has peers, product Boot wiring installs Netty `DistForUpdatePeerLockAgent`s from **replication `peers`** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`), so peers take the same locks through `DistForUpdateCoordinator`. A Netty error on a peer is a **reject to the client**, not a silent local-only commit. Autocommit releases statement peer leases in `finally`; open-TX leases stay until COMMIT/ROLLBACK. Prepare/commit-dec is product 2PC-lite for peer row locks — not XA. Multi-table / INNER JOIN `FOR UPDATE` is supported.
+`FOR UPDATE` / `SKIP LOCKED` always run on the **writer** (never a read replica). Indexed wire keys are locked locally via `LockAwareKeyCursor`. When replication is on and the coordinator has peers, product Boot wiring installs Netty `DistForUpdatePeerLockAgent`s from **replication `peers`** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`), so peers take the same locks through `DistForUpdateCoordinator`. Prepare votes carry a **per-peer key-set** (not a peer-only flag); abort waits for peer release (`releaseAwait`). Peer-held leases expire after **30s** TTL (sweeper; no sidecar prepare journal — OpLog TX is the durability path). A Netty error on a peer is a **reject to the client**, not a silent local-only commit. Autocommit releases statement peer leases in `finally`; open-TX leases stay until COMMIT/ROLLBACK. Prepare/commit-dec is product 2PC-lite for peer row locks — not XA. Multi-table / INNER JOIN `FOR UPDATE` is supported.
 
 With replication off or an empty peer list, locks stay **local** on the writer only. There is no separate operational YAML key to list DistForUpdate endpoints. Do not confuse this with `grid.sql.distributed-peers` (read-only SELECT/JOIN fan-out) — [SQL server](../configuration/sql-server.md).
 
@@ -86,7 +86,7 @@ grid://user:pass@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433,127.0.0.1:
 
 | Query | Meaning |
 |-------|---------|
-| `readEndpoints` | Comma `host:port` read ring (N≥1 required when `readPreference=REPLICA`) |
+| `readEndpoints` | Comma `host:port` read ring (N≥1 when `readPreference=REPLICA`); client merges authority hosts into the ring so proposer + replicas share least-inflight SELECT |
 | `readPreference` | `PRIMARY` (default) or `REPLICA` |
 | `maxReadConnections` | TCP cap for read factory (default 1) |
 | `staleReadPolicy` | v1: reject-on-stale only |

@@ -15,6 +15,11 @@
  */
 package org.genfork.grid.sql;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import org.antlr.v4.runtime.ParserRuleContext;
+
 import org.genfork.grid.antlr.SimplifiedSqlParser.ColumnNameContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.FromItemContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.IdentContext;
@@ -24,9 +29,6 @@ import org.genfork.grid.antlr.SimplifiedSqlParser.JoinHeadContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinTargetContext;
 import org.genfork.grid.sql.ast.SelectAst.JoinEq;
 import org.genfork.grid.sql.ast.SelectAst.JoinKind;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * ANTLR ident / join / from-alias extractors shared by statement and query parsers.
@@ -116,20 +118,65 @@ public final class SqlIdentParseUtil {
 		return JoinKind.INNER;
 	}
 
-	public static List<JoinEq> joinEqs(JoinCondContext cond) {
+	/**
+	 * Parse JOIN ON equalities and orient each pair as {@code (leftWorkingCol, rightTableCol)}.
+	 * <p>
+	 * When a side is table-qualified, the column whose qualifier matches the JOIN target
+	 * ({@code rightTable} / {@code rightAlias}) is always the right-hand join key — so
+	 * {@code ON p.id = c.parent_id} and {@code ON c.parent_id = p.id} produce the same
+	 * {@link JoinEq} when {@code p} is the join target.
+	 * Unqualified pairs keep textual order (legacy {@code ON id = a_id} convention).
+	 */
+	public static List<JoinEq> joinEqs(JoinCondContext cond, String rightTable, String rightAliasOrNull) {
 		final List<ColumnNameContext> cols = cond.columnName();
 		if (cols == null || cols.size() < 2 || (cols.size() % 2) != 0) {
 			throw new IllegalArgumentException("JOIN ON requires column=column pairs");
 		}
 		final List<JoinEq> eqs = new ArrayList<>(cols.size() / 2);
 		for (int i = 0; i < cols.size(); i += 2) {
-			eqs.add(new JoinEq(simpleColumn(cols.get(i)), simpleColumn(cols.get(i + 1))));
+			eqs.add(orientJoinEq(cols.get(i), cols.get(i + 1), rightTable, rightAliasOrNull));
 		}
 		return List.copyOf(eqs);
 	}
 
+	private static JoinEq orientJoinEq(
+			ColumnNameContext a,
+			ColumnNameContext b,
+			String rightTable,
+			String rightAliasOrNull
+	) {
+		final String aCol = simpleColumn(a);
+		final String bCol = simpleColumn(b);
+		final boolean aOnRight = matchesTableOrAlias(tableQualifier(a), rightTable, rightAliasOrNull);
+		final boolean bOnRight = matchesTableOrAlias(tableQualifier(b), rightTable, rightAliasOrNull);
+		if (aOnRight && !bOnRight) {
+			return new JoinEq(bCol, aCol);
+		}
+		if (!aOnRight && bOnRight) {
+			return new JoinEq(aCol, bCol);
+		}
+		return new JoinEq(aCol, bCol);
+	}
+
+	/**
+	 * True when {@code qualifier} is the physical table name or its join/FROM alias.
+	 */
+	public static boolean matchesTableOrAlias(String qualifier, String table, String aliasOrNull) {
+		if (qualifier == null || qualifier.isBlank()) {
+			return false;
+		}
+		if (aliasOrNull != null
+				&& !aliasOrNull.isBlank()
+				&& qualifier.equalsIgnoreCase(aliasOrNull)) {
+			return true;
+		}
+		return table != null
+				&& !table.isBlank()
+				&& qualifier.equalsIgnoreCase(table);
+	}
+
 	/** Null-safe textOf for optional rule contexts. */
-	public static String textOfOrNull(org.antlr.v4.runtime.ParserRuleContext ctx) {
+	public static String textOfOrNull(ParserRuleContext ctx) {
 		if (ctx == null || ctx.getStart() == null || ctx.getStop() == null) {
 			return null;
 		}

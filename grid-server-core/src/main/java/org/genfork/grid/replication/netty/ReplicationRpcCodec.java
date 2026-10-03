@@ -31,6 +31,7 @@ import org.genfork.grid.replication.orchid.OrchidTransport.OrchidProposeMessage;
 import org.genfork.grid.replication.repair.RepairCommand;
 import org.genfork.grid.replication.repair.VersionLocus;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
+import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil;
 
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -121,9 +122,16 @@ public final class ReplicationRpcCodec {
 	}
 
 	/**
-	 * {@link ReplicationMessageType#FOR_UPDATE_LOCK_ACK}: txId, granted, fromNodeId.
+	 * {@link ReplicationMessageType#FOR_UPDATE_LOCK_ACK}: txId, granted, fromNodeId,
+	 * optional table+key trailer for release demux.
 	 */
-	public record ForUpdateLockAck(long txId, boolean granted, String fromNodeId) {
+	public record ForUpdateLockAck(
+			long txId,
+			boolean granted,
+			String fromNodeId,
+			String table,
+			byte[] key
+	) {
 	}
 
 	/**
@@ -133,9 +141,13 @@ public final class ReplicationRpcCodec {
 	}
 
 	/**
-	 * {@link ReplicationMessageType#FOR_UPDATE_PREPARE_REQ}: txId, fromNodeId (E2 scaffold).
+	 * {@link ReplicationMessageType#FOR_UPDATE_PREPARE_REQ}: txId, fromNodeId, key-set (wire bytes).
 	 */
-	public record ForUpdatePrepareReq(long txId, String fromNodeId) {
+	public record ForUpdatePrepareReq(
+			long txId,
+			String fromNodeId,
+			List<ForUpdatePrepareWireUtil.TableKey> keys
+	) {
 	}
 
 	/**
@@ -311,6 +323,16 @@ public final class ReplicationRpcCodec {
 		return TxRpcCodec.encodeForUpdateLockAck(txId, granted, fromNodeId);
 	}
 
+	public static byte[] encodeForUpdateLockAck(
+			long txId,
+			boolean granted,
+			String fromNodeId,
+			String table,
+			byte[] key
+	) {
+		return TxRpcCodec.encodeForUpdateLockAck(txId, granted, fromNodeId, table, key);
+	}
+
 	public static ForUpdateLockAck decodeForUpdateLockAck(byte[] body) {
 		return TxRpcCodec.decodeForUpdateLockAck(body);
 	}
@@ -324,7 +346,15 @@ public final class ReplicationRpcCodec {
 	}
 
 	public static byte[] encodeForUpdatePrepareReq(long txId, String fromNodeId) {
-		return TxRpcCodec.encodeForUpdatePrepareReq(txId, fromNodeId);
+		return encodeForUpdatePrepareReq(txId, fromNodeId, List.of());
+	}
+
+	public static byte[] encodeForUpdatePrepareReq(
+			long txId,
+			String fromNodeId,
+			List<ForUpdatePrepareWireUtil.TableKey> keys
+	) {
+		return TxRpcCodec.encodeForUpdatePrepareReq(txId, fromNodeId, keys);
 	}
 
 	public static ForUpdatePrepareReq decodeForUpdatePrepareReq(byte[] body) {

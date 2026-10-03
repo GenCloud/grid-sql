@@ -54,6 +54,19 @@ class ForUpdateLockRpcCodecTest {
 		assertEquals(TX_ID, decoded.txId());
 		assertTrue(decoded.granted());
 		assertEquals(NODE, decoded.fromNodeId());
+		assertEquals(null, decoded.table());
+		assertEquals(null, decoded.key());
+	}
+
+	@Test
+	void lockAckWithRowTrailerRoundTrip() {
+		final byte[] wire = ReplicationRpcCodec.encodeForUpdateLockAck(TX_ID, true, NODE, TABLE, KEY);
+		final ForUpdateLockAck decoded = ReplicationRpcCodec.decodeForUpdateLockAck(wire);
+		assertEquals(TX_ID, decoded.txId());
+		assertTrue(decoded.granted());
+		assertEquals(NODE, decoded.fromNodeId());
+		assertEquals(TABLE, decoded.table());
+		assertArrayEquals(KEY, decoded.key());
 	}
 
 	@Test

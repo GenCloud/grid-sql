@@ -31,6 +31,7 @@ import org.genfork.grid.threading.ThreadService;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -68,6 +69,7 @@ public class OrchidNode {
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrchidNode.class);
 	/**
 	 * Default pipelined proposes (contiguous prevOpSeq chain); not Semaphore(1).
+	 * Product YAML keeps {@code max-propose-in-flight: 64} — this default matches that canon.
 	 */
 	public static final int DEFAULT_MAX_PROPOSE_IN_FLIGHT = 64;
 	private static final int MIN_PROPOSE_IN_FLIGHT = 1;
@@ -94,7 +96,7 @@ public class OrchidNode {
 	/**
 	 * Peer-side expected next seq for in-flight remote proposes (proposeId → inflight).
 	 * Enables pipelined prevOpSeq accept without holding VT/Netty monitors.
-	 * Cleared on {@link #forgetPeer} for that proposer's entries.
+	 * On {@link #forgetPeer}: seal contiguous entries from that proposer first, then clear leftovers.
 	 */
 	private final Map<Long, RemoteInflight> remoteInflightExpected = new ConcurrentHashMap<>();
 	/**
@@ -106,6 +108,10 @@ public class OrchidNode {
 	 * Single-level primary commit drain (avoids recursive {@code forEach → doCommit → forEach}).
 	 */
 	private final AtomicBoolean commitDrainActive = new AtomicBoolean();
+	/**
+	 * At most one tick-enqueued drain on {@link #commitApplyQueue} (keeps Kuramoto tick free of fireApply/fsync).
+	 */
+	private final AtomicBoolean tickDrainEnqueued = new AtomicBoolean();
 	/**
 	 * Out-of-order commit holdback (opSeq → message). Cap =
 	 * {@link #maxProposeInFlight} × {@link #COMMIT_HOLDBACK_CAP_FACTOR}.
@@ -140,11 +146,6 @@ public class OrchidNode {
 	private final Set<String> isolatedPeers = ConcurrentHashMap.newKeySet();
 	private final AtomicLong proposeSeq = new AtomicLong();
 	/**
-	 * Wall-clock ms when the current in-flight propose was admitted; 0 when idle.
-	 * Updated with CAS / plain set — never under a monitor.
-	 */
-	private final AtomicLong pendingProposeStartedAtMs = new AtomicLong(0L);
-	/**
 	 * Pipelined propose admission (contiguous prevOpSeq chain; release after commit/nack).
 	 */
 	private final Semaphore proposeFlight;
@@ -156,6 +157,11 @@ public class OrchidNode {
 	private long proposeChainPrev;
 	private volatile double phase;
 	private volatile long lastCommittedSeq;
+	/**
+	 * High-water of peer-advertised tips; survives {@link #forgetPeer} so ASYNC Hold
+	 * cannot clear tip-catch-up after Active DC disconnect (Elle G2 / silent RPO read).
+	 */
+	private final AtomicLong maxObservedPeerCommittedSeq = new AtomicLong(0L);
 	private volatile Thread tickThread;
 
 	public OrchidNode(String nodeId, double coupling, double naturalFreqHz, double orderThreshold, long tickMs, DigestQuorum digestQuorum, OrchidTransport transport, List<String> peerIds) {
@@ -219,7 +225,6 @@ public class OrchidNode {
 		remoteInflightExpected.clear();
 		recentlyCommittedProposeIds.clear();
 		commitHoldback.clear();
-		clearPendingProposeTimestamp();
 		lock.lock();
 		try {
 			proposeChainPrev = lastCommittedSeq;
@@ -343,6 +348,10 @@ public class OrchidNode {
 
 	/**
 	 * Drop peer from phase/R view after disconnect; does not shrink configured quorum.
+	 * <p>
+	 * Digested proposes from that peer are sealed on {@link #commitApplyQueue} before the
+	 * buffer is cleared — otherwise unclean kill / isolate races wipe quorum-acked ops that
+	 * never saw a commit broadcast (Elle G-single / list-append token loss).
 	 */
 	public void forgetPeer(String peerId) {
 		if (peerId == null || peerId.equals(nodeId)) {
@@ -350,12 +359,30 @@ public class OrchidNode {
 		}
 		peers.remove(peerId);
 		voterEligible.remove(peerId);
-		clearRemoteInflightForProposer(peerId);
+		scheduleSealBufferedThenClearProposer(peerId);
 		log.debug("Orchid forgot peer={}", peerId);
 	}
 
 	/**
+	 * Seal contiguous buffered proposes <em>from</em> {@code proposerId} on the commit-apply
+	 * mailbox, then drop leftovers for that proposer. Must not seal another live proposer's
+	 * tip when a non-proposer peer merely flaps ({@code forgetPeer} of a follower).
+	 * Safe from Netty EL (enqueue only).
+	 */
+	private void scheduleSealBufferedThenClearProposer(String proposerId) {
+		if (!running.get()) {
+			clearRemoteInflightForProposer(proposerId);
+			return;
+		}
+		commitApplyQueue.submit(ThreadService.getLogicExecutor(), () -> {
+			sealBufferedProposesFromProposerSerial(proposerId);
+			clearRemoteInflightForProposer(proposerId);
+		});
+	}
+
+	/**
 	 * Drop pipeline accept tips registered for a disconnected proposer.
+	 * Caller must seal contiguous entries first ({@link #sealBufferedProposesSerial()}).
 	 */
 	private void clearRemoteInflightForProposer(String proposerId) {
 		if (proposerId == null) {
@@ -476,15 +503,15 @@ public class OrchidNode {
 	}
 
 	/**
-	 * Age in milliseconds of the current in-flight propose, or {@code 0} when idle.
-	 * Backed by {@link #pendingProposeStartedAtMs}; lock-free — no monitors.
+	 * Age in milliseconds of the oldest unfinished local propose, or {@code 0} when idle.
+	 * Per-propose admit clock — lock-free; safe from Netty EL / VT.
 	 */
 	public long pendingProposeAgeMs() {
-		final long startedAt = pendingProposeStartedAtMs.get();
-		if (startedAt <= 0L) {
+		final PendingPropose oldest = oldestUnfinishedPropose();
+		if (oldest == null) {
 			return 0L;
 		}
-		return Math.max(0L, System.currentTimeMillis() - startedAt);
+		return Math.max(0L, System.currentTimeMillis() - oldest.admittedAtMs);
 	}
 
 	/**
@@ -509,6 +536,10 @@ public class OrchidNode {
 		}
 		if (!isPhaseRankedProposer()) {
 			return AdmittedPropose.failed(new OrchidNotSyncedException("not phase-ranked proposer; active=" + phaseRankedProposerId()));
+		}
+		// Failover-only: seal quorum-digested buffer before minting a new tip. Healthy path is O(1).
+		if (!remoteInflightExpected.isEmpty()) {
+			drainBufferedProposesBeforeAdmit();
 		}
 		final long peerTip = maxSeenPeerCommittedSeq();
 		final long localTip = lastCommittedSeq;
@@ -537,8 +568,9 @@ public class OrchidNode {
 				proposeChainPrev = prevOpSeq + 1L;
 				expectedOpSeq = prevOpSeq + 1L;
 				proposeId = proposeSeq.incrementAndGet();
-				pendingPropose = new PendingPropose(proposeId, digest, prevOpSeq, op, new CompletableFuture<>(), proposeFlight::release);
-				pendingProposeStartedAtMs.compareAndSet(0L, System.currentTimeMillis());
+				pendingPropose = new PendingPropose(
+						proposeId, digest, prevOpSeq, op, new CompletableFuture<>(), proposeFlight::release,
+						System.currentTimeMillis());
 				pending.put(proposeId, pendingPropose);
 				pendingPropose.acks.put(nodeId, digest);
 				// Enqueue under lock so FIFO matches contiguous prevOpSeq admit order.
@@ -576,7 +608,6 @@ public class OrchidNode {
 		return appendAndAdmit(op).future();
 	}
 
-
 	/**
 	 * Propose admission result: commit future + expected durable opSeq for OpLog holdback.
 	 *
@@ -612,30 +643,51 @@ public class OrchidNode {
 		});
 	}
 
+	/**
+	 * Single phase frame — same mailbox path as {@link #onPhaseBatch(List)}.
+	 */
 	public void onPhase(OrchidPhaseMessage msg) {
-		if (msg == null || msg.nodeId().equals(nodeId) || isolatedPeers.contains(msg.nodeId())) {
+		if (msg == null) {
+			return;
+		}
+		onPhaseBatch(List.of(msg));
+	}
+
+	/**
+	 * Apply decoded phase frame(s) in one mailbox task, then one contiguous commit drain.
+	 * Wire {@code ORCHID_PHASE_BATCH} and single {@code ORCHID_PHASE} share this path.
+	 */
+	public void onPhaseBatch(List<OrchidPhaseMessage> messages) {
+		if (messages == null || messages.isEmpty()) {
 			return;
 		}
 		// Digest ACK + commit drain off EL (may fireApply); preserve receive order via mailbox.
 		orchidRpcQueue.submit(ThreadService.getLogicExecutor(), () -> {
-			final PeerView view = peers.computeIfAbsent(msg.nodeId(), PeerView::new);
-			view.phase = msg.phase();
-			view.omega = msg.omega();
-			view.lastCommittedSeq = msg.lastCommittedSeq();
-			view.proposeId = msg.proposeId();
-			view.digest = msg.digest();
-			view.seen = true;
-			if (msg.proposeId() > 0) {
-				recordDigestAck(msg.nodeId(), msg.proposeId(), msg.digest());
+			for (int i = 0; i < messages.size(); i++) {
+				final OrchidPhaseMessage msg = messages.get(i);
+				if (msg == null || msg.nodeId().equals(nodeId) || isolatedPeers.contains(msg.nodeId())) {
+					continue;
+				}
+				applyPhaseMessage(msg);
 			}
+			requestCommitDrain();
 		});
 	}
 
-	private void recordDigestAck(String fromNodeId, long proposeId, long digest) {
-		final PendingPropose p = pending.get(proposeId);
-		if (p != null) {
-			p.acks.put(fromNodeId, digest);
-			requestCommitDrain();
+	private void applyPhaseMessage(OrchidPhaseMessage msg) {
+		final PeerView view = peers.computeIfAbsent(msg.nodeId(), PeerView::new);
+		view.phase = msg.phase();
+		view.omega = msg.omega();
+		view.lastCommittedSeq = msg.lastCommittedSeq();
+		view.proposeId = msg.proposeId();
+		view.digest = msg.digest();
+		view.seen = true;
+		noteObservedPeerCommittedSeq(msg.lastCommittedSeq());
+		if (msg.proposeId() > 0L) {
+			final PendingPropose pendingPropose = pending.get(msg.proposeId());
+			if (pendingPropose != null) {
+				pendingPropose.acks.put(msg.nodeId(), msg.digest());
+			}
 		}
 	}
 
@@ -683,6 +735,7 @@ public class OrchidNode {
 			nackPrevOpSeq(msg, lastCommittedSeq, prev);
 			return;
 		}
+		boolean peerTipLagBuffer = false;
 		if (!isAcceptablePrevOpSeq(prev)) {
 			// Re-check under lock: commitApplyQueue may have advanced tip since the first read
 			// (TOCTOU produced bogus NACKs with expected==got under pipeline load).
@@ -696,8 +749,15 @@ public class OrchidNode {
 					return;
 				}
 				if (!isAcceptablePrevOpSeq(prev)) {
-					nackPrevOpSeq(msg, lastCommittedSeq, prev);
-					return;
+					if (prev > lastCommittedSeq) {
+						// Local tip behind propose: buffer for claim-time seal — never NACK.
+						// Lag NACK (expected=0 got=N) fails a healthy writer → Elle G1a / dirty-update / dups
+						// under Multi-DC ASYNC after DC-link heal (learner tip still 0).
+						peerTipLagBuffer = true;
+					} else {
+						nackPrevOpSeq(msg, lastCommittedSeq, prev);
+						return;
+					}
 				}
 			} finally {
 				lock.unlock();
@@ -708,14 +768,24 @@ public class OrchidNode {
 		if (!crossDcPropose) {
 			final String ranked = phaseRankedProposerId();
 			if (ranked != null && !ranked.equals(msg.proposerId())) {
-				transport.sendNack(msg.proposerId(), new OrchidNackMessage(nodeId, msg.proposeId(), "not phase-ranked proposer; active=" + ranked));
+				transport.sendNack(msg.proposerId(), new OrchidNackMessage(
+						nodeId, msg.proposeId(), OrchidNackCode.NOT_PHASE_RANKED, 0L, 0L, ranked));
 				return;
 			}
 		}
 		final long digest = digestOf(msg.op());
 		if (digest != msg.digest()) {
-			transport.sendNack(msg.proposerId(), new OrchidNackMessage(nodeId, msg.proposeId(), "digest mismatch"));
+			transport.sendNack(msg.proposerId(), new OrchidNackMessage(
+					nodeId, msg.proposeId(), OrchidNackCode.DIGEST_MISMATCH, 0L, 0L, ""));
 			return;
+		}
+		if (peerTipLagBuffer) {
+			final int lagCap = Math.max(MIN_PROPOSE_IN_FLIGHT, maxProposeInFlight * COMMIT_HOLDBACK_CAP_FACTOR);
+			if (remoteInflightExpected.size() >= lagCap) {
+				log.warn("ORCHID drop ahead-of-tip propose (peer-lag buffer full) tip={} prev={} proposeId={} from={}",
+						lastCommittedSeq, prev, msg.proposeId(), msg.proposerId());
+				return;
+			}
 		}
 		remoteInflightExpected.put(msg.proposeId(), new RemoteInflight(msg.proposerId(), prev + 1L, prev, msg.proposeId(), digest, msg.op()));
 		// Single encode fan-out: proposer + local peers (and coupled remotes) see the digest ACK once.
@@ -727,16 +797,24 @@ public class OrchidNode {
 	}
 
 	/**
-	 * Highest {@code lastCommittedSeq} advertised by seen peers (phase / HELLO path).
+	 * Highest peer-advertised tip: live {@code seen} peers plus durable high-water
+	 * retained across {@link #forgetPeer} (cross-DC ASYNC Active loss).
 	 */
 	public long maxSeenPeerCommittedSeq() {
-		long max = 0L;
+		long max = maxObservedPeerCommittedSeq.get();
 		for (PeerView peer : peers.values()) {
 			if (peer != null && peer.seen && peer.lastCommittedSeq > max) {
 				max = peer.lastCommittedSeq;
 			}
 		}
 		return max;
+	}
+
+	private void noteObservedPeerCommittedSeq(long committedSeq) {
+		if (committedSeq <= 0L) {
+			return;
+		}
+		maxObservedPeerCommittedSeq.updateAndGet(prev -> Math.max(prev, committedSeq));
 	}
 
 	/**
@@ -755,12 +833,14 @@ public class OrchidNode {
 		if (committedSeq > view.lastCommittedSeq) {
 			view.lastCommittedSeq = committedSeq;
 		}
+		noteObservedPeerCommittedSeq(committedSeq);
 	}
 
 	/**
-	 * After region claim: locally commit contiguous cross-DC proposes we digested but never
-	 * received a commit for (former Active crashed mid-broadcast). Prevents tip zeroing /
-	 * silent drop of ACKed ops. Call from logic VT (claim path), never Netty EL.
+	 * Locally commit contiguous proposes we digested but never received a commit for
+	 * (proposer crashed mid-broadcast — same-DC unclean kill or cross-DC Active loss).
+	 * Prevents tip holes / silent drop of quorum-acked ops. Serializes on
+	 * {@link #commitApplyQueue}; call from logic VT / claim path, never Netty EL.
 	 *
 	 * @return number of proposes sealed into the local tip
 	 */
@@ -768,19 +848,89 @@ public class OrchidNode {
 		if (!running.get()) {
 			return 0;
 		}
-		return sealBufferedCrossDcProposesSerial();
+		final CompletableFuture<Integer> done = new CompletableFuture<>();
+		commitApplyQueue.submit(ThreadService.getLogicExecutor(), () -> {
+			try {
+				done.complete(Integer.valueOf(sealBufferedProposesSerial()));
+			} catch (Throwable t) {
+				done.completeExceptionally(t);
+			}
+		});
+		try {
+			return done.join().intValue();
+		} catch (CompletionException ex) {
+			final Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+			if (cause instanceof RuntimeException re) {
+				throw re;
+			}
+			throw new IllegalStateException("buffered propose seal failed", cause);
+		}
 	}
 
-	private int sealBufferedCrossDcProposesSerial() {
+	/**
+	 * Drain contiguous buffered proposes before admitting a new tip (same-DC unclean path).
+	 * Must not run on Netty EL (joins {@link #commitApplyQueue}).
+	 */
+	private void drainBufferedProposesBeforeAdmit() {
+		if (findContiguousBufferedInflight() == null) {
+			return;
+		}
+		final CompletableFuture<Void> done = new CompletableFuture<>();
+		commitApplyQueue.submit(ThreadService.getLogicExecutor(), () -> {
+			try {
+				sealBufferedProposesSerial();
+				done.complete(null);
+			} catch (Throwable t) {
+				done.completeExceptionally(t);
+			}
+		});
+		try {
+			done.join();
+		} catch (CompletionException ex) {
+			final Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+			if (cause instanceof RuntimeException re) {
+				throw re;
+			}
+			throw new IllegalStateException("buffered propose seal failed", cause);
+		}
+	}
+
+	/**
+	 * Seal any contiguous buffered propose (claim / admit drain).
+	 * Must run only via {@link #commitApplyQueue} (or under its exclusive drain).
+	 */
+	private int sealBufferedProposesSerial() {
+		return sealBufferedProposesFromProposerSerial(null);
+	}
+
+	/**
+	 * Seal contiguous buffered proposes from {@code proposerId} only.
+	 * {@code null} proposerId = any proposer (claim / admit drain).
+	 * Must run only via {@link #commitApplyQueue}.
+	 */
+	private int sealBufferedProposesFromProposerSerial(String proposerId) {
 		int sealed = 0;
 		for (; ; ) {
 			final RemoteInflight next = findContiguousBufferedInflight();
 			if (next == null || next.op() == null) {
 				return sealed;
 			}
+			if (proposerId != null && !proposerId.equals(next.proposerId())) {
+				// Tip held by another proposer — do not mint their commit because a third peer flapped.
+				return sealed;
+			}
 			final long opSeq = next.expectedOpSeq();
-			final ReplicationOp committed = OpLogCodec.withChecksum(new ReplicationOp(next.op().domainType(), next.op().shard(), opSeq, next.op().type(), next.op().key(), next.op().value(), next.op().schemaEpoch(), next.op().checksum()));
-			final OrchidCommitMessage synthetic = new OrchidCommitMessage(next.proposerId(), next.proposeId(), next.digest(), next.prevOpSeq(), opSeq, committed);
+			final ReplicationOp committed = OpLogCodec.withChecksum(new ReplicationOp(
+					next.op().domainType(),
+					next.op().shard(),
+					opSeq,
+					next.op().type(),
+					next.op().key(),
+					next.op().value(),
+					next.op().schemaEpoch(),
+					next.op().checksum()));
+			final OrchidCommitMessage synthetic = new OrchidCommitMessage(
+					next.proposerId(), next.proposeId(), next.digest(), next.prevOpSeq(), opSeq, committed);
 			final List<OrchidCommitMessage> toApply = new ArrayList<>(2);
 			lock.lock();
 			try {
@@ -813,7 +963,10 @@ public class OrchidNode {
 	}
 
 	private void nackPrevOpSeq(OrchidProposeMessage msg, long expectedPrev, long gotPrev) {
-		transport.sendNack(msg.proposerId(), new OrchidNackMessage(nodeId, msg.proposeId(), "prevOpSeq mismatch expected=" + expectedPrev + " got=" + gotPrev));
+		// Only stale proposes (gotPrev < expectedPrev / tip). Peer tip-behind never reaches here —
+		// onPropose buffers ahead-of-tip proposes for claim seal instead of NACKing.
+		transport.sendNack(msg.proposerId(), new OrchidNackMessage(
+				nodeId, msg.proposeId(), OrchidNackCode.STALE_PREV_OP_SEQ, expectedPrev, gotPrev, ""));
 	}
 
 	/**
@@ -930,9 +1083,6 @@ public class OrchidNode {
 		fireApply(msg.op(), true);
 		if (local != null) {
 			local.future.complete(msg.opSeq());
-			if (pending.isEmpty()) {
-				clearPendingProposeTimestamp();
-			}
 			local.releaseFlight();
 		}
 	}
@@ -949,13 +1099,16 @@ public class OrchidNode {
 	}
 
 	public void onNack(OrchidNackMessage msg) {
-		if (msg == null) {
+		if (msg == null || msg.code() == null) {
 			return;
 		}
+		// Every wire NACK code is fail-closed for the proposer. Peer tip-behind is not a NACK
+		// (buffered in onPropose) — no string parsing / ignore heuristics on this path.
 		remoteInflightExpected.remove(msg.proposeId());
 		final PendingPropose p = pending.remove(msg.proposeId());
 		if (p != null && !p.future.isDone()) {
-			failProposeChain(p, new OrchidNotSyncedException("ORCHID NACK from " + msg.fromNodeId() + ": " + msg.reason()));
+			failProposeChain(p, new OrchidNotSyncedException(
+					"ORCHID NACK from " + msg.fromNodeId() + ": " + msg.detailMessage()));
 		}
 	}
 
@@ -973,19 +1126,59 @@ public class OrchidNode {
 			}
 			broadcastOwnPhaseDigests();
 			expireStaleLocalProposes();
-			requestCommitDrain();
+			scheduleCommitDrainFromTick();
 		}
 	}
 
 	/**
-	 * Fail admitted proposes that never reached digest quorum / commit within
+	 * Offload primary commit drain from the Kuramoto tick thread.
+	 * <p>
+	 * {@link #commitOne} → {@code fireApply} on the tick thread starved phase coupling
+	 * under MIX/QG (R dip → formerly wedged tip when drain re-checked {@code isSynced}).
+	 * Admit/ACK paths still call {@link #requestCommitDrain()} directly on logic VT.
+	 */
+	private void scheduleCommitDrainFromTick() {
+		if (pending.isEmpty()) {
+			return;
+		}
+		if (!tickDrainEnqueued.compareAndSet(false, true)) {
+			return;
+		}
+		commitApplyQueue.submit(ThreadService.getLogicExecutor(), () -> {
+			try {
+				requestCommitDrain();
+			} finally {
+				tickDrainEnqueued.set(false);
+			}
+		});
+	}
+
+	/**
+	 * Fail the oldest admitted propose that has not committed within
 	 * {@link #LOCAL_PROPOSE_DIGEST_TIMEOUT_MS} (local-DC; remote voters use WAN timeout).
+	 * <p>
+	 * Age is per-propose admit time. A single busy-window clock (empty→non-empty) is wrong under
+	 * pipelined load: {@code pending} stays non-empty for the whole WRITE/MIX window and would
+	 * false-fail a young tip head. Elle-unsafe hang if an admitted future never completes.
 	 */
 	private void expireStaleLocalProposes() {
-		final long ageMs = pendingProposeAgeMs();
+		final PendingPropose oldest = oldestUnfinishedPropose();
+		if (oldest == null) {
+			return;
+		}
+		final long ageMs = Math.max(0L, System.currentTimeMillis() - oldest.admittedAtMs);
 		if (ageMs < LOCAL_PROPOSE_DIGEST_TIMEOUT_MS) {
 			return;
 		}
+		failProposeChain(oldest, new OrchidNotSyncedException(
+				"local propose digest timeout after " + LOCAL_PROPOSE_DIGEST_TIMEOUT_MS
+						+ "ms ageMs=" + ageMs + " proposeId=" + oldest.proposeId));
+	}
+
+	/**
+	 * Oldest unfinished local propose by {@code proposeId} (tip-chain head under contiguous admit).
+	 */
+	private PendingPropose oldestUnfinishedPropose() {
 		PendingPropose oldest = null;
 		for (PendingPropose pendingPropose : pending.values()) {
 			if (pendingPropose == null || pendingPropose.future.isDone()) {
@@ -995,13 +1188,7 @@ public class OrchidNode {
 				oldest = pendingPropose;
 			}
 		}
-		if (oldest == null) {
-			clearPendingProposeTimestamp();
-			return;
-		}
-		failProposeChain(oldest, new OrchidNotSyncedException(
-				"local propose digest timeout after " + LOCAL_PROPOSE_DIGEST_TIMEOUT_MS
-						+ "ms ageMs=" + ageMs + " proposeId=" + oldest.proposeId));
+		return oldest;
 	}
 
 	@SuppressWarnings("NonAtomicOperationOnVolatileField")
@@ -1044,6 +1231,10 @@ public class OrchidNode {
 	/**
 	 * Iterative contiguous commit drain (one stack frame). Replaces recursive
 	 * {@code forEach(maybeCommit)} which StackOverflow'd under pipeline + sync fireApply.
+	 * <p>
+	 * Order per tip step is fixed for durability/visibility under kill: local apply → join
+	 * complete → commit broadcast. Completing/broadcasting before apply widened the unclean
+	 * window (Jepsen 1dc-chaos Elle {@code G-single-item-realtime}: append :ok then read nil).
 	 */
 	private void requestCommitDrain() {
 		for (; ; ) {
@@ -1069,11 +1260,10 @@ public class OrchidNode {
 	}
 
 	private PendingPropose findReadyContiguousPropose() {
-		// Do not re-check isPhaseRankedProposer here: admit already required rank.
-		// A post-admit rank flap must not wedge an acknowledged propose forever.
-		if (!isSynced()) {
-			return null;
-		}
+		// Do not re-check isPhaseRankedProposer / isSynced here: admit already required both.
+		// A post-admit rank flap or brief R dip must not wedge quorum-acked proposes into
+		// local propose digest timeout (MIX/QG load evidence: stuck tip → Elle-unsafe :fail storm).
+		// New tips stay fail-closed in appendAndAdmit (isSynced + phase-rank + tip fence).
 		final long tip = lastCommittedSeq;
 		PendingPropose ready = null;
 		for (PendingPropose pendingPropose : pending.values()) {
@@ -1097,9 +1287,89 @@ public class OrchidNode {
 	}
 
 	/**
-	 * Commit one propose at tip. Does not recurse into successor drain.
-	 * Solo / high-rate path: tickLoop and propose thread may both race;
-	 * only one thread may advance lastCommittedSeq for this proposeId.
+	 * Test hook: run contiguous commit drain (post-admit path).
+	 */
+	@VisibleForTesting
+	public void testingRequestCommitDrain() {
+		requestCommitDrain();
+	}
+
+	/**
+	 * Test hook: record a digest ACK without triggering drain (characterization).
+	 */
+	@VisibleForTesting
+	public boolean testingPutDigestAck(String fromNodeId, long proposeId, long digest) {
+		final PendingPropose pendingPropose = pending.get(proposeId);
+		if (pendingPropose == null) {
+			return false;
+		}
+		pendingPropose.acks.put(fromNodeId, digest);
+		return true;
+	}
+
+	/**
+	 * Test hook: clear live seen bit without isolate (keeps ACK path open).
+	 */
+	@VisibleForTesting
+	public void testingMarkPeerUnseen(String peerId) {
+		if (peerId == null) {
+			return;
+		}
+		final PeerView view = peers.get(peerId);
+		if (view != null) {
+			view.seen = false;
+		}
+	}
+
+	/**
+	 * Test hook: Op digest used for quorum ACKs.
+	 */
+	@VisibleForTesting
+	public long testingDigestOf(ReplicationOp op) {
+		return digestOf(op);
+	}
+
+	/**
+	 * Test hook: backdate admit wall-clock for digest-timeout characterization.
+	 */
+	@VisibleForTesting
+	public boolean testingBackdateAdmit(long proposeId, long admittedAtMs) {
+		final PendingPropose pendingPropose = pending.get(proposeId);
+		if (pendingPropose == null) {
+			return false;
+		}
+		pendingPropose.admittedAtMs = admittedAtMs;
+		return true;
+	}
+
+	/**
+	 * Test hook: run local digest-timeout expiry (Kuramoto tick path).
+	 */
+	@VisibleForTesting
+	public void testingExpireStaleLocalProposes() {
+		expireStaleLocalProposes();
+	}
+
+	/**
+	 * Test hook: whether a remote propose is buffered (claim-seal / peer-lag path).
+	 */
+	@VisibleForTesting
+	public boolean testingRemoteInflightContains(long proposeId) {
+		return remoteInflightExpected.containsKey(proposeId);
+	}
+
+	/**
+	 * Test hook: oldest unfinished local propose id, or {@code -1} when idle.
+	 */
+	@VisibleForTesting
+	public long testingOldestPendingProposeId() {
+		final PendingPropose oldest = oldestUnfinishedPropose();
+		return oldest == null ? -1L : oldest.proposeId;
+	}
+
+	/**
+	 * Commit one propose at tip: apply locally, complete join, broadcast.
+	 * Does not recurse into successor drain.
 	 */
 	private void commitOne(PendingPropose p) {
 		if (!p.commitGate.compareAndSet(false, true)) {
@@ -1120,20 +1390,26 @@ public class OrchidNode {
 		} finally {
 			lock.unlock();
 		}
-		final ReplicationOp committed = new ReplicationOp(p.op.domainType(), p.op.shard(), opSeq, p.op.type(), p.op.key(), p.op.value(), p.op.schemaEpoch(), p.op.checksum());
+		final ReplicationOp committed = new ReplicationOp(
+				p.op.domainType(), p.op.shard(), opSeq, p.op.type(), p.op.key(), p.op.value(),
+				p.op.schemaEpoch(), p.op.checksum());
 		final ReplicationOp withCs = OpLogCodec.withChecksum(committed);
 		pending.remove(p.proposeId);
 		remoteInflightExpected.remove(p.proposeId);
 		rememberCommittedPropose(p.proposeId);
-		if (pending.isEmpty()) {
-			clearPendingProposeTimestamp();
-		}
 		// Local DDL already applied in SqlDdlExecutor before publishDdl; re-enter via
 		// applyReplicatedDdl → execute on the same session mailbox deadlocks the join.
 		// Peers still apply DDL through onCommit → finishCommitApply → fireApply.
 		if (withCs.type() != ReplicationOpType.DDL) {
-			// Local propose: MutationRecorder journals OpLog + confirmPersisted (journalRemote=false).
-			fireApply(withCs, false);
+			// Local propose: map/watermark before join complete — fail-closed under kill/chaos.
+			try {
+				fireApply(withCs, false);
+			} catch (RuntimeException applyEx) {
+				// Tip already advanced; do not broadcast or ack client success (Elle false :ok).
+				p.future.completeExceptionally(applyEx);
+				p.releaseFlight();
+				return;
+			}
 		}
 		p.future.complete(opSeq);
 		transport.broadcastCommit(new OrchidCommitMessage(nodeId, p.proposeId, p.digest, p.prevOpSeq, opSeq, withCs));
@@ -1203,13 +1479,6 @@ public class OrchidNode {
 		} finally {
 			lock.unlock();
 		}
-		if (pending.isEmpty()) {
-			clearPendingProposeTimestamp();
-		}
-	}
-
-	private void clearPendingProposeTimestamp() {
-		pendingProposeStartedAtMs.set(0L);
 	}
 
 	private boolean digestQuorumMet(PendingPropose p) {
@@ -1259,7 +1528,7 @@ public class OrchidNode {
 		}
 	}
 
-	private void dispatchPropose(OrchidProposeMessage message) {
+	private LinkedHashSet<String> proposeDispatchTargets() {
 		final LinkedHashSet<String> targets = new LinkedHashSet<>(peerIds.size() + 8);
 		targets.addAll(peerIds);
 		targets.addAll(multiDc().remoteVoterIds());
@@ -1270,13 +1539,12 @@ public class OrchidNode {
 				targets.add(peer.id);
 			}
 		}
-		for (String peerId : targets) {
-			transport.sendPropose(peerId, message);
-		}
+		return targets;
 	}
 
 	/**
 	 * Drain FIFO propose sends; CAS pump keeps wire order across concurrent admitters.
+	 * One coalesce flush per pump drain (avoids per-propose writeAndFlush under pipeline).
 	 */
 	private void pumpProposeSendQueue() {
 		if (!proposeSendPump.compareAndSet(false, true)) {
@@ -1284,9 +1552,13 @@ public class OrchidNode {
 		}
 		try {
 			for (; ; ) {
+				final ArrayList<OrchidProposeMessage> batch = new ArrayList<>();
 				OrchidProposeMessage msg;
 				while ((msg = proposeSendQueue.poll()) != null) {
-					dispatchPropose(msg);
+					batch.add(msg);
+				}
+				if (!batch.isEmpty()) {
+					transport.sendProposeBatchToMany(proposeDispatchTargets(), batch);
 				}
 				proposeSendPump.set(false);
 				if (proposeSendQueue.isEmpty()) {
@@ -1390,12 +1662,21 @@ public class OrchidNode {
 	}
 
 	private void fireApply(ReplicationOp op, boolean journalRemote) {
+		RuntimeException firstFailure = null;
 		for (BiConsumer<ReplicationOp, Boolean> listener : applyListeners) {
 			try {
 				listener.accept(op, journalRemote);
 			} catch (RuntimeException ex) {
 				log.warn("Orchid apply listener failed: {}", ex.toString());
+				if (firstFailure == null) {
+					firstFailure = ex;
+				}
 			}
+		}
+		if (firstFailure != null) {
+			// Fail-closed: never complete propose join as success after map apply failed
+			// (silent swallow forged Jepsen :ok append then nil read / G2-item).
+			throw firstFailure;
 		}
 	}
 
@@ -1446,18 +1727,32 @@ public class OrchidNode {
 		final ReplicationOp op;
 		final CompletableFuture<Long> future;
 		final Map<String, Long> acks = new ConcurrentHashMap<>();
+		/**
+		 * Wall-clock admit time for {@link OrchidNode#expireStaleLocalProposes()}.
+		 * Tests may backdate via {@link OrchidNode#testingBackdateAdmit(long, long)}.
+		 */
+		volatile long admittedAtMs;
 		private final Runnable flightUnlock;
 		private final AtomicBoolean flightReleased = new AtomicBoolean();
 		private final AtomicBoolean remoteTimeoutScheduled = new AtomicBoolean();
 		private final AtomicBoolean commitGate = new AtomicBoolean();
 
-		PendingPropose(long proposeId, long digest, long prevOpSeq, ReplicationOp op, CompletableFuture<Long> future, Runnable flightUnlock) {
+		PendingPropose(
+				long proposeId,
+				long digest,
+				long prevOpSeq,
+				ReplicationOp op,
+				CompletableFuture<Long> future,
+				Runnable flightUnlock,
+				long admittedAtMs
+		) {
 			this.proposeId = proposeId;
 			this.digest = digest;
 			this.prevOpSeq = prevOpSeq;
 			this.op = op;
 			this.future = future;
 			this.flightUnlock = flightUnlock;
+			this.admittedAtMs = admittedAtMs;
 		}
 
 		void releaseFlight() {

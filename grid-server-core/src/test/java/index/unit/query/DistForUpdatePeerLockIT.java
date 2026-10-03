@@ -35,10 +35,12 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Phase 3: distributed FOR UPDATE peer locks — cross-node wait via in-process agents.
+ * Distributed FOR UPDATE peer locks — cross-node wait via in-process agents.
  * <p>
- * Netty transport handler path (no live peer channel): {@code ForUpdateLockTransportHandlerTest}.
- * PREPARE/COMMIT peer votes are scaffold-only on {@link TxEnvelopeCoordinator} / {@link org.genfork.grid.sql.tx.SqlTxCommitter}.
+ * Netty live path: {@link DistForUpdateNettyPeerLockIT}. Handler-only (no channel):
+ * {@code ForUpdateLockTransportHandlerTest} / {@code ForUpdatePrepareTransportHandlerTest}.
+ * Prepare/commit-dec votes: {@link DistForUpdatePrepareVotesTest} and
+ * {@link org.genfork.grid.sql.tx.DistForUpdatePrepareVotes} from {@link org.genfork.grid.sql.tx.SqlTxCommitter}.
  *
  * @author: GenCloud
  * @date: 2025/09

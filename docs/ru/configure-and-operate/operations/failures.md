@@ -2,7 +2,7 @@
 
 Симптом → действие → куда читать. Это справочник дежурства, не заявление «кластер готов».
 
-Почему отказ лучше «пройти как-нибудь»: при записи на диск Grid предпочитает отдать ошибку клиенту, чем оставить два расходящихся журнала или строку «в памяти есть, на диске нет». Отсюда же запрет отключать `fsync` «чтобы ошибок не было» и запрет крутить следующий host в URL вместо `rediscoverWriter()`.
+Почему отказ лучше «пройти как-нибудь»: при записи на диск Grid предпочитает отдать ошибку клиенту, чем оставить два расходящихся журнала или строку «в памяти есть, на диске нет». Отсюда же запрет отключать `fsync` «чтобы ошибок не было» и запрет крутить следующий хост в URL вместо `rediscoverWriter()`.
 
 Перед трафиком всегда смотрите Actuator readiness: [мониторинг](../monitoring.md).
 
@@ -11,7 +11,7 @@
 | Фаза | Что сделать |
 |------|-------------|
 | До | Readiness UP; известен текущий пишущий; archive PITR включён, если нужен откат; сеть SQL (**15432**) отделена от репликации (**5615**) |
-| Во время | Не писать в чужой/`битый` `dataDir`; не крутить следующий host в URL; не отключать `fsync` «чтобы прошло» |
+| Во время | Не писать в чужой/`битый` `dataDir`; не крутить следующий хост в URL; не отключать `fsync` «чтобы прошло» |
 | После | Новый пишущий: `writerEligible` + совпадение меты клиента; реплики догнали; при нескольких ЦОД — один Active и актуальный `regionEpoch` |
 
 Метрики в первую очередь: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, `rpoEstimateMs` — [мониторинг](../monitoring.md).
@@ -20,7 +20,7 @@
 
 | Симптом | Что сделать | Подробнее |
 |---------|-------------|-----------|
-| Узел не отвечает / процесс умер | Не писать в чужой `dataDir`. Поднять тот же каталог или восстановить по PITR. Клиент — `rediscoverWriter()`, не следующий host в URL | [повышение роли](ha-promote.md), [PITR](pitr.md) |
+| Узел не отвечает / процесс умер | Не писать в чужой `dataDir`. Поднять тот же каталог или восстановить по PITR. Клиент — `rediscoverWriter()`, не следующий хост в URL | [повышение роли](ha-promote.md), [PITR](pitr.md) |
 | `readiness` DOWN при старте с репликацией | Дождаться ORCHID sync; не слать нагрузку. Смотреть `orchidSynced`, `reason`, `orchid_r` | [мониторинг](../monitoring.md), [ORCHID](../../understand/orchid-consensus.md) |
 | Запись отклонена (`OrchidNotSyncedException` / нет допуска) | Проверить соседние узлы, сеть, порог `R`, диск/`fsync`. Не отключать fsync ради TPS — лучше отказ, чем два журнала | [репликация](../configuration/replication.md) |
 | Диск полный / OpLog не пишет | Освободить место; проверить `op-log` и archive. Сбой archive отменяет truncate — это защита | [долговременное хранение](../configuration/durability.md), [PITR](pitr.md) |
@@ -38,7 +38,7 @@
 ### A. Процесс пишущего умер, клиенты ещё подключены
 
 1. **Сигнал.** Запись падает или висит; readiness на старом хосте DOWN или процесса нет.
-2. **Проверка.** Нет второго процесса на том же `dataDir`. Новый пишущий: readiness UP и `writerEligible: true`. Мета клиента обновлена через `PROMOTE_NOTIFY` или `rediscoverWriter()` — не следующий host в URL.
+2. **Проверка.** Нет второго процесса на том же `dataDir`. Новый пишущий: readiness UP и `writerEligible: true`. Мета клиента обновлена через `PROMOTE_NOTIFY` или `rediscoverWriter()` — не следующий хост в URL.
 3. **Эскалация.** Два Active или два пишущих — немедленно остановить лишний процесс; разобрать `regionEpoch` / claim ([несколько ЦОД](multi-dc.md)). Если приложения бьют в мёртвый host — баг клиента (нет `rediscoverWriter()`).
 
 ### B. Диск заполнился во время записи
@@ -63,7 +63,7 @@
 
 1. **Сигнал.** Active-площадка тише `claim-timeout-ms`; запись встаёт или падает с отказами region / epoch.
 2. **Проверка.** Ровно один Hold (плюс Witness, если настроен) набирает кворум claim; `regionEpoch` растёт; у нового Active `writerEligible: true`. Witness не принимает DML.
-3. **Эскалация.** Клиенты вызывают `rediscoverWriter()` — не крутить следующий host в URL записи. Два Active → немедленно остановить лишний процесс ([несколько ЦОД](multi-dc.md), [повышение роли](ha-promote.md)).
+3. **Эскалация.** Клиенты вызывают `rediscoverWriter()` — не крутить следующий хост в URL записи. Два Active → немедленно остановить лишний процесс ([несколько ЦОД](multi-dc.md), [повышение роли](ha-promote.md)).
 
 ## Порядок действий при падении писателя (1 ЦОД)
 
@@ -91,7 +91,11 @@
 
 ## Учебные контуры согласованности
 
-Jepsen unclean-revive (грязный рестарт узла с локальным `dataDir`) — PASS на стенде `2026-09-29-jepsen-unclean-revive`; полный прогон с tip-fence / HELLO sealed rejoin — `2026-09-30-jepsen-full`. Симптомы tip-behind: `writerEligible=false` и отказ propose, пока локальный tip не догонит пиров; при ACK ниже watermark truncate — sealed pack на HELLO, затем хвост OpLog. Сценарии и покрытие: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md), [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md).
+Jepsen unclean-revive (грязный рестарт узла с локальным `dataDir`) — PASS на стенде `2026-09-29-jepsen-unclean-revive`; полный прогон с ограждением tip / HELLO sealed rejoin — `2026-09-30-jepsen-full`. Матрица профилей A–M (**13/13** safety PASS) — `2026-10-03` (`run-jepsen-all-profiles.ps1`, [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md)).
+
+Симптомы tip-behind: `writerEligible=false` и отказ propose, пока локальный tip не догонит пиров; при ACK ниже watermark truncate — sealed pack на HELLO, затем хвост OpLog. После ASYNC захвата Hold без живой ссылки на бывший Active-ЦОД tip только среди Hold не снимает ограждение — ждать remote-DC peer. Под спокойным Multi-DC без nemesis (`*-nochao`) отказ `:no-proposer` / connect — дефект settle/доступности (клиент рано пошёл писать), не FAIL линейлизуемости: Elle/Knossos отбрасывает такие `:fail`. NACK по `prevOpSeq` — fail-closed triage OpLog/holdback/tip, кворум и `fsync` не ослаблять.
+
+Сценарии: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md).
 
 ## Чего не делать
 

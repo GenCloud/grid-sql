@@ -2,8 +2,6 @@
 
 Two sessions look at the same row. When does the second see what the first already committed? Not before the write passed admission and the journal. While a transaction is open, outsiders still see the old state — the dirty buffer does not leak out.
 
-Next: [transactions](../develop/transactions.md), [write path](write-path-staging.md), [ORCHID](orchid-consensus.md).
-
 ## Autocommit versus open transaction
 
 | Mode | Behaviour |
@@ -38,7 +36,7 @@ SQL transactions take fair locks on `(table, key)`.
 
 ### `FOR UPDATE` and peer locks
 
-`SELECT … FOR UPDATE` takes the same record locks as a write path so a concurrent TX cannot change those keys until this TX ends. With replication on, peer lock agents are wired from **replication `peers`** (not a separate SQL peer list) — local-only when replication is off or the peer list is empty. A Netty error on a peer lock is a **reject to the client**, not a silent local-only commit. Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
+`SELECT … FOR UPDATE` takes the same record locks as a write path so a concurrent TX cannot change those keys until this TX ends. With replication on, peer lock agents are wired from **replication `peers`** (not a separate SQL peer list) — local-only when replication is off or the peer list is empty. Dist prepare votes use a **per-peer key-set**; peer leases expire after **30s** TTL. A Netty error on a peer lock is a **reject to the client**, not a silent local-only commit. Details: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 `FOR UPDATE SKIP LOCKED` skips keys already locked by another TX instead of waiting. Use it for competing workers that can process another row; do not use it when every selected key must be held.
 
@@ -76,7 +74,7 @@ Details and routing: [replica reads](../configure-and-operate/operations/replica
 
 ## What the model does not promise
 
-Visibility is commit order plus a dirty buffer — not classic MVCC snapshots. One phase-ranked writer writes; role change is explicit ([promote](../configure-and-operate/operations/ha-promote.md)). XA / two-phase commit across foreign systems is not supported.
+Visibility is commit order plus a dirty buffer — not classic MVCC snapshots. One writer among synced peers (`min(nodeId)`) writes; role change is explicit ([promote](../configure-and-operate/operations/ha-promote.md)). XA / two-phase commit across foreign systems is not supported.
 
 ## Next
 

@@ -179,6 +179,69 @@ public class OrchidMultiDcVotersTest {
 	}
 
 	@Test
+	void forgetPeerSealsSameDcBufferedProposeBeforeClear() throws Exception {
+		mesh.setDropCommits(true);
+		final OrchidNode proposer = start("sdc-a", java.util.List.of("sdc-b"), OrchidMultiDcConfig.NONE);
+		final OrchidNode survivor = start("sdc-b", java.util.List.of("sdc-a"), OrchidMultiDcConfig.NONE);
+		proposer.onPeerAvailable("sdc-b");
+		survivor.onPeerAvailable("sdc-a");
+
+		final AtomicInteger applied = new AtomicInteger();
+		survivor.addApplyListener(op -> applied.incrementAndGet());
+
+		final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
+				"demo.UncleanSeal", 0, 1L, ReplicationOpType.UPSERT, new byte[]{9}, new byte[]{10}, 1L, 0L
+		));
+		final long seq = proposer.appendAndWaitCommit(op).get(3, TimeUnit.SECONDS);
+		assertTrue(seq >= 1L);
+		assertEquals(0L, survivor.getLastCommittedSeq(), "commit dropped — survivor tip behind");
+		assertEquals(0, applied.get());
+
+		survivor.forgetPeer("sdc-a");
+		final long deadline = System.currentTimeMillis() + 3_000L;
+		while (System.currentTimeMillis() < deadline && survivor.getLastCommittedSeq() < seq) {
+			Thread.sleep(20L);
+		}
+		assertTrue(survivor.getLastCommittedSeq() >= seq,
+				"forgetPeer must seal digested propose before clear; tip=" + survivor.getLastCommittedSeq());
+		assertTrue(applied.get() >= 1, "sealed propose must apply");
+	}
+
+	@Test
+	void forgetPeerOfFollowerDoesNotSealLiveProposerBuffer() throws Exception {
+		mesh.setDropCommits(true);
+		final OrchidNode proposer = start("flap-a", java.util.List.of("flap-b", "flap-c"), OrchidMultiDcConfig.NONE);
+		final OrchidNode survivor = start("flap-b", java.util.List.of("flap-a", "flap-c"), OrchidMultiDcConfig.NONE);
+		final OrchidNode follower = start("flap-c", java.util.List.of("flap-a", "flap-b"), OrchidMultiDcConfig.NONE);
+		proposer.onPeerAvailable("flap-b");
+		proposer.onPeerAvailable("flap-c");
+		survivor.onPeerAvailable("flap-a");
+		survivor.onPeerAvailable("flap-c");
+		follower.onPeerAvailable("flap-a");
+		follower.onPeerAvailable("flap-b");
+
+		final AtomicInteger applied = new AtomicInteger();
+		survivor.addApplyListener(op -> applied.incrementAndGet());
+
+		final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
+				"demo.FollowerFlap", 0, 1L, ReplicationOpType.UPSERT, new byte[]{11}, new byte[]{12}, 1L, 0L
+		));
+		final long seq = proposer.appendAndWaitCommit(op).get(3, TimeUnit.SECONDS);
+		assertTrue(seq >= 1L);
+		assertEquals(0L, survivor.getLastCommittedSeq());
+
+		survivor.forgetPeer("flap-c");
+		Thread.sleep(200L);
+		assertEquals(0L, survivor.getLastCommittedSeq(),
+				"follower flap must not seal live proposer's buffered tip");
+		assertEquals(0, applied.get());
+
+		final int sealed = survivor.sealBufferedCrossDcProposes();
+		assertTrue(sealed >= 1, "explicit seal must still apply live proposer's buffer");
+		assertTrue(survivor.getLastCommittedSeq() >= seq);
+	}
+
+	@Test
 	void refuseProposeWhenPeerTipAhead() throws Exception {
 		final OrchidNode local = start("dc-a-1", java.util.List.of(), OrchidMultiDcConfig.NONE);
 		local.onPeerAvailable("peer-ahead");

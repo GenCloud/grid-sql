@@ -94,7 +94,7 @@ public final class AdaptiveParallelScan {
 			if (workers < MIN_PARALLEL_CHUNKS) {
 				return serialMap(input, mapper);
 			}
-			List<List<byte[]>> chunks = splitByShardRange(input, workers);
+			List<List<byte[]>> chunks = AdaptiveChunkScheduler.resplitSizeBalanced(input, workers);
 			if (AdaptiveChunkScheduler.shouldCoalesce(chunks.size(), workers)) {
 				chunks = AdaptiveChunkScheduler.coalesce(chunks, workers);
 				DistributedQueryMetrics.recordAqeCoalesce();

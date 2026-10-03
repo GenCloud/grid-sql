@@ -36,6 +36,14 @@ curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.d
 | `repairIssued` / `repairApplied` | long, `n/a` | Счётчики ремонта пропусков |
 | `rpoEstimateMs` | long, `n/a` | Оценка отставания между площадками |
 | `swarmHint` | `KEEP`, `ATTRACT_LEARNER`, …, `n/a` | Подсказка размещения по имени |
+| `hydrateMode` / `hydrateModeConfigured` / `hydrateModeEffective` | `FULL`/`LAZY`, `n/a` | Конфиг vs effective (adaptive может форсировать LAZY) |
+| `adaptiveMode` | `LOW`/`NORMAL`/`HIGH`, `n/a` | Имя adaptive disk-first режима |
+| `workingSetMaxEntries` / `workingSetMaxConfigured` / `workingSetMaxEffective` | integer, `n/a` | Потолок WS (effective vs YAML) |
+| `workingSetSize` | integer, `n/a` | Живой размер WS |
+| `hydrateShardsDone` / `hydrateShardsTotal` | integer, `n/a` | Прогресс FULL hydrate |
+| `promoteHint` | string, `n/a` | Тот же hint, что в wire `ServerMeta` |
+| `regionEpoch` / `regionRole` | long / int, `n/a` | Multi-site region claim |
+| `oplogArchiveEnabled` | boolean, `n/a` | Путь архива OpLog |
 | `maxTxContexts` | integer | Может появиться из YAML `grid.sql.max-tx-contexts` — **информативное** поле; Boot **не** поднимает им жёсткий потолок канала (**8**) — [SQL-сервер](configuration/sql-server.md) |
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Блокировки и CANCEL |
 
@@ -69,6 +77,14 @@ Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и т�
 | `grid.replication.sealed_misses`, `grid.sealed.miss` | Чтения из запечатанных файлов |
 | `grid.sealed.window_remap` | Перекладки mmap-окон на крупных полезных нагрузках |
 | `grid.sealed.index_hit` / `index_miss` | Эффективность sealed вторичных индексов |
+
+| `grid.sealed.seal_fail_size` | Сбои seal (размер / IO) |
+| `grid.sealed.index_page_fault` | Page fault sealed `.sbpt` |
+| `grid.durability.ws_size` / `ws_max_entries` | Размер рабочего набора vs потолок |
+| `grid.durability.ws_evictions` | Вытеснения CLOCK |
+| `grid.durability.adaptive_mode` / `adaptive_mode_changes` | Режим adaptive disk-first |
+
+`grid.replication.sealed_misses` — промах WS с подгрузкой sealed; `grid.sealed.miss` — lookup в sealed reader. Смотреть вместе с `map_hit_rate` при настройке `working-set-max-entries`.
 
 SQL и блокировки:
 
@@ -126,7 +142,7 @@ SQL и блокировки:
 | `orchid_r` ниже порога | Нет допуска записи | Сеть пиров, список `peers`, нагрузка digest — [репликация](configuration/replication.md) |
 | `applyLagStale: true` | Реплика слишком отстаёт для чтения | Не читать с неё; подтягивание / ремонт; порог `ha.max-stale-lag` |
 | Рост отставания OpLog | Подтягивание между узлами не успевает | Сеть, диск Applier, нагрузка записи; seq на обоих. `/replication/compare` — только лаборатория |
-| `writerEligible: false` после повышения роли | Клиент ещё на старом пишущем | `PROMOTE_NOTIFY` или `rediscoverWriter()` — [повышение роли](operations/ha-promote.md) |
+| `writerEligible: false` после повышения роли | Клиент ещё на старом пишущем **или** tip позади пиров / подтягивание после захвата | `PROMOTE_NOTIFY` или `rediscoverWriter()`; при tip-behind — ждать догона, не крутить URL — [повышение роли](operations/ha-promote.md) |
 | Отказ по `regionEpoch` | Клиент на устаревшей эпохе площадки | `rediscoverWriter()`, не крутить следующий host в URL |
 | `repair_issued` растёт, `repair_applied` нет | Подтягивание не применяется | Логи HomologousRepair, диск, рассинхрон seq |
 

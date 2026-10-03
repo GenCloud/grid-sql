@@ -63,10 +63,13 @@ Chaos (`JEPSEN_MULTIDC=1` → `nemesis-dc-link.sh`):
 |------|------|
 | `docker-compose.yml` | 5 nodes + optional control |
 | `configs/async/` | `cross-dc.mode: ASYNC_SHIP` |
+| `configs/async-swarm/` | ASYNC_SHIP + `swarm.enabled` + auto-cutover |
 | `configs/sync-voters/` | `SYNC_VOTERS_ACROSS_DC`, voters `[b1]`, learners `[b2]` |
 | `scripts/run-multidc-full.ps1` | Shared Docker+lein + latency + RESULTS stamp |
 | `scripts/run-multidc-async.{ps1,sh}` | ASYNC_SHIP entry |
 | `scripts/run-multidc-sync-voters.{ps1,sh}` | SYNC_VOTERS entry |
+| `scripts/run-multidc-swarm.{ps1,sh}` | ASYNC_SHIP+SWARM append + swarm-bounce |
+| `scripts/run-multidc-join.{ps1,sh}` | ASYNC join-shards Elle under DC chaos |
 | `RESULTS.md` | Honest stamp log |
 
 ## Quick start
@@ -78,6 +81,10 @@ Chaos (`JEPSEN_MULTIDC=1` → `nemesis-dc-link.sh`):
 
 # Full Docker + lein (Windows host; lein inside control container)
 .\scripts\run-multidc-async.ps1 -Full -TimeLimit 60
+
+# Edge: swarm cutover + join/shards (ASYNC topology)
+.\scripts\run-multidc-swarm.ps1 -Full -TimeLimit 60
+.\scripts\run-multidc-join.ps1 -Full -TimeLimit 60
 .\scripts\run-multidc-sync-voters.ps1 -Full -TimeLimit 60
 ```
 

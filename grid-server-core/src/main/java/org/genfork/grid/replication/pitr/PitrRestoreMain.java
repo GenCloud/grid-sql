@@ -27,13 +27,14 @@ import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.snapshot.SealedBaseBackupUtil;
 import org.genfork.grid.replication.snapshot.SnapshotService;
-import org.genfork.grid.replication.util.OpLogArchiveUtil;
 
 /**
- * Offline PITR restore: clear dataDir → install base → replay archive until seq T.
+ * Offline PITR restore: clear dataDir → install base → replay segment+stream until seq T.
  * <p>
  * Uses the same apply path as hydrate ({@link ReplicaApplier} + optional {@link SnapshotService}).
  * Sync I/O on the calling thread — ops CLI only, never Netty EL.
+ * Multi-seal: local segment may be replaced; append stream under {@code archive/stream} fills
+ * {@code [W+1..T]} via {@link OpLogArchiveCoverageUtil}.
  *
  * @author: GenCloud
  * @date: 2026/05
@@ -42,6 +43,7 @@ import org.genfork.grid.replication.util.OpLogArchiveUtil;
 public final class PitrRestoreMain {
 	private static final String ARG_BASE = "--base";
 	private static final String ARG_ARCHIVE = "--archive";
+	private static final String ARG_STREAM = "--stream";
 	private static final String ARG_DATA_DIR = "--data-dir";
 	private static final String ARG_UNTIL_SEQ = "--until-seq";
 	private static final String ARG_DOMAIN = "--domain";
@@ -60,11 +62,12 @@ public final class PitrRestoreMain {
 	/**
 	 * CLI entry:
 	 * {@code --base <dir> --archive <dir> --data-dir <dir> --until-seq T
-	 * --domain <name> [--shard N] [--node-id id] [--cluster-id id]}.
+	 * --domain <name> [--shard N] [--stream DIR] [--node-id id] [--cluster-id id]}.
 	 */
 	public static void main(String[] args) throws Exception {
 		Path baseDir = null;
 		Path archiveDir = null;
+		Path streamDir = null;
 		Path dataDir = null;
 		long untilSeq = -1L;
 		String domain = null;
@@ -75,6 +78,7 @@ public final class PitrRestoreMain {
 			switch (args[i]) {
 				case ARG_BASE -> baseDir = Path.of(args[++i]);
 				case ARG_ARCHIVE -> archiveDir = Path.of(args[++i]);
+				case ARG_STREAM -> streamDir = Path.of(args[++i]);
 				case ARG_DATA_DIR -> dataDir = Path.of(args[++i]);
 				case ARG_UNTIL_SEQ -> untilSeq = Long.parseLong(args[++i]);
 				case ARG_DOMAIN -> domain = args[++i];
@@ -87,22 +91,40 @@ public final class PitrRestoreMain {
 		}
 		if (baseDir == null || archiveDir == null || dataDir == null || domain == null || untilSeq < 0L) {
 			System.err.println("Usage: PitrRestoreMain --base DIR --archive DIR --data-dir DIR"
-					+ " --until-seq T --domain NAME [--shard N]");
+					+ " --until-seq T --domain NAME [--shard N] [--stream DIR]");
 			System.exit(2);
 			return;
 		}
-		final RestoreResult result = restore(baseDir, archiveDir, dataDir, domain, shard, untilSeq, nodeId, clusterId);
+		final RestoreResult result = restore(
+				baseDir, archiveDir, streamDir, dataDir, domain, shard, untilSeq, nodeId, clusterId);
 		System.out.println("PITR restore complete: files=" + result.baseFilesInstalled()
 				+ " applied=" + result.opsApplied()
 				+ " untilSeq=" + untilSeq);
 	}
 
 	/**
-	 * Programmatic restore used by CLI and IT.
+	 * Programmatic restore used by CLI and IT (default stream root under archive).
 	 */
 	public static RestoreResult restore(
 			Path baseDir,
 			Path archiveDir,
+			Path dataDir,
+			String domain,
+			int shard,
+			long untilSeqInclusive,
+			String nodeId,
+			String clusterId
+	) {
+		return restore(baseDir, archiveDir, null, dataDir, domain, shard, untilSeqInclusive, nodeId, clusterId);
+	}
+
+	/**
+	 * Programmatic restore with optional explicit stream root.
+	 */
+	public static RestoreResult restore(
+			Path baseDir,
+			Path archiveDir,
+			Path streamRootOrNull,
 			Path dataDir,
 			String domain,
 			int shard,
@@ -119,6 +141,7 @@ public final class PitrRestoreMain {
 
 		SealedBaseBackupUtil.clearDataDir(dataDir);
 		final int baseFiles = SealedBaseBackupUtil.installBase(baseDir, dataDir);
+		final long watermark = SealedBaseBackupUtil.readBaseWatermark(baseDir);
 
 		final ReplicationNodeState nodeState = new ReplicationNodeState(
 				nodeId, clusterId, DEFAULT_DC, DEFAULT_SCHEMA_EPOCH);
@@ -128,8 +151,8 @@ public final class PitrRestoreMain {
 			final ReplicaApplier applier = new ReplicaApplier(
 					nodeState, opLog, s -> s == shard ? processor : null, null, true);
 
-			final List<ReplicationOp> archived = OpLogArchiveUtil.readArchiveUntil(
-					archiveDir, domain, shard, untilSeqInclusive);
+			final List<ReplicationOp> archived = OpLogArchiveCoverageUtil.readMergedUntil(
+					archiveDir, streamRootOrNull, domain, shard, watermark, untilSeqInclusive);
 			int applied = 0;
 			for (ReplicationOp op : archived) {
 				applier.apply(op, true);

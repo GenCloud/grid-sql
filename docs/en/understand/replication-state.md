@@ -89,7 +89,7 @@ The rules that protect against divergence during a partition:
 
 - A solo write is allowed **only** when the configured peer list is empty (`peerIds.isEmpty()`, bootstrap with `N = 1`).
 - With `N ≥ 2` configured and `livePeerCount() == 0` after a partition, the node is **not** considered synced. An empty live view does not grant the right to write.
-- `forgetPeer` clears the live view but **does not shrink** the configured quorum.
+- `forgetPeer` clears the live view but **does not shrink** the configured quorum and **does not reset** the peer tip high-water (`maxObservedPeerCommittedSeq`) — otherwise an ASYNC Active disconnect would falsely clear the tip fence.
 - The writer is phase-ranked: `min(nodeId)` among self and seen peers.
 - A peer is promoted back to voter once its `APPLY_ACK` has caught up; a HELLO with the same `clusterId` adds it back via `addPeer`.
 - `writerEligible` requires sync, phase admission, **and** a tip that is not behind reachable peers. Tip-behind (unclean revive / tip fence) keeps `writerEligible=false` until local `lastCommittedSeq` catches `maxSeenPeerCommittedSeq` — independent of role/epoch.

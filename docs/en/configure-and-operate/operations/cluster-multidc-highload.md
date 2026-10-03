@@ -16,6 +16,8 @@ Prerequisites: [HA in one site](cluster-ha-highload.md), [promote a node](ha-pro
 
 `regionEpoch` advances on successful Hold claim. Clients pin on `writerEligible && regionEpoch`; mid-op fence → `rediscoverWriter()` (never silent rotate). Discovery is wire `ServerMeta` / `PROMOTE_NOTIFY`.
 
+Before write load after compose/boot: readiness UP is not enough — wait for exactly one `writerEligible=true` (lab: [`wait-writer-eligible.ps1`](../../../../benchmarks/jepsen/scripts/wait-writer-eligible.ps1)). After Hold claim, epoch bump ≠ immediate write admission while tip catch-up is pending.
+
 ## Two cross-site replication modes
 
 | Mode | Commit path | Remote role | RPO / latency |

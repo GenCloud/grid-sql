@@ -157,11 +157,8 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			}
 			case ORCHID_PHASE_BATCH -> {
 				if (node != null) {
-					final List<OrchidPhaseMessage> phases =
-							ReplicationRpcCodec.decodePhaseMessageBatch(msg.body());
-					for (OrchidPhaseMessage phase : phases) {
-						node.onPhase(phase);
-					}
+					// One mailbox drain for the whole batch (pipelined tick rebroadcast).
+					node.onPhaseBatch(ReplicationRpcCodec.decodePhaseMessageBatch(msg.body()));
 				}
 			}
 			case ORCHID_PROPOSE -> {
@@ -187,7 +184,7 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			case REGION_CLAIM_ACK -> onRegionClaimAck(msg.body());
 			case FOR_UPDATE_LOCK_REQ -> onForUpdateLockReq(ctx, msg.body());
 			case FOR_UPDATE_LOCK_ACK -> onForUpdateLockAck(msg.body());
-			case FOR_UPDATE_LOCK_RELEASE -> onForUpdateLockRelease(msg.body());
+			case FOR_UPDATE_LOCK_RELEASE -> onForUpdateLockRelease(ctx, msg.body());
 			case FOR_UPDATE_PREPARE_REQ -> onForUpdatePrepareReq(ctx, msg.body());
 			case FOR_UPDATE_PREPARE_ACK -> onForUpdatePrepareAck(msg.body());
 			case FOR_UPDATE_COMMIT_DEC -> onForUpdateCommitDec(msg.body());
@@ -226,8 +223,16 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		ThreadService.getLogicExecutor().execute(() -> transport.handleForUpdateLockAck(body));
 	}
 
-	private void onForUpdateLockRelease(byte[] body) {
-		ThreadService.getLogicExecutor().execute(() -> transport.handleForUpdateLockRelease(body));
+	private void onForUpdateLockRelease(ChannelHandlerContext ctx, byte[] body) {
+		final String peerId = peerIdForChannel(ctx.channel());
+		ThreadService.getLogicExecutor().execute(() -> transport.handleForUpdateLockRelease(body, peerId));
+	}
+
+	private static String peerIdForChannel(Channel channel) {
+		if (channel == null) {
+			return null;
+		}
+		return channel.attr(REMOTE_NODE_ATTR).get();
 	}
 
 	private void onForUpdatePrepareReq(ChannelHandlerContext ctx, byte[] body) {
@@ -418,17 +423,31 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			return;
 		}
 		ThreadService.getLogicExecutor().execute(() -> {
+			int applied = 0;
+			int skippedOpenTx = 0;
 			for (ReplicationOp op : reply.ops()) {
+				final ReplicaApplier applier = applierByDomain.apply(op.domainType());
+				// Fail-closed vs in-flight TX unit: forceInstall must not clobber staging/map
+				// mid BEGIN→COMMIT (ASYNC learner REPAIR_REPLY → Elle G-single / HAS≈0).
+				if (applier != null && applier.hasOpenTx(op.domainType(), op.shard())) {
+					skippedOpenTx++;
+					continue;
+				}
+				if (homologousRepair != null && homologousRepair.hasOpenTx(op.domainType(), op.shard())) {
+					skippedOpenTx++;
+					continue;
+				}
 				if (homologousRepair != null) {
 					homologousRepair.observe(op);
 				}
-				final ReplicaApplier applier = applierByDomain.apply(op.domainType());
 				if (applier != null) {
 					applier.apply(op, false, true);
+					applied++;
 				}
 			}
-			log.debug("REPAIR_REPLY from={} commands={} ops={}",
-					reply.fromNodeId(), reply.commands().size(), reply.ops().size());
+			log.debug("REPAIR_REPLY from={} commands={} ops={} applied={} skippedOpenTx={}",
+					reply.fromNodeId(), reply.commands().size(), reply.ops().size(),
+					applied, skippedOpenTx);
 		});
 	}
 

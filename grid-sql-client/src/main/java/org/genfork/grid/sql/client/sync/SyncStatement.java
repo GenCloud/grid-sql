@@ -23,7 +23,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import org.genfork.grid.sql.client.Connection;
 import org.genfork.grid.sql.client.RemoteConnection;
+import org.genfork.grid.sql.client.SqlClientMessages;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
 import org.genfork.grid.sql.client.Row;
 import org.genfork.grid.sql.client.transport.TransportConnection;
@@ -132,11 +134,11 @@ public final class SyncStatement {
 
 	public List<SyncResult> execute() {
 		if (txClosed != null && txClosed.get()) {
-			throw new IllegalStateException("TxContext closed");
+			throw new IllegalStateException(SqlClientMessages.TX_CLOSED);
 		}
 		final Object[] args = SyncConnection.denseBinds(binds);
 		if (readFactory != null) {
-			final org.genfork.grid.sql.client.Connection borrowed =
+			final Connection borrowed =
 					SyncAwait.await(readFactory.obtainStage(), timeout, cancelSlot, syncExecutor);
 			if (!(borrowed instanceof RemoteConnection readRemote)) {
 				throw new IllegalStateException("read obtainStage must return RemoteConnection");

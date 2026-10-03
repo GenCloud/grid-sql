@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.replication.swarm;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +33,37 @@ import java.util.function.DoubleSupplier;
  * @since: 1.0
  */
 public class AdaptiveReplicaSwarm {
+	/** Floor for score-window ms (sensor sample period). */
+	private static final long MIN_SCORE_WINDOW_MS = 100L;
+	/** Ship urgency when shedding load. */
+	private static final double SHIP_URGENCY_SHED_LOAD = 2.0d;
+	/** Ship urgency when attracting a learner. */
+	private static final double SHIP_URGENCY_ATTRACT_LEARNER = 1.5d;
+	/** Ship urgency when preferring another DC. */
+	private static final double SHIP_URGENCY_PREFER_DC = 1.2d;
+	/** Ship urgency when keeping placement. */
+	private static final double SHIP_URGENCY_KEEP = 1.0d;
+	/** Composite delta above migrateThreshold → SHED_LOAD. */
+	private static final double SHED_LOAD_COMPOSITE_DELTA = 0.2d;
+	/** Fraction of migrateThreshold below which ATTRACT_LEARNER may fire. */
+	private static final double ATTRACT_LEARNER_THRESHOLD_FRACTION = 0.5d;
+	/** Hit-rate floor for ATTRACT_LEARNER. */
+	private static final double ATTRACT_LEARNER_HIT_RATE_FLOOR = 0.7d;
+	/** RTT ms above which PREFER_DC fires. */
+	private static final double PREFER_DC_RTT_MS = 100.0d;
+	/** Apply-lag normalize ceiling for composite score. */
+	private static final double NORM_APPLY_LAG = 1000.0d;
+	/** Queue-depth normalize ceiling for composite score. */
+	private static final double NORM_QUEUE_DEPTH = 10_000.0d;
+	/** RTT normalize ceiling for composite score. */
+	private static final double NORM_RTT_MS = 200.0d;
+	private static final double WEIGHT_APPLY_LAG = 0.35d;
+	private static final double WEIGHT_QUEUE = 0.25d;
+	private static final double WEIGHT_HEAP = 0.20d;
+	private static final double WEIGHT_HIT_MISS = 0.10d;
+	private static final double WEIGHT_RTT = 0.10d;
+	private static final double DEFAULT_HIT_RATE = 1.0d;
+
 	private final long scoreWindowMs;
 	private final double migrateThreshold;
 	private final HierarchicalPlacementOptimizer optimizer;
@@ -64,7 +96,7 @@ public class AdaptiveReplicaSwarm {
 			HierarchicalPlacementOptimizer optimizer,
 			SwarmMigrateHysteresis hysteresis
 	) {
-		this.scoreWindowMs = Math.max(100L, scoreWindowMs);
+		this.scoreWindowMs = Math.max(MIN_SCORE_WINDOW_MS, scoreWindowMs);
 		this.migrateThreshold = migrateThreshold;
 		this.optimizer = optimizer;
 		this.hysteresis = hysteresis == null
@@ -105,6 +137,13 @@ public class AdaptiveReplicaSwarm {
 
 	public boolean isMigrateIoAllowed() {
 		return migrateIoAllowed.get();
+	}
+
+	/**
+	 * Clear migrate I/O arm when swarmTick skips {@link #optimizePlacement} (empty peers/streams).
+	 */
+	public void clearMigrateIoAllowed() {
+		migrateIoAllowed.set(false);
 	}
 
 	public boolean placementOptimizerEnabled() {
@@ -161,10 +200,10 @@ public class AdaptiveReplicaSwarm {
 	public double shipUrgencyMultiplier() {
 		final PlacementHint hint = lastHint.get();
 		return switch (hint) {
-			case SHED_LOAD -> 2.0;
-			case ATTRACT_LEARNER -> 1.5;
-			case PREFER_DC -> 1.2;
-			case KEEP -> 1.0;
+			case SHED_LOAD -> SHIP_URGENCY_SHED_LOAD;
+			case ATTRACT_LEARNER -> SHIP_URGENCY_ATTRACT_LEARNER;
+			case PREFER_DC -> SHIP_URGENCY_PREFER_DC;
+			case KEEP -> SHIP_URGENCY_KEEP;
 		};
 	}
 
@@ -177,25 +216,26 @@ public class AdaptiveReplicaSwarm {
 		final double applyLag = sensor("applyLag");
 		final double queueDepth = sensor("queueDepth");
 		final double heap = sensor("heapPressure");
-		final double hitRate = sensor("hitRate", 1.0);
+		final double hitRate = sensor("hitRate", DEFAULT_HIT_RATE);
 		final double rtt = sensor("rttMs");
-		final double composite = 0.35 * normalize(applyLag, 1000)
-				+ 0.25 * normalize(queueDepth, 10_000)
-				+ 0.20 * heap
-				+ 0.10 * (1.0 - hitRate)
-				+ 0.10 * normalize(rtt, 200);
+		final double composite = WEIGHT_APPLY_LAG * normalize(applyLag, NORM_APPLY_LAG)
+				+ WEIGHT_QUEUE * normalize(queueDepth, NORM_QUEUE_DEPTH)
+				+ WEIGHT_HEAP * heap
+				+ WEIGHT_HIT_MISS * (DEFAULT_HIT_RATE - hitRate)
+				+ WEIGHT_RTT * normalize(rtt, NORM_RTT_MS);
 		return new PlacementScore(applyLag, queueDepth, heap, hitRate, rtt, composite);
 	}
 
 	private PlacementHint thresholdHint(PlacementScore score) {
 		final double composite = score.composite();
-		if (composite >= migrateThreshold + 0.2) {
+		if (composite >= migrateThreshold + SHED_LOAD_COMPOSITE_DELTA) {
 			return PlacementHint.SHED_LOAD;
 		}
-		if (composite <= migrateThreshold * 0.5 && score.hitRate() > 0.7) {
+		if (composite <= migrateThreshold * ATTRACT_LEARNER_THRESHOLD_FRACTION
+				&& score.hitRate() > ATTRACT_LEARNER_HIT_RATE_FLOOR) {
 			return PlacementHint.ATTRACT_LEARNER;
 		}
-		if (score.rttMs() > 100) {
+		if (score.rttMs() > PREFER_DC_RTT_MS) {
 			return PlacementHint.PREFER_DC;
 		}
 		return PlacementHint.KEEP;
@@ -218,7 +258,7 @@ public class AdaptiveReplicaSwarm {
 		if (peerId == null) {
 			return new PlacementPlan(hint, List.of(), score.composite());
 		}
-		final java.util.ArrayList<ShardMigrateAction> actions = new java.util.ArrayList<>();
+		final ArrayList<ShardMigrateAction> actions = new ArrayList<>();
 		for (PlacementTopology.StreamPlacement s : PlacementStreamFilters.needingMigrateSearch(topology)) {
 			final String pin = s.affinityPin();
 			final String target = pin != null ? pin : peerId;

@@ -34,6 +34,9 @@ public sealed interface TransportOutcome
 		TransportOutcome.Dml,
 		TransportOutcome.ResultSet {
 
+	/** Server DML tag for cancelled EXEC / BATCH_EXEC. */
+	String CANCEL_TAG = "CANCEL";
+
 	/**
 	 * AUTH_OK completed.
 	 *

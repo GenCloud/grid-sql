@@ -46,6 +46,11 @@ public final class DistForUpdatePeerLockLease {
 		agent.unlock(txId, table, key);
 	}
 
+	/** Abort-path: await peer release ACK when the agent supports it. */
+	public boolean releaseAwait() {
+		return agent.unlockAwait(txId, table, key);
+	}
+
 	public DistForUpdatePeerLockAgent agent() {
 		return agent;
 	}

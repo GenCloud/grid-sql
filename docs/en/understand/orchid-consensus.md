@@ -11,7 +11,7 @@ Recovery after failure is re-sync of phases plus checksum agreement — not a ne
 | Concept | Meaning |
 |---------|---------|
 | Order parameter `R` | How close node phases are. Writes are admitted when `R ≥ order-threshold` |
-| Writer node | Among synced nodes, the one with minimal `nodeId`. Only it assigns the next operation number (*phase-ranked writer*) |
+| Writer node | Among synced nodes, the one with minimal `nodeId`. Only it assigns the next operation number |
 | Checksum agreement | A majority from the **configuration** confirms **the same** checksum before a commit becomes visible |
 | `OrchidNotSyncedException` | Write refused: either `R` is below threshold, or there is no checksum agreement |
 | Solo mode | A node writes alone only if the peer list was empty from the start (`N = 1`) |
@@ -94,6 +94,7 @@ Defaults `1 Hz` / `10 ms` / coupling `15` lock. Raising `natural-freq-hz` to `50
 - Only the writer assigns operation sequence numbers.
 - `opSeq` is global; gaps in one shard stream are normal.
 - **Tip fence:** propose is refused when any reachable peer reports a committed tip ahead of the local tip (`peerTip > localTip`). Typical path — unclean revive / tip-behind: catch up first, then propose again. `maxProposeInFlight` is a pipeline semaphore, not permission to write while lagging.
+- Peer tip high-water (`maxObservedPeerCommittedSeq`) **survives** `forgetPeer`: an ASYNC Active disconnect must not wipe the observed tip and falsely clear the fence.
 - On the peer-commit apply path: OpLog is written outside shard locks (`journalRemote`); after a drained batch — one `confirmPersisted` at the tip, not an fsync per operation.
 - A structural `UPDATE` becomes an `UPSERT`: the writer merges via `LogicalFieldCursor` / `BlobFieldModifier`; the final row goes to the journal.
 - Linearizable reads (what Jepsen checks) are served only by the writer from the committed map.

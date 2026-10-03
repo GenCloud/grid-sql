@@ -133,7 +133,7 @@ public class PitrStreamArchiveIT {
 			Files.writeString(
 					liveDir.resolve(SealedBaseBackupUtil.SEALED_DIR).resolve("marker.txt"),
 					"base");
-			SealedBaseBackupUtil.backupBase(liveDir, baseDir, 1L);
+			SealedBaseBackupUtil.backupBase(liveDir, baseDir, 0L);
 		}
 		final PitrRestoreMain.RestoreResult result = PitrCoordinatedRestore.restoreUnderActiveFence(
 				RegionRole.ACTIVE,

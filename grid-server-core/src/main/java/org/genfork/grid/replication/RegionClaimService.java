@@ -68,6 +68,11 @@ public final class RegionClaimService {
 	private int claimSilenceConfirmStreak;
 	private volatile RegionClaimInFlight regionClaimInFlight;
 	private final AtomicBoolean regionTipCatchUpPending = new AtomicBoolean(false);
+	/**
+	 * After cross-DC region claim while Active link is down: stay tip-fenced until a remote-DC
+	 * peer is seen again and local tip catches its advertisement (prevents Hold :ok seed reads).
+	 */
+	private final AtomicBoolean regionClaimAwaitRemoteDc = new AtomicBoolean(false);
 
 	public RegionClaimService(
 			boolean enabled,
@@ -128,6 +133,18 @@ public final class RegionClaimService {
 		}
 		final long peerTip = orchidNode.maxSeenPeerCommittedSeq();
 		final long localTip = orchidNode.getLastCommittedSeq();
+		if (regionClaimAwaitRemoteDc.get()) {
+			// Claimed while Active DC was gone — do not clear on Hold-only mutual tips.
+			if (hasActiveRemoteDcLink() && peerTip > 0L && localTip >= peerTip) {
+				regionClaimAwaitRemoteDc.set(false);
+				regionTipCatchUpPending.set(false);
+				log.info("Region claim remote-DC tip catch-up complete localTip={} peerTip={}",
+						localTip, peerTip);
+				return;
+			}
+			regionTipCatchUpPending.set(true);
+			return;
+		}
 		// Behind peers: must catch up before propose (unclean revive / tip fence).
 		// Do NOT fence when merely ahead of a live follower — that serializes HA writes to
 		// apply lag and breaks concurrent Load (phase-ranked spam). Quorum/NACK still
@@ -292,10 +309,17 @@ public final class RegionClaimService {
 						sealed, orchidNode.getLastCommittedSeq());
 			}
 			final long peerTip = orchidNode.maxSeenPeerCommittedSeq();
-			if (peerTip > orchidNode.getLastCommittedSeq()) {
+			final long localTip = orchidNode.getLastCommittedSeq();
+			if (crossDcEnabled && !hasActiveRemoteDcLink()) {
+				// ASYNC Active loss: Hold-only tips must not clear the fence (Elle G2).
+				regionClaimAwaitRemoteDc.set(true);
+				regionTipCatchUpPending.set(true);
+				log.info("Region claim await remote-DC tip localTip={} peerTip={}",
+						localTip, peerTip);
+			} else if (peerTip > localTip) {
 				regionTipCatchUpPending.set(true);
 				log.info("Region claim tip catch-up pending localTip={} peerTip={}",
-						orchidNode.getLastCommittedSeq(), peerTip);
+						localTip, peerTip);
 			} else {
 				regionTipCatchUpPending.set(false);
 			}

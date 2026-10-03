@@ -67,4 +67,12 @@ public class SqlReplicaAdmissionSessionTest {
 		assertThrows(SqlReplicaDmlDeniedException.class,
 				() -> engine.execute(session, "BEGIN"));
 	}
+
+	@Test
+	void readReplicaRejectsForUpdate() {
+		final SqlSession session = engine.newSession();
+		session.setSessionRole(SessionRole.READ_REPLICA);
+		assertThrows(SqlReplicaDmlDeniedException.class,
+				() -> engine.execute(session, "SELECT v FROM t WHERE id = 1 FOR UPDATE"));
+	}
 }

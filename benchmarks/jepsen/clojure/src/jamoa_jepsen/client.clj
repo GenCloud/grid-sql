@@ -3,7 +3,7 @@
   Sticky phase-ranked proposer via AUTH/ERROR wire ServerMeta.
   Register/append/txn ops go over SQL TCP — not /jepsen/register HTTP."
   (:require [clojure.string :as str]
-            [clojure.tools.logging :refer [warn]]
+            [clojure.tools.logging :refer [info warn]]
             [jepsen.client :as client])
   (:import (java.net ConnectException SocketTimeoutException)
            (org.genfork.grid.sql.client ServerMeta)
@@ -14,9 +14,21 @@
    "n2" 15433
    "n3" 15434})
 
+;; Pre-generator settle: wait for sticky/promoteHint writer before ops.
+(def ^:private proposer-wait-ms
+  (let [env (System/getenv "JEPSEN_PROPOSER_WAIT_MS")]
+    (if (and env (seq env)) (Long/parseLong env) 120000)))
+(def ^:private proposer-backoff-ms
+  (let [env (System/getenv "JEPSEN_PROPOSER_BACKOFF_MS")]
+    (if (and env (seq env)) (Long/parseLong env) 500)))
+
 (def ^:private sticky-proposer
   "Atom holding last known writer-eligible node id (string) or nil."
   (atom nil))
+
+(def ^:private no-proposer-count
+  "Diagnostic counter for :no-proposer fails (RESULTS notes)."
+  (atom 0))
 
 (defn- port-map
   [env-key defaults]
@@ -134,6 +146,29 @@
           (remember-proposer! hint)
           hint))))
 
+(defn wait-for-proposer!
+  "Pre-generator settle: retry discover-proposer until deadline (no assigned-node fallback)."
+  [clients]
+  (let [deadline (+ (System/currentTimeMillis) proposer-wait-ms)]
+    (loop [attempt 0]
+      (if-let [p (discover-proposer clients)]
+        (do (info "wait-for-proposer: ready node=" p "attempt=" attempt)
+            p)
+        (if (< (System/currentTimeMillis) deadline)
+          (do (when (zero? (mod attempt 10))
+                (info "wait-for-proposer: still nil attempt=" attempt
+                      "meta=" (mapv #(wire-meta clients %) (all-nodes))))
+              (Thread/sleep proposer-backoff-ms)
+              (recur (inc attempt)))
+          (do (warn "wait-for-proposer: timed out after ms=" proposer-wait-ms
+                    "meta=" (mapv #(wire-meta clients %) (all-nodes)))
+              nil))))))
+
+(defn no-proposer-count-snapshot
+  "Expose diagnostic counter for harness RESULTS notes."
+  []
+  @no-proposer-count)
+
 (defn- txn-has-append?
   "True when the Jepsen :txn value contains an :append mop (mutative)."
   [value]
@@ -247,7 +282,21 @@
 
 (defn- no-proposer-fail
   "Elle-safe fail when sticky/promoteHint has no writer-eligible node."
-  [value]
+  [clients value]
+  (swap! no-proposer-count inc)
+  ;; Stale channels: close all before next discover (fresh AUTH / ServerMeta).
+  (doseq [n (all-nodes)]
+    (close-client! clients n))
+  (clear-proposer!)
+  (warn "no-proposer sticky=" @sticky-proposer
+        "count=" @no-proposer-count
+        "meta=" (mapv (fn [n]
+                        (let [m (wire-meta clients n)]
+                          {:node n
+                           :nodeId (:nodeId m)
+                           :writerEligible (:writerEligible m)
+                           :promoteHint (:promoteHint m)}))
+                      (all-nodes)))
   {:type :fail :error :no-proposer :value value})
 
 (defn- invoke-with-sticky!
@@ -258,7 +307,7 @@
   [clients _assigned-node f value]
   (let [primary (discover-proposer clients)]
     (if (nil? primary)
-      (no-proposer-fail value)
+      (no-proposer-fail clients value)
       (let [first-try (invoke-sql! clients primary f value)]
         (cond
           (= :ok (:type first-try))
@@ -326,7 +375,9 @@
   client/Client
   (open! [_ _test node]
     (SqlClient. node (atom {})))
-  (setup! [_ _])
+  (setup! [this _]
+    (wait-for-proposer! clients)
+    this)
   (invoke! [this _test op]
     (let [assigned (or node "n1")
           f (:f op)
@@ -335,8 +386,11 @@
                    (invoke-with-sticky! clients assigned f (:value op))
                    (invoke-register! clients assigned f (:value op)))]
       (merge op (select-keys result [:type :value :error]))))
-  (teardown! [_ _])
+  (teardown! [_ _]
+    (info "jepsen-diag no-proposer-count=" (no-proposer-count-snapshot)
+          "sticky=" @sticky-proposer))
   (close! [_ _]
+    (info "jepsen-diag no-proposer-count=" (no-proposer-count-snapshot))
     (doseq [[n ^JepsenSqlClient c] @clients]
       (try (.close c) (catch Exception _)))
     (reset! clients {})))

@@ -1,0 +1,11 @@
+# Swarm/cutover Jepsen profile: enable AdaptiveReplicaSwarm + auto-cutover on 1-DC nodes.
+services:
+  n1:
+    command:
+      - --spring.config.additional-location=file:/app/config/swarm/application-n1.yml
+  n2:
+    command:
+      - --spring.config.additional-location=file:/app/config/swarm/application-n2.yml
+  n3:
+    command:
+      - --spring.config.additional-location=file:/app/config/swarm/application-n3.yml

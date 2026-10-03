@@ -24,23 +24,17 @@ import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 import org.genfork.grid.common.WriterFenceSignals;
-import org.genfork.grid.sql.client.Connection;
-import org.genfork.grid.sql.client.RemoteConnection;
-import org.genfork.grid.sql.client.RemoteConnectionFactory;
-import org.genfork.grid.sql.client.Result;
-import org.genfork.grid.sql.client.Row;
-import org.genfork.grid.sql.client.RowMetadata;
 import org.genfork.grid.sql.client.ServerMeta;
+import org.genfork.grid.sql.client.sync.SyncAwait;
+import org.genfork.grid.sql.client.sync.SyncConnection;
+import org.genfork.grid.sql.client.sync.SyncSession;
+import org.genfork.grid.sql.client.sync.SyncTxContext;
 
 /**
- * Sync Jepsen harness facade over {@link RemoteConnectionFactory} ({@code grid://} URL).
- * Blocking is intentional on this test-harness boundary (not library Reactor paths).
+ * Jepsen workload facade over product {@link SyncSession} ({@code grid://} URL).
  * <p>
- * Uses reactive SPI ({@code obtain()} Mono + {@code ReactiveExecExchange}); {@code .block()}
- * only at this harness edge — never Sync* / {@code obtainStage} and never a CF→Mono bridge.
- * <p>
- * Workload semantics match example-app {@code JepsenRegisterController}: table
- * {@code jepsen_register(id, number, status)}.
+ * Connect / fence / query plumbing is {@link SyncSession}; this type only maps Elle / Knossos
+ * ops onto register / JOIN tables.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -48,11 +42,16 @@ import org.genfork.grid.sql.client.ServerMeta;
  */
 public final class JepsenSqlClient implements AutoCloseable {
 	public static final String TABLE = "jepsen_register";
+	public static final String TABLE_PARENT = "jepsen_parent";
+	public static final String TABLE_CHILD = "jepsen_child";
+	/** Parent PK = childId + offset — cross-shard JOIN under defaultShards=8. */
+	public static final int PARENT_ID_OFFSET = 100;
 	private static final Duration OP_TIMEOUT = Duration.ofSeconds(5);
+	private static final String ENV_JOIN_SHARDS = "JEPSEN_JOIN_SHARDS";
 
-	private final RemoteConnectionFactory factory;
+	private final SyncSession session;
 	private final String gridUrl;
-	private volatile Connection connection;
+	private final boolean joinShards;
 
 	public JepsenSqlClient(String gridUrl) {
 		this.gridUrl = gridUrl;
@@ -60,35 +59,35 @@ public final class JepsenSqlClient implements AutoCloseable {
 			throw new IllegalArgumentException(
 					"JepsenSqlClient requires PRIMARY-only URL (no readEndpoints)");
 		}
-		this.factory = RemoteConnectionFactory.fromUrl(gridUrl);
+		this.session = SyncSession.exclusiveFromUrl(gridUrl, OP_TIMEOUT);
+		final String joinFlag = System.getenv(ENV_JOIN_SHARDS);
+		this.joinShards = joinFlag != null
+				&& ("1".equals(joinFlag.trim()) || Boolean.parseBoolean(joinFlag.trim()));
+	}
+
+	/**
+	 * True when URL pins a single host — Clojure owns multi-node sticky rotate.
+	 */
+	static boolean isSingleHostGridUrl(String url) {
+		return SyncSession.isSingleHostUrl(url);
 	}
 
 	public String gridUrl() {
 		return gridUrl;
 	}
 
-	/** Last proposer metadata observed over AUTH or ERROR. */
 	public ServerMeta lastServerMeta() {
-		return factory.lastServerMeta();
+		return session.lastServerMeta();
 	}
 
-	/** Connects when needed, then reports wire-discovered writer eligibility. */
 	public boolean writerEligible() {
-		ensureConnected();
-		return factory.writerEligible();
+		return session.writerEligible();
 	}
 
-	/** Connects when needed, then returns the wire-discovered proposer hint. */
 	public String promoteHint() {
-		ensureConnected();
-		return factory.promoteHint();
+		return session.promoteHint();
 	}
 
-	/**
-	 * Clojure/string entry: parses {@code :f} token into {@link JepsenOp}.
-	 * Returns a map with keys {@code type} ({@code ok}|{@code fail}|{@code info}), optional
-	 * {@code value}, optional {@code error}.
-	 */
 	public Map<String, Object> invoke(String f, Object value) {
 		try {
 			return invoke(JepsenOp.fromToken(f), value);
@@ -99,32 +98,14 @@ public final class JepsenSqlClient implements AutoCloseable {
 
 	public Map<String, Object> invoke(JepsenOp op, Object value) {
 		try {
-			ensureConnected();
+			session.ensureOpen();
 		} catch (Exception ex) {
 			return mapException(ex, false, op);
 		}
 		try {
-			return dispatch(op, value);
+			return session.callWithWriterRediscover(() -> dispatch(op, value));
 		} catch (Exception ex) {
-			if (!WriterFenceSignals.requiresWriterRediscover(ex)) {
-				return mapException(ex, true, op);
-			}
-			invalidateConnection();
-			try {
-				factory.rediscoverWriter().block(OP_TIMEOUT);
-			} catch (Exception ignored) {
-				// rediscover best-effort
-			}
-			try {
-				ensureConnected();
-			} catch (Exception reconnectEx) {
-				return mapException(reconnectEx, false, op);
-			}
-			try {
-				return dispatch(op, value);
-			} catch (Exception retryEx) {
-				return mapException(retryEx, true, op);
-			}
+			return mapException(ex, true, op);
 		}
 	}
 
@@ -138,8 +119,85 @@ public final class JepsenSqlClient implements AutoCloseable {
 	}
 
 	private Map<String, Object> doRead(int key) {
-		final String sql = "SELECT number, status FROM " + TABLE + " WHERE id = " + key;
-		final List<Object[]> rows = queryRows(sql);
+		final SyncConnection conn = session.connection();
+		if (joinShards) {
+			return readJoinResult(conn.query(joinSelectSql(key)));
+		}
+		return readResult(conn.query(
+				"SELECT number, status FROM " + TABLE + " WHERE id = " + key));
+	}
+
+	private Map<String, Object> doRead(SyncTxContext tx, int key) {
+		if (joinShards) {
+			return readJoinResult(tx.query(joinSelectSql(key)));
+		}
+		return readResult(tx.query(
+				"SELECT number, status FROM " + TABLE + " WHERE id = " + key));
+	}
+
+	private static String joinSelectSql(int key) {
+		// LEFT JOIN: child without parent must not look like an empty Elle list.
+		// p.id null → definite join-parent-missing fail (see readJoinResult).
+		return "SELECT c.number, c.status, p.id FROM " + TABLE_CHILD + " c LEFT OUTER JOIN "
+				+ TABLE_PARENT + " p ON c.parent_id = p.id WHERE c.id = " + key;
+	}
+
+	private Map<String, Object> doAppend(int key, String token) {
+		final SyncConnection conn = session.connection();
+		if (joinShards) {
+			ensureParent(conn, key);
+			return upsertAppend(conn,
+					"UPDATE " + TABLE_CHILD + " SET number = number || ' ' || '"
+							+ escapeSql(token) + "' WHERE id = " + key,
+					"INSERT INTO " + TABLE_CHILD
+							+ " (id, parent_id, number, status) VALUES ("
+							+ key + ", " + (key + PARENT_ID_OFFSET) + ", '"
+							+ escapeSql(token) + "', 'jepsen-append')");
+		}
+		return upsertAppend(conn,
+				"UPDATE " + TABLE + " SET number = number || ' ' || '"
+						+ escapeSql(token) + "' WHERE id = " + key,
+				"INSERT INTO " + TABLE + " (id, number, status) VALUES ("
+						+ key + ", '" + escapeSql(token) + "', 'jepsen-append')");
+	}
+
+	private Map<String, Object> doAppend(SyncTxContext tx, int key, String token) {
+		if (joinShards) {
+			ensureParent(tx, key);
+			return upsertAppend(tx,
+					"UPDATE " + TABLE_CHILD + " SET number = number || ' ' || '"
+							+ escapeSql(token) + "' WHERE id = " + key,
+					"INSERT INTO " + TABLE_CHILD
+							+ " (id, parent_id, number, status) VALUES ("
+							+ key + ", " + (key + PARENT_ID_OFFSET) + ", '"
+							+ escapeSql(token) + "', 'jepsen-append')");
+		}
+		return upsertAppend(tx,
+				"UPDATE " + TABLE + " SET number = number || ' ' || '"
+						+ escapeSql(token) + "' WHERE id = " + key,
+				"INSERT INTO " + TABLE + " (id, number, status) VALUES ("
+						+ key + ", '" + escapeSql(token) + "', 'jepsen-append')");
+	}
+
+	private void ensureParent(SyncConnection conn, int key) {
+		final int parentId = key + PARENT_ID_OFFSET;
+		if (conn.executeUpdate(
+				"UPDATE " + TABLE_PARENT + " SET name = 'p" + key + "' WHERE id = " + parentId) == 0) {
+			conn.executeUpdate("INSERT INTO " + TABLE_PARENT + " (id, name) VALUES ("
+					+ parentId + ", 'p" + key + "')");
+		}
+	}
+
+	private void ensureParent(SyncTxContext tx, int key) {
+		final int parentId = key + PARENT_ID_OFFSET;
+		if (tx.executeUpdate(
+				"UPDATE " + TABLE_PARENT + " SET name = 'p" + key + "' WHERE id = " + parentId) == 0) {
+			tx.executeUpdate("INSERT INTO " + TABLE_PARENT + " (id, name) VALUES ("
+					+ parentId + ", 'p" + key + "')");
+		}
+	}
+
+	private static Map<String, Object> readResult(List<Object[]> rows) {
 		if (rows.isEmpty()) {
 			return ok(null);
 		}
@@ -152,24 +210,49 @@ public final class JepsenSqlClient implements AutoCloseable {
 		return ok(number);
 	}
 
+	/**
+	 * Join-shards read: empty child → empty Elle list; child without parent → :fail
+	 * (never :ok null — that forged G-single / G2 against prior appends).
+	 */
+	private static Map<String, Object> readJoinResult(List<Object[]> rows) {
+		if (rows.isEmpty()) {
+			return ok(null);
+		}
+		final Object[] row = rows.getFirst();
+		final Object parentPk = row.length > 2 ? row[2] : null;
+		if (parentPk == null) {
+			return fail("join-parent-missing", null);
+		}
+		final String number = row[0] == null ? "" : String.valueOf(row[0]);
+		final Object status = row.length > 1 ? row[1] : null;
+		if (number.isEmpty() && (status == null || "seed".equals(String.valueOf(status)))) {
+			return ok(null);
+		}
+		return ok(number);
+	}
+
 	private Map<String, Object> doWrite(int key, String value) {
-		final String updateSql = "UPDATE " + TABLE + " SET number = '" + escapeSql(value)
-				+ "', status = 'jepsen-write' WHERE id = " + key;
-		final long updated = exec(updateSql);
+		final SyncConnection conn = session.connection();
+		final long updated = conn.executeUpdate(
+				"UPDATE " + TABLE + " SET number = '" + escapeSql(value)
+						+ "', status = 'jepsen-write' WHERE id = " + key);
 		if (updated == 0) {
-			exec("INSERT INTO " + TABLE + " (id, number, status) VALUES ("
+			conn.executeUpdate("INSERT INTO " + TABLE + " (id, number, status) VALUES ("
 					+ key + ", '" + escapeSql(value) + "', 'jepsen-write')");
 		}
 		return ok(null);
 	}
 
-	private Map<String, Object> doAppend(int key, String token) {
-		final String updateSql = "UPDATE " + TABLE + " SET number = number || ' ' || '"
-				+ escapeSql(token) + "' WHERE id = " + key;
-		final long updated = exec(updateSql);
-		if (updated == 0) {
-			exec("INSERT INTO " + TABLE + " (id, number, status) VALUES ("
-					+ key + ", '" + escapeSql(token) + "', 'jepsen-append')");
+	private static Map<String, Object> upsertAppend(SyncConnection conn, String updateSql, String insertSql) {
+		if (conn.executeUpdate(updateSql) == 0) {
+			conn.executeUpdate(insertSql);
+		}
+		return ok(null);
+	}
+
+	private static Map<String, Object> upsertAppend(SyncTxContext tx, String updateSql, String insertSql) {
+		if (tx.executeUpdate(updateSql) == 0) {
+			tx.executeUpdate(insertSql);
 		}
 		return ok(null);
 	}
@@ -178,94 +261,56 @@ public final class JepsenSqlClient implements AutoCloseable {
 		if (!(value instanceof List<?> mops) || mops.isEmpty()) {
 			return fail("unknown-mop", value);
 		}
-		final Object mop = mops.getFirst();
-		if (!(mop instanceof List<?> triple) || triple.size() < 2) {
-			return fail("unknown-mop", mop);
-		}
-		final String opType = String.valueOf(triple.get(0));
-		final int k = ((Number) triple.get(1)).intValue();
-		if ("r".equals(opType) || ":r".equals(opType)) {
-			final Map<String, Object> read = doRead(k);
-			if (!"ok".equals(read.get("type"))) {
-				return read;
-			}
-			final Object raw = read.get("value");
-			final List<Object> tokens = tokensFromBody(raw);
-			final List<Object> resultMop = new ArrayList<>(3);
-			resultMop.add(":r");
-			resultMop.add(k);
-			resultMop.add(tokens);
-			final List<Object> out = new ArrayList<>(1);
-			out.add(resultMop);
-			return ok(out);
-		}
-		if ("append".equals(opType) || ":append".equals(opType)) {
-			final Object arg = triple.size() > 2 ? triple.get(2) : null;
-			final Map<String, Object> append = doAppend(k, stringValue(arg));
-			if (!"ok".equals(append.get("type"))) {
-				return append;
-			}
-			final List<Object> resultMop = new ArrayList<>(3);
-			resultMop.add(":append");
-			resultMop.add(k);
-			resultMop.add(arg);
-			final List<Object> out = new ArrayList<>(1);
-			out.add(resultMop);
-			return ok(out);
-		}
-		return fail("unknown-mop", mop);
-	}
-
-	private void ensureConnected() {
-		Connection c = connection;
-		if (isLive(c)) {
-			return;
-		}
-		synchronized (this) {
-			c = connection;
-			if (isLive(c)) {
-				return;
-			}
-			connection = null;
-			connection = factory.obtain().block(OP_TIMEOUT);
-			if (connection == null) {
-				throw new IllegalStateException("connect failed");
-			}
-		}
-	}
-
-	private static boolean isLive(Connection c) {
-		if (c == null) {
-			return false;
-		}
-		if (c instanceof RemoteConnection rc) {
-			return rc.isOpen();
-		}
-		return true;
-	}
-
-	private long exec(String sql) {
-		final Long updated = connection.createStatement(sql)
-				.execute()
-				.concatMap(Result::getRowsUpdated)
-				.reduce(0L, Long::sum)
-				.block(OP_TIMEOUT);
-		return updated == null ? 0L : updated;
-	}
-
-	private List<Object[]> queryRows(String sql) {
-		return connection.createStatement(sql)
-				.execute()
-				.concatMap(r -> r.map((Row row, RowMetadata meta) -> {
-					final int cols = meta.getColumnCount();
-					final Object[] arr = new Object[cols];
-					for (int i = 0; i < cols; i++) {
-						arr[i] = row.get(i);
+		final SyncTxContext tx = session.begin();
+		final List<Object> out = new ArrayList<>(mops.size());
+		try {
+			for (Object mop : mops) {
+				if (!(mop instanceof List<?> triple) || triple.size() < 2) {
+					tx.rollback();
+					return fail("unknown-mop", mop);
+				}
+				final String opType = String.valueOf(triple.get(0));
+				final int k = ((Number) triple.get(1)).intValue();
+				if ("r".equals(opType) || ":r".equals(opType)) {
+					final Map<String, Object> read = doRead(tx, k);
+					if (!"ok".equals(read.get("type"))) {
+						tx.rollback();
+						return read;
 					}
-					return arr;
-				}))
-				.collectList()
-				.block(OP_TIMEOUT);
+					final List<Object> resultMop = new ArrayList<>(3);
+					resultMop.add(":r");
+					resultMop.add(k);
+					resultMop.add(tokensFromBody(read.get("value")));
+					out.add(resultMop);
+					continue;
+				}
+				if ("append".equals(opType) || ":append".equals(opType)) {
+					final Object arg = triple.size() > 2 ? triple.get(2) : null;
+					final Map<String, Object> append = doAppend(tx, k, stringValue(arg));
+					if (!"ok".equals(append.get("type"))) {
+						tx.rollback();
+						return append;
+					}
+					final List<Object> resultMop = new ArrayList<>(3);
+					resultMop.add(":append");
+					resultMop.add(k);
+					resultMop.add(arg);
+					out.add(resultMop);
+					continue;
+				}
+				tx.rollback();
+				return fail("unknown-mop", mop);
+			}
+			tx.commit();
+			return ok(out);
+		} catch (RuntimeException ex) {
+			try {
+				tx.rollback();
+			} catch (Exception ignored) {
+				// rollback best-effort
+			}
+			throw ex;
+		}
 	}
 
 	private static List<Object> tokensFromBody(Object raw) {
@@ -281,7 +326,7 @@ public final class JepsenSqlClient implements AutoCloseable {
 		}
 		final String[] parts = s.split("\\s+");
 		final List<Object> out = new ArrayList<>(parts.length);
-        Collections.addAll(out, parts);
+		Collections.addAll(out, parts);
 		return out;
 	}
 
@@ -306,70 +351,44 @@ public final class JepsenSqlClient implements AutoCloseable {
 		final String msg = root.getMessage() == null ? root.getClass().getSimpleName() : root.getMessage();
 		final String name = root.getClass().getSimpleName();
 		if (root instanceof TimeoutException
+				|| root instanceof SyncAwait.SyncTimeoutException
 				|| msg.toLowerCase().contains("timeout")) {
 			final Map<String, Object> m = new LinkedHashMap<>();
-			// Reads that timed out without a value are definite failures for Knossos.
-			if (op == JepsenOp.READ) {
-				m.put("type", "fail");
-			} else {
-				m.put("type", "info");
-			}
+			m.put("type", op == JepsenOp.READ ? "fail" : "info");
 			m.put("error", "timeout");
 			return m;
 		}
-		// Ambiguous network only when a mutating request may already have left the client.
 		if (name.contains("Connect") || msg.toLowerCase().contains("connect")
 				|| msg.contains("SQL channel closed") || msg.contains("not connected")) {
-			invalidateConnection();
+			session.invalidate();
 			final Map<String, Object> m = new LinkedHashMap<>();
 			final boolean mutate = op == JepsenOp.WRITE || op == JepsenOp.APPEND || op == JepsenOp.TXN;
 			final String lower = msg.toLowerCase();
-			// Refused / never-established are definite — do not explode Knossos as :info.
 			final boolean definiteMiss = lower.contains("refused")
 					|| lower.contains("not connected")
 					|| lower.contains("no route")
 					|| name.contains("ConnectException");
-			if (requestMayHaveStarted && mutate && !definiteMiss) {
-				m.put("type", "info");
-			} else {
-				m.put("type", "fail");
-			}
+			m.put("type", requestMayHaveStarted && mutate && !definiteMiss ? "info" : "fail");
 			m.put("error", "connect");
 			return m;
 		}
 		if (WriterFenceSignals.requiresWriterRediscover(root)
 				|| WriterFenceSignals.requiresWriterRediscover(ex)) {
-			invalidateConnection();
-			try {
-				factory.rediscoverWriter().block(OP_TIMEOUT);
-			} catch (Exception ignored) {
-				// rediscover best-effort; next op reconnects via create()
-			}
+			// callWithWriterRediscover already rediscovered+retried; drop held channel only.
+			session.invalidate();
 			final Map<String, Object> m = new LinkedHashMap<>();
 			m.put("type", "fail");
 			m.put("error", List.of("orchid-not-synced", name, msg));
 			return m;
 		}
+		// Definite schema/column miss — never :info (Elle would treat as crash → false valid).
+		if (JepsenErrorClassifyUtil.isDefiniteSchemaError(msg)) {
+			return fail(JepsenErrorClassifyUtil.ERR_SCHEMA, msg);
+		}
 		final Map<String, Object> m = new LinkedHashMap<>();
 		m.put("type", "info");
 		m.put("error", msg);
 		return m;
-	}
-
-	private void invalidateConnection() {
-		try {
-			final Connection c = connection;
-			connection = null;
-			if (c != null) {
-				try {
-					c.close().block(Duration.ofSeconds(1));
-				} catch (Exception ignored) {
-					// best-effort close before sticky rotate
-				}
-			}
-		} catch (Exception ignored) {
-			// close is best-effort; factory reconnect performs AUTH rediscovery
-		}
 	}
 
 	private static Throwable rootCause(Throwable ex) {
@@ -390,14 +409,6 @@ public final class JepsenSqlClient implements AutoCloseable {
 
 	@Override
 	public void close() {
-		final Connection c = connection;
-		connection = null;
-		if (c != null) {
-			try {
-				c.close().block(OP_TIMEOUT);
-			} catch (Exception ignored) {
-			}
-		}
-		factory.dispose();
+		session.close();
 	}
 }

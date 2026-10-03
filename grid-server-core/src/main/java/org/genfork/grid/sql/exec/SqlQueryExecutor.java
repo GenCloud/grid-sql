@@ -565,39 +565,7 @@ public final class SqlQueryExecutor {
 		}
 
 		final SqlTxBuffer tx = session.requireTx();
-		final Set<KeyWrapper> seen = new LinkedHashSet<>();
-		SqlTxSnapshotOps.forEachSnapshotKey(store, filter, key -> {
-			final byte[] value = store.getCommittedBytes(key);
-			if (value == null) {
-				return;
-			}
-			final KeyWrapper kw = new KeyWrapper(key);
-			seen.add(kw);
-			final SqlTxBuffer.DirtyEntry dirty = tx.get(table, key);
-			if (dirty != null) {
-				if (dirty.op() == SqlTxBuffer.Op.DELETE) {
-					return;
-				}
-				final byte[] dirtyBytes = dirty.valueBytesOrNull();
-				if (dirtyBytes != null && filter.matches(dirtyBytes, schema)) {
-					blobs.add(dirtyBytes);
-				}
-			} else if (filter.matches(value, schema)) {
-				blobs.add(value);
-			}
-		});
-		for (Map.Entry<KeyWrapper, SqlTxBuffer.DirtyEntry> e : tx.entriesForTable(table).entrySet()) {
-			if (seen.contains(e.getKey()) || e.getValue().op() != SqlTxBuffer.Op.UPSERT) {
-				continue;
-			}
-			final byte[] valueBytes = e.getValue().valueBytesOrNull();
-			if (valueBytes == null) {
-				continue;
-			}
-			if (filter.matches(valueBytes, schema)) {
-				blobs.add(valueBytes);
-			}
-		}
+		SqlTxSnapshotOps.forEachSnapshotWithDirtyOverlay(store, schema, table, tx, filter, blobs);
 		return blobs;
 	}
 
@@ -862,7 +830,7 @@ public final class SqlQueryExecutor {
 
 			List<Object[]> projected = new ArrayList<>(decoded.size());
 			for (Object[] row : decoded) {
-				projected.add(SqlJoinOps.projectJoined(workingCols, row, projection, star, s.selectItems(), rawSides));
+				projected.add(SqlJoinOps.projectJoined(workingCols, row, projection, star, s.selectItems(), s));
 			}
 
 			if (!joined.whereAppliedOnWire()) {

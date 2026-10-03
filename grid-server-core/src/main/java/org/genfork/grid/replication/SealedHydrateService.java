@@ -23,8 +23,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
+import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstMode;
 import org.genfork.grid.mem.stage.WorkingSetBudget;
 import org.genfork.grid.nio.EncodeBuffers;
 import org.genfork.grid.replication.apply.ReplicaApplier;
@@ -80,6 +82,8 @@ public final class SealedHydrateService {
 	private final HomologousRepair homologousRepair;
 	private final Map<String, ReplicaApplier> appliers;
 	private final Set<String> hydratedShards = ConcurrentHashMap.newKeySet();
+	private final AtomicInteger hydrateShardsDone = new AtomicInteger();
+	private final AtomicInteger hydrateShardsTotal = new AtomicInteger();
 
 	public SealedHydrateService(
 			boolean enabled,
@@ -120,12 +124,14 @@ public final class SealedHydrateService {
 			log.info("Hydrated domain={} sealedShards={} oplogOps={}",
 					domainType, sealedWm.size(), hydrated);
 		}
-		for (Integer shard : snapshotService.listShards(domainType)) {
+		final Set<Integer> shardIds = ConcurrentHashMap.newKeySet();
+		shardIds.addAll(sealedWm.keySet());
+		shardIds.addAll(snapshotService.listShards(domainType));
+		for (Integer shard : shardIds) {
 			hydratedShards.add(OpLogStreamKeyUtil.format(domainType, shard));
 		}
-		for (Integer shard : sealedWm.keySet()) {
-			hydratedShards.add(OpLogStreamKeyUtil.format(domainType, shard));
-		}
+		hydrateShardsDone.set(hydratedShards.size());
+		hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
 		return sealedWm;
 	}
 
@@ -176,10 +182,47 @@ public final class SealedHydrateService {
 		return adaptiveDiskFirstController != null && adaptiveDiskFirstController.forceLazySemantics();
 	}
 
+	/** Configured hydrate mode string ({@code FULL} or {@code LAZY}). */
+	public String hydrateModeLabel() {
+		return hydrateMode;
+	}
+
+	/**
+	 * Effective hydrate semantics after adaptive force-lazy (FULL or LAZY).
+	 */
+	public String hydrateModeEffective() {
+		return isLazyHydrate() ? HYDRATE_MODE_LAZY : HYDRATE_MODE_FULL;
+	}
+
+	/** Adaptive mode name, or {@code null} when adaptive off. */
+	public String adaptiveModeName() {
+		if (adaptiveDiskFirstController == null) {
+			return null;
+		}
+		final AdaptiveDiskFirstMode mode = adaptiveDiskFirstController.mode();
+		return mode == null ? null : mode.name();
+	}
+
+	public int hydrateShardsDone() {
+		return hydrateShardsDone.get();
+	}
+
+	public int hydrateShardsTotal() {
+		return hydrateShardsTotal.get();
+	}
+
+	/**
+	 * Effective working-set cap (adaptive override when enabled).
+	 */
 	public int workingSetMaxEntries() {
 		if (adaptiveDiskFirstController != null) {
 			return adaptiveDiskFirstController.effectiveMaxEntries();
 		}
+		return workingSetMaxEntries;
+	}
+
+	/** YAML / ctor configured working-set cap (before adaptive override). */
+	public int workingSetMaxEntriesConfigured() {
 		return workingSetMaxEntries;
 	}
 

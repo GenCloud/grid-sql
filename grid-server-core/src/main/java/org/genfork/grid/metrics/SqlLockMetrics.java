@@ -29,6 +29,8 @@ public final class SqlLockMetrics {
 	private static final LongAdder WAIT_TIMEOUTS = new LongAdder();
 	private static final LongAdder WAIT_CANCELS = new LongAdder();
 	private static final LongAdder WAIT_NANOS = new LongAdder();
+	private static final LongAdder PEER_LEASE_EXPIRED = new LongAdder();
+	private static final LongAdder PEER_RELEASE_MISS = new LongAdder();
 
 	private SqlLockMetrics() {
 	}
@@ -48,6 +50,14 @@ public final class SqlLockMetrics {
 		WAIT_CANCELS.increment();
 	}
 
+	public static void recordPeerLeaseExpired() {
+		PEER_LEASE_EXPIRED.increment();
+	}
+
+	public static void recordPeerReleaseMiss() {
+		PEER_RELEASE_MISS.increment();
+	}
+
 	public static long waitAcquires() {
 		return WAIT_ACQUIRES.sum();
 	}
@@ -62,5 +72,13 @@ public final class SqlLockMetrics {
 
 	public static long waitNanosTotal() {
 		return WAIT_NANOS.sum();
+	}
+
+	public static long peerLeaseExpired() {
+		return PEER_LEASE_EXPIRED.sum();
+	}
+
+	public static long peerReleaseMiss() {
+		return PEER_RELEASE_MISS.sum();
 	}
 }

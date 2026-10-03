@@ -32,7 +32,7 @@ try (SyncConnectionFactory factory = SyncConnectionFactory.fromUrl(
 }
 ```
 
-`fromUrl` разделяет правила URL с `ConnectionFactory.fromUrl` (включая `readEndpoints`). Ожидание канала — через `RemoteConnectionFactory.obtainStage()` и `SyncAwait`, никогда `Mono.toFuture`. При остановке закройте фабрику (`AutoCloseable`). Реактивный путь: [Java-клиент](java-client.md).
+`fromUrl` разделяет правила URL с `ConnectionFactory.fromUrl` (включая `readEndpoints`). Ожидание канала — через `RemoteConnectionFactory.obtainStage()` и `SyncAwait`, никогда `Mono.toFuture`. Sync rediscover: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` — [Java-клиент](java-client.md). При остановке закройте фабрику (`AutoCloseable`). Реактивный путь: [Java-клиент](java-client.md).
 
 ## Пример в сервисе
 

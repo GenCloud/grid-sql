@@ -23,6 +23,12 @@ $JEPSEN_DIR = (Resolve-Path (Join-Path $MULTIDC_DIR "..")).Path
 $ROOT = (Resolve-Path (Join-Path $JEPSEN_DIR "../..")).Path
 $ResultsPath = Join-Path $MULTIDC_DIR "RESULTS.md"
 Set-Location $MULTIDC_DIR
+# register+append entry: never inherit join/swarm flags from a prior matrix profile.
+Remove-Item Env:JEPSEN_JOIN_SHARDS -ErrorAction SilentlyContinue
+Remove-Item Env:JEPSEN_SWARM -ErrorAction SilentlyContinue
+if (-not $env:MULTIDC_WORKLOADS -or $env:MULTIDC_WORKLOADS -eq "") {
+  $env:MULTIDC_WORKLOADS = "register,append"
+}
 # Linux GHA / pwsh: USERPROFILE is often unset; prefer HOME then UserProfile folder.
 if (-not $env:HOME -or $env:HOME -eq "") {
   if ($env:USERPROFILE) { $env:HOME = $env:USERPROFILE }
@@ -45,7 +51,13 @@ function Stamp-Multidc {
   try { $Git = (git -C $ROOT rev-parse --short HEAD 2>$null) } catch { $Git = "unknown" }
   if (-not $Git) { $Git = "unknown" }
   $Date = Get-Date -Format "o"
-  $Stamp = if ($env:STAMP -and $env:STAMP -ne "") { $env:STAMP } else { "2026-09-18-multidc-" + $Mode }
+  $Stamp = if ($env:STAMP -and $env:STAMP -ne "") {
+    $env:STAMP
+  } elseif ($NoNemesis) {
+    (Get-Date -Format "yyyy-MM-dd") + "-multidc-" + $Mode + "-nochao"
+  } else {
+    (Get-Date -Format "yyyy-MM-dd") + "-multidc-" + $Mode + "-chaos"
+  }
   $ChaosNote = if ($NoNemesis) { "no-nemesis" } else { "dc-link+kill-voter+kill-dc-a+revive-dc-a" }
   $histLine = "| ``$Stamp`` | $ModeLabel | $Reg | $App | $Outcome | $Notes |"
   $priorHist = New-Object System.Collections.Generic.List[string]
@@ -182,7 +194,31 @@ function Ensure-Cluster {
       if ($st -ne "healthy") { $ok = $false }
     }
   } while (-not $ok -and (Get-Date) -lt $deadline)
-  if (-not $ok) { Write-Host "WARN: not fully healthy; continuing" }
+  if (-not $ok) { throw "Multi-DC nodes not healthy before settle" }
+  Write-Host "Waiting for Active writerEligible (a1-a3 readiness)..."
+  $waitWriter = Join-Path $JEPSEN_DIR "scripts\wait-writer-eligible.ps1"
+  if (Test-Path $waitWriter) {
+    if ($Mode -eq "async" -or $Mode -eq "async-swarm") {
+      if (-not $env:POST_READY_SLEEP_SEC) { $env:POST_READY_SLEEP_SEC = "20" }
+      if (-not $env:WRITER_SETTLE_DEADLINE_SEC) { $env:WRITER_SETTLE_DEADLINE_SEC = "240" }
+    }
+    & $waitWriter -PortsCsv "7777,7778,7779"
+    if ($LASTEXITCODE -ne 0) {
+      throw "writerEligible settle timed out (hard-fail; refuse to start generators)"
+    }
+  }
+  foreach ($port in @(15432, 15433, 15434)) {
+    $tcpOk = $false
+    try {
+      $c = New-Object System.Net.Sockets.TcpClient
+      $iar = $c.BeginConnect("127.0.0.1", $port, $null, $null)
+      $tcpOk = $iar.AsyncWaitHandle.WaitOne(1500) -and $c.Connected
+      $c.Close()
+    } catch { $tcpOk = $false }
+    if (-not $tcpOk) {
+      Write-Host "WARN: SQL port $port not open yet; continuing"
+    }
+  }
 }
 function Sync-ControlWorkspace {
   Write-Host "docker cp clojure + scripts + grid-sql-client into control..."

@@ -17,6 +17,7 @@ package org.genfork.grid.replication.netty.codec;
 
 import org.genfork.grid.nio.EncodeBuffers;
 import org.genfork.grid.replication.codec.OpLogCodec;
+import org.genfork.grid.replication.orchid.OrchidNackCode;
 import org.genfork.grid.replication.orchid.OrchidTransport.OrchidCommitMessage;
 import org.genfork.grid.replication.orchid.OrchidTransport.OrchidNackMessage;
 import org.genfork.grid.replication.orchid.OrchidTransport.OrchidPhaseBatchMessage;
@@ -219,19 +220,38 @@ public final class PhaseRpcCodec {
 		return new OrchidCommitMessage(committer, proposeId, digest, prevOpSeq, opSeq, OpLogCodec.decodeOp(opBytes));
 	}
 
+	/**
+	 * Wire: utf8 fromNodeId | i64 proposeId | u8 code | i64 detailA | i64 detailB | utf8 detailText.
+	 */
 	public static byte[] encodeOrchidNack(OrchidNackMessage msg) {
 		final byte[] id = msg.fromNodeId().getBytes(StandardCharsets.UTF_8);
-		final byte[] reason = msg.reason() == null ? new byte[0] : msg.reason().getBytes(StandardCharsets.UTF_8);
+		final byte[] detail = msg.detailText() == null
+				? new byte[0]
+				: msg.detailText().getBytes(StandardCharsets.UTF_8);
 		final ByteBuffer buf = EncodeBuffers.allocateWireLe(
-				Integer.BYTES + id.length + Long.BYTES + Integer.BYTES + reason.length);
+				Integer.BYTES + id.length
+						+ Long.BYTES
+						+ Byte.BYTES
+						+ Long.BYTES
+						+ Long.BYTES
+						+ Integer.BYTES + detail.length);
 		EncodeBuffers.putLengthPrefixed(buf, id);
 		buf.putLong(msg.proposeId());
-		EncodeBuffers.putLengthPrefixed(buf, reason);
+		buf.put(msg.code().wire());
+		buf.putLong(msg.detailA());
+		buf.putLong(msg.detailB());
+		EncodeBuffers.putLengthPrefixed(buf, detail);
 		return EncodeBuffers.toByteArray(buf);
 	}
 
 	public static OrchidNackMessage decodeOrchidNack(byte[] body) {
 		final ByteBuffer buf = EncodeBuffers.wrapLe(body);
-		return new OrchidNackMessage(EncodeBuffers.getUtf8(buf), buf.getLong(), EncodeBuffers.getUtf8(buf));
+		final String from = EncodeBuffers.getUtf8(buf);
+		final long proposeId = buf.getLong();
+		final OrchidNackCode code = OrchidNackCode.fromWire(buf.get());
+		final long detailA = buf.getLong();
+		final long detailB = buf.getLong();
+		final String detailText = EncodeBuffers.getUtf8(buf);
+		return new OrchidNackMessage(from, proposeId, code, detailA, detailB, detailText);
 	}
 }

@@ -14,10 +14,18 @@
   (:gen-class))
 
 ;; Separate keys from register workload (key 1) so Knossos writes do not pollute Elle lists.
-(def ^:private append-keys (vec (range 2 17)))
+(def ^:private append-keys-default (vec (range 2 17)))
+;; Join/shards: keys beyond bootstrap seed (2..16) — ensureParent creates cross-shard parents.
+(def ^:private append-keys-join (vec (range 2 33)))
+
+(defn- append-keys-for-run
+  []
+  (if (= "1" (System/getenv "JEPSEN_JOIN_SHARDS"))
+    append-keys-join
+    append-keys-default))
 
 (def cli-opts
-  [["-w" "--workload NAME" "register | append"
+  [["-w" "--workload NAME" "register | append | join"
     :default "register"]
    ["-r" "--rate HZ" "Approximate op rate"
     :default 10
@@ -36,12 +44,20 @@
        (gen/stagger (/ (:rate opts)))))
 
 (defn append-gen
-  "Elle list-append txn mops across keys 2..16 (space-separated SQL tokens)."
+  "Elle list-append txn mops across append keys (space-separated SQL tokens).
+  Mixes single-mop and multi-mop txns (append+read on distinct keys) under SQL TX.
+  Append tokens share one counter — Elle requires unique append values."
   [opts]
-  (let [key-cycle (cycle append-keys)]
+  (let [append-keys (append-keys-for-run)
+        key-cycle (cycle append-keys)
+        pair-cycle (cycle (map vector append-keys (rest (cycle append-keys))))
+        n (atom -1)
+        tok! (fn [] (str "t" (swap! n inc)))]
     (->> (gen/mix [(map (fn [k] {:f :txn :value [[:r k nil]]}) key-cycle)
-                   (map (fn [[k v]] {:f :txn :value [[:append k (str "t" v)]]})
-                        (map vector key-cycle (range)))])
+                   (map (fn [k] {:f :txn :value [[:append k (tok!)]]}) key-cycle)
+                   (map (fn [[k1 k2]]
+                          {:f :txn :value [[:append k1 (tok!)] [:r k2 nil]]})
+                        pair-cycle)])
          (gen/stagger (/ (:rate opts))))))
 
 (defn append-checker
@@ -71,13 +87,28 @@
     ;; Keep gen/nemesis shape but never fire faults.
     (gen/sleep (:time-limit opts))
     (let [multidc? (= "1" (System/getenv "JEPSEN_MULTIDC"))
-          unclean? (= "1" (System/getenv "JEPSEN_UNCLEAN_REVIVE"))]
+          unclean? (= "1" (System/getenv "JEPSEN_UNCLEAN_REVIVE"))
+          swarm? (= "1" (System/getenv "JEPSEN_SWARM"))]
       (cond
         ;; Unclean first (1-DC or Multi-DC): long kill+start only — avoids :info flood.
         unclean?
         (cycle [(gen/sleep 12)
                 {:type :info :f :kill-proposer}
                 (gen/sleep 28)])
+
+        ;; Swarm/cutover edge: denser bounce under multi-key TX (TL typically >=60).
+        swarm?
+        (cycle [(gen/sleep 5)
+                {:type :info :f :start-partition}
+                (gen/sleep 3)
+                {:type :info :f :stop-partition}
+                (gen/sleep 4)
+                {:type :info :f :kill-proposer}
+                (gen/sleep 6)
+                {:type :info :f :swarm-bounce}
+                (gen/sleep 5)
+                {:type :info :f :swarm-bounce}
+                (gen/sleep 8)])
 
         multidc?
         ;; Full Multi-DC chaos: DC-link partition + kill-voter + whole DC-A kill/revive.
@@ -114,6 +145,10 @@
       (vec (.split ^String env ","))
       ["n1" "n2" "n3"])))
 
+(defn- append-style-workload?
+  [workload]
+  (or (= "append" workload) (= "join" workload)))
+
 (defn jamoa-test
   [opts]
   (let [workload (:workload opts)
@@ -121,21 +156,27 @@
         nodes (test-nodes)
         multidc? (= "1" (System/getenv "JEPSEN_MULTIDC"))
         unclean? (= "1" (System/getenv "JEPSEN_UNCLEAN_REVIVE"))
+        swarm? (= "1" (System/getenv "JEPSEN_SWARM"))
+        append-style? (append-style-workload? workload)
         ;; Register+Knossos: concurrency 1 whenever sticky-only routing can yield mid-write
         ;; :info :connect (partition / kill / unclean). Append keeps higher conc for Elle.
         conc (cond
                (= "register" workload) 1
                multidc? 2
                unclean? 3
+               swarm? 4
                :else 5)
         rate (cond
                multidc? (min (:rate opts) 5.0)
                (= "register" workload) (min (:rate opts) 5.0)
                :else (:rate opts))
-        opts (assoc opts :rate rate)]
+        opts (assoc opts :rate rate)
+        checker-key (if append-style? "append" workload)]
     (merge tests/noop-test
            opts
-           {:name      (str "jamoa-orchid-" workload (when no-nem? "-nochao"))
+           {:name      (str "jamoa-orchid-" workload
+                            (when swarm? "-swarm")
+                            (when no-nem? "-nochao"))
             ;; HTTP client + docker CLI nemesis — no SSH to DB nodes.
             :ssh       {:dummy? true}
             :os        db/noop-os
@@ -143,12 +184,12 @@
             :client    (client/client)
             :nemesis   (if no-nem? jnem/noop (nem/compose-nemesis))
             :concurrency conc
-            :generator (->> (if (= "append" workload)
+            :generator (->> (if append-style?
                               (append-gen opts)
                               (register-gen opts))
                             (gen/nemesis (nemesis-schedule opts))
                             (gen/time-limit (:time-limit opts)))
-            :checker   (workload-checker workload)
+            :checker   (workload-checker checker-key)
             ;; 1-DC n1..n3 or Multi-DC a1..b2 via JEPSEN_NODES.
             :nodes     nodes})))
 

@@ -83,6 +83,28 @@ public final class SealedBaseBackupUtil {
 	}
 
 	/**
+	 * Read watermark from {@code base-watermark.meta} in a backup root (0 when missing).
+	 */
+	public static long readBaseWatermark(Path backupDir) {
+		Objects.requireNonNull(backupDir, "backupDir");
+		final Path metaPath = backupDir.resolve(WATERMARK_META);
+		if (!GridFs.isRegularFile(metaPath)) {
+			return 0L;
+		}
+		try {
+			final String body = GridFs.readString(metaPath);
+			for (String line : body.split("\\R")) {
+				if (line.startsWith(KEY_WATERMARK)) {
+					return Long.parseLong(line.substring(KEY_WATERMARK.length()).trim());
+				}
+			}
+			return 0L;
+		} catch (IOException e) {
+			throw new IllegalStateException("PITR base watermark read failed: " + metaPath, e);
+		}
+	}
+
+	/**
 	 * Install a base backup into an empty (or cleared) {@code dataDir}.
 	 *
 	 * @return number of files installed

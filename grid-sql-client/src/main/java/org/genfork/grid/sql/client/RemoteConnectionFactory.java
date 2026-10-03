@@ -42,7 +42,6 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import org.genfork.grid.common.WriterFenceSignals;
 import org.genfork.grid.sql.client.reactive.ReactiveExecExchange;
 import org.genfork.grid.sql.client.transport.PendingExchange;
 import org.genfork.grid.sql.client.transport.RemoteConnectSupport;
@@ -79,6 +78,14 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	private static final String ERR_READ_ENDPOINTS_REQUIRED =
 			"createReadFactory requires readEndpoints=host:port,...";
 	private static final String ERR_REPLICA_APPLY_LAG_STALE = "replica apply lag stale";
+	/** Writer promote-hint AUTH redirect: one hop to sticky target. */
+	private static final int WRITER_AUTH_REDIRECT_BUDGET = 1;
+	/** Floor capacity for per-channel requestId → exchange correlator. */
+	private static final int PENDING_MAP_MIN_CAPACITY = 16;
+	/** Extra correlator slots per maxTxContexts (EXEC + FETCH + CANCEL headroom). */
+	private static final int PENDING_MAP_PER_TX_SLOTS = 4;
+	/** Single Netty EL for this factory's TCP mux. */
+	private static final int CLIENT_IO_EVENT_LOOPS = 1;
 
 	private final List<HostEndpoint> endpoints;
 	private final AtomicInteger stickyIndex = new AtomicInteger(0);
@@ -194,7 +201,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	) {
 		Objects.requireNonNull(endpoints, "endpoints");
 		if (endpoints.isEmpty()) {
-			throw new IllegalArgumentException("endpoints must not be empty");
+			throw new IllegalArgumentException(SqlClientMessages.ENDPOINTS_EMPTY);
 		}
 
 		final List<HostEndpoint> copy = new ArrayList<>(endpoints.size());
@@ -214,7 +221,9 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		this.readSelector = this.factoryRole.isReadReplica()
 				? new ReadEndpointSelector(this.endpoints)
 				: null;
-		this.group = new NioEventLoopGroup(1, Thread.ofPlatform().name("sql-client-io-", 0).factory());
+		this.group = new NioEventLoopGroup(
+				CLIENT_IO_EVENT_LOOPS,
+				Thread.ofPlatform().name("sql-client-io-", 0).factory());
 		final Bootstrap boot = new Bootstrap()
 				.group(group)
 				.channel(NioSocketChannel.class);
@@ -237,33 +246,18 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	}
 
 	/**
-	 * Read pool: connects to {@code readEndpoints}, opens {@link SessionRole#READ_REPLICA} sessions.
-	 * Fail-fast when readEndpoints empty.
+	 * Read pool: least-inflight ring over {@code readEndpoints} ∪ authority hosts,
+	 * opens {@link SessionRole#READ_REPLICA} sessions. Fail-fast when readEndpoints empty.
 	 */
 	public static RemoteConnectionFactory createReadFactory(String url) {
 		final GridSqlUri u = GridSqlUri.parse(url);
-		final List<HostEndpoint> readEps = u.options().readEndpoints();
-		if (readEps.isEmpty()) {
+		final List<HostEndpoint> configured = u.options().readEndpoints();
+		if (configured.isEmpty()) {
 			throw new IllegalArgumentException(ERR_READ_ENDPOINTS_REQUIRED);
 		}
-		final ConnectionOptions readOpts = ConnectionOptions.builder()
-				.minConnections(u.options().minConnections())
-				.maxConnections(u.options().maxReadConnections())
-				.maxTxContexts(u.options().maxTxContexts())
-				.warmup(u.options().warmup())
-				.execTimeout(u.options().execTimeout())
-				.connectTimeout(u.options().connectTimeout())
-				.readTimeout(u.options().readTimeout())
-				.writeTimeout(u.options().writeTimeout())
-				.maxRetries(u.options().maxRetries())
-				.retryDelay(u.options().retryDelay())
-				.retryMode(u.options().retryMode())
-				.timezone(u.options().timezone())
-				.readPreference(ReadPreference.REPLICA)
-				.staleReadPolicy(u.options().staleReadPolicy())
-				.maxReadConnections(u.options().maxReadConnections())
-				.readEndpoints(readEps)
-				.build();
+		final List<HostEndpoint> readEps = ReadEndpointRingUtil.mergeReadRing(configured, u.endpoints());
+		final ConnectionOptions readOpts = ReadEndpointRingUtil.buildReadReplicaOptions(
+				u.options(), readEps, ReadEndpointRingUtil.DEFAULT_MIN_CONNECTIONS_FLOOR);
 		return new RemoteConnectionFactory(
 				readEps, u.user(), u.password(), readOpts, u.schema(), SessionRole.READ_REPLICA);
 	}
@@ -295,14 +289,6 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		return lastServerMeta().writerEligible();
 	}
 
-	public long pinnedRegionEpoch() {
-		return pinnedRegionEpoch.get();
-	}
-
-	public long regionEpoch() {
-		return lastServerMeta().regionEpoch();
-	}
-
 	/**
 	 * Mid-op orchid / region fence reject: close live channels and AUTH-rediscover the
 	 * writer-eligible peer matching promoteHint / region epoch. Does not silent-rotate sticky.
@@ -312,27 +298,24 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		for (RemoteConnection c : all) {
 			destroy(c);
 		}
-		return openNewOnce(true);
+		return openNewOnce(authRedirectBudget());
 	}
 
 	/**
-	 * One transparent retry after writer rediscover on orchid / region fence.
-	 * Elle-safe when meta already shows the prior sticky is ineligible.
+	 * Sync / Jepsen rediscover path — {@link CompletionStage} only (never {@code Mono.toFuture}).
 	 */
-	public <T> Mono<T> withWriterRediscoverRetry(Mono<T> operation) {
-		Objects.requireNonNull(operation, "operation");
-		return operation.onErrorResume(ex -> {
-			if (!WriterFenceSignals.requiresWriterRediscover(ex)) {
-				return Mono.error(ex);
-			}
-			return rediscoverWriter().then(operation);
-		});
+	public CompletionStage<Connection> rediscoverWriterStage() {
+		purgeClosed();
+		for (RemoteConnection c : all) {
+			destroy(c);
+		}
+		return openNewOnceStage(authRedirectBudget());
 	}
 
 	/**
 	 * True when sticky pin is valid for the given meta (writerEligible ∧ epoch match).
 	 */
-	public boolean stickyPinMatches(ServerMeta meta) {
+	private boolean stickyPinMatches(ServerMeta meta) {
 		if (meta == null || !meta.writerEligible()) {
 			return false;
 		}
@@ -359,7 +342,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	public Mono<Connection> obtain() {
 		return Mono.defer(() -> {
 			if (disposed.get()) {
-				return Mono.error(new IllegalStateException("connection factory disposed"));
+				return Mono.error(new IllegalStateException(SqlClientMessages.FACTORY_DISPOSED));
 			}
 			return ensureMinPool().then(Mono.defer(this::acquireFromPool));
 		});
@@ -370,7 +353,8 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	 */
 	public CompletionStage<Connection> obtainStage() {
 		if (disposed.get()) {
-			return CompletableFuture.failedFuture(new IllegalStateException("connection factory disposed"));
+			return CompletableFuture.failedFuture(
+					new IllegalStateException(SqlClientMessages.FACTORY_DISPOSED));
 		}
 		return ensureMinPoolStage().thenCompose(ignored -> acquireFromPoolStage());
 	}
@@ -485,7 +469,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 				return Mono.just(least);
 			}
 			return Mono.error(new IllegalStateException(
-					"maxConnections=" + options.maxConnections() + " exhausted"));
+					SqlClientMessages.maxConnectionsExhausted(options.maxConnections())));
 		}
 		return openNewWithRetry();
 	}
@@ -502,7 +486,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 				return CompletableFuture.completedFuture(least);
 			}
 			return CompletableFuture.failedFuture(new IllegalStateException(
-					"maxConnections=" + options.maxConnections() + " exhausted"));
+					SqlClientMessages.maxConnectionsExhausted(options.maxConnections())));
 		}
 		return openNewWithRetryStage();
 	}
@@ -589,7 +573,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	}
 
 	private CompletionStage<Connection> attemptOpenStage(int attempt, int maxAttempts) {
-		return openNewOnceStage(true).handle((conn, err) -> {
+		return openNewOnceStage(authRedirectBudget()).handle((conn, err) -> {
 			if (err == null) {
 				return CompletableFuture.completedFuture(conn);
 			}
@@ -614,15 +598,24 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	}
 
 	/**
+	 * AUTH redirect budget: READ_REPLICA walks the full ring; writer gets one promote hop.
+	 */
+	private int authRedirectBudget() {
+		if (factoryRole.isReadReplica()) {
+			return Math.max(0, endpoints.size() - 1);
+		}
+		return WRITER_AUTH_REDIRECT_BUDGET;
+	}
+
+	/**
 	 * Connect sticky-first, then remaining endpoints; AUTH write on subscribe.
 	 */
 	private Mono<Connection> openNewOnce() {
-		return openNewOnce(true);
+		return openNewOnce(authRedirectBudget());
 	}
 
-	private Mono<Connection> openNewOnce(boolean allowAuthRedirect) {
-		final Map<Integer, PendingExchange> pending =
-				new ConcurrentHashMap<>(Math.max(16, options.maxTxContexts() * 4));
+	private Mono<Connection> openNewOnce(int remainingAuthRedirects) {
+		final Map<Integer, PendingExchange> pending = newPendingMap();
 		final AtomicReference<ServerMeta> connectionMeta =
 				new AtomicReference<>(ServerMeta.EMPTY);
 		final SqlClientInboundHandler inboundHandler = new SqlClientInboundHandler(pending, meta -> {
@@ -658,16 +651,16 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 								ch.close();
 							})
 							.then(Mono.defer(() ->
-									redirectAfterAuth(conn, connected.endpointIndex(), allowAuthRedirect)));
+									redirectAfterAuth(
+											conn, connected.endpointIndex(), remainingAuthRedirects)));
 				});
 	}
 
 	/**
 	 * Sync connect + AUTH write-immediate.
 	 */
-	private CompletionStage<Connection> openNewOnceStage(boolean allowAuthRedirect) {
-		final Map<Integer, PendingExchange> pending =
-				new ConcurrentHashMap<>(Math.max(16, options.maxTxContexts() * 4));
+	private CompletionStage<Connection> openNewOnceStage(int remainingAuthRedirects) {
+		final Map<Integer, PendingExchange> pending = newPendingMap();
 		final AtomicReference<ServerMeta> connectionMeta =
 				new AtomicReference<>(ServerMeta.EMPTY);
 		final SqlClientInboundHandler inboundHandler = new SqlClientInboundHandler(pending, meta -> {
@@ -700,7 +693,8 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 								return CompletableFuture.failedFuture(err);
 							})
 							.thenCompose(ignored ->
-									redirectAfterAuthStage(conn, connected.endpointIndex(), allowAuthRedirect));
+									redirectAfterAuthStage(
+											conn, connected.endpointIndex(), remainingAuthRedirects));
 				});
 	}
 
@@ -777,55 +771,38 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	private Mono<Connection> redirectAfterAuth(
 			RemoteConnection connection,
 			int connectedIndex,
-			boolean allowAuthRedirect
+			int remainingAuthRedirects
 	) {
-		final ServerMeta meta = connection.serverMeta();
-		lastServerMeta.set(meta);
-
-		if (factoryRole.isReadReplica()) {
-			if (meta.applyLagStale()) {
-				if (readSelector != null && connectedIndex >= 0 && connectedIndex < endpoints.size()) {
-					readSelector.markStale(endpoints.get(connectedIndex), true);
-				}
-				advanceStickyPastFailed();
-				destroy(connection);
-				if (!allowAuthRedirect) {
-					return Mono.error(new IllegalStateException(ERR_REPLICA_APPLY_LAG_STALE));
-				}
-				return openNewOnce(false);
-			}
-
-			if (readSelector != null && connectedIndex >= 0 && connectedIndex < endpoints.size()) {
-				readSelector.markStale(endpoints.get(connectedIndex), false);
-			}
-
-			stickyIndex.set(connectedIndex);
-			return Mono.just(connection);
-		}
-
-		if (meta.writerEligible()) {
-			pinSticky(connectedIndex, meta);
-			return Mono.just(connection);
-		}
-
-		if (!allowAuthRedirect || !meta.hasPromoteHint()) {
-			return Mono.just(connection);
-		}
-
-		final int targetIndex = endpointIndexForHint(meta.promoteHint());
-		if (targetIndex < 0 || targetIndex == connectedIndex) {
-			return Mono.just(connection);
-		}
-
-		stickyIndex.set(targetIndex);
-		destroy(connection);
-		return openNewOnce(false);
+		final AuthRedirectPlan plan = planAuthRedirect(connection, connectedIndex, remainingAuthRedirects);
+		return switch (plan.kind()) {
+			case ACCEPT -> Mono.just(connection);
+			case FAIL_STALE -> Mono.error(new IllegalStateException(ERR_REPLICA_APPLY_LAG_STALE));
+			case RETRY -> openNewOnce(plan.retryBudget());
+		};
 	}
 
 	private CompletionStage<Connection> redirectAfterAuthStage(
 			RemoteConnection connection,
 			int connectedIndex,
-			boolean allowAuthRedirect
+			int remainingAuthRedirects
+	) {
+		final AuthRedirectPlan plan = planAuthRedirect(connection, connectedIndex, remainingAuthRedirects);
+		return switch (plan.kind()) {
+			case ACCEPT -> CompletableFuture.completedFuture(connection);
+			case FAIL_STALE -> CompletableFuture.failedFuture(
+					new IllegalStateException(ERR_REPLICA_APPLY_LAG_STALE));
+			case RETRY -> openNewOnceStage(plan.retryBudget());
+		};
+	}
+
+	/**
+	 * Shared AUTH redirect policy for Mono and CompletionStage obtain paths (fail-closed stale,
+	 * writer pin, one promote hop). Side effects (markStale / sticky / destroy) applied here once.
+	 */
+	private AuthRedirectPlan planAuthRedirect(
+			RemoteConnection connection,
+			int connectedIndex,
+			int remainingAuthRedirects
 	) {
 		final ServerMeta meta = connection.serverMeta();
 		lastServerMeta.set(meta);
@@ -837,11 +814,10 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 				}
 				advanceStickyPastFailed();
 				destroy(connection);
-				if (!allowAuthRedirect) {
-					return CompletableFuture.failedFuture(
-							new IllegalStateException(ERR_REPLICA_APPLY_LAG_STALE));
+				if (remainingAuthRedirects <= 0) {
+					return AuthRedirectPlan.failStale();
 				}
-				return openNewOnceStage(false);
+				return AuthRedirectPlan.retry(remainingAuthRedirects - 1);
 			}
 
 			if (readSelector != null && connectedIndex >= 0 && connectedIndex < endpoints.size()) {
@@ -849,26 +825,46 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			}
 
 			stickyIndex.set(connectedIndex);
-			return CompletableFuture.completedFuture(connection);
+			return AuthRedirectPlan.accept();
 		}
 
 		if (meta.writerEligible()) {
 			pinSticky(connectedIndex, meta);
-			return CompletableFuture.completedFuture(connection);
+			return AuthRedirectPlan.accept();
 		}
 
-		if (!allowAuthRedirect || !meta.hasPromoteHint()) {
-			return CompletableFuture.completedFuture(connection);
+		if (remainingAuthRedirects <= 0 || !meta.hasPromoteHint()) {
+			return AuthRedirectPlan.accept();
 		}
 
 		final int targetIndex = endpointIndexForHint(meta.promoteHint());
 		if (targetIndex < 0 || targetIndex == connectedIndex) {
-			return CompletableFuture.completedFuture(connection);
+			return AuthRedirectPlan.accept();
 		}
 
 		stickyIndex.set(targetIndex);
 		destroy(connection);
-		return openNewOnceStage(false);
+		return AuthRedirectPlan.retry(remainingAuthRedirects - 1);
+	}
+
+	private enum AuthRedirectKind {
+		ACCEPT,
+		FAIL_STALE,
+		RETRY
+	}
+
+	private record AuthRedirectPlan(AuthRedirectKind kind, int retryBudget) {
+		private static AuthRedirectPlan accept() {
+			return new AuthRedirectPlan(AuthRedirectKind.ACCEPT, 0);
+		}
+
+		private static AuthRedirectPlan failStale() {
+			return new AuthRedirectPlan(AuthRedirectKind.FAIL_STALE, 0);
+		}
+
+		private static AuthRedirectPlan retry(int remaining) {
+			return new AuthRedirectPlan(AuthRedirectKind.RETRY, remaining);
+		}
 	}
 
 	private void pinSticky(int endpointIndex, ServerMeta meta) {
@@ -937,7 +933,9 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			Throwable last
 	) {
 		if (tried >= n) {
-			return Mono.error(last != null ? last : new IllegalStateException("all endpoints failed"));
+			return Mono.error(last != null
+					? last
+					: new IllegalStateException(SqlClientMessages.ALL_ENDPOINTS_FAILED));
 		}
 
 		final int idx = (start + tried) % n;
@@ -987,7 +985,9 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	) {
 		if (tried >= n) {
 			return CompletableFuture.failedFuture(
-					last != null ? last : new IllegalStateException("all endpoints failed"));
+					last != null
+							? last
+							: new IllegalStateException(SqlClientMessages.ALL_ENDPOINTS_FAILED));
 		}
 
 		final int idx = (start + tried) % n;
@@ -1004,13 +1004,20 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	 * Rotate sticky past the current endpoint (connect fail / dead channel only).
 	 * Mid-op orchid / region fence must use {@link #rediscoverWriter()} - never silent rotate.
 	 */
-	public void advanceStickyPastFailed() {
+	private void advanceStickyPastFailed() {
 		final int n = endpoints.size();
 		if (n <= 1) {
 			return;
 		}
 		stickyIndex.updateAndGet(i -> (Math.floorMod(i, n) + 1) % n);
 		pinnedRegionEpoch.set(0L);
+	}
+
+	private Map<Integer, PendingExchange> newPendingMap() {
+		final int capacity = Math.max(
+				PENDING_MAP_MIN_CAPACITY,
+				options.maxTxContexts() * PENDING_MAP_PER_TX_SLOTS);
+		return new ConcurrentHashMap<>(capacity);
 	}
 
 	void park(RemoteConnection conn) {
@@ -1113,16 +1120,6 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 
 	public int idleChannels() {
 		return idleCount.get();
-	}
-
-	/**
-	 * Return a borrowed channel to the idle pool (shared DataSource / multiplex).
-	 * No-op when disposed or the channel is closed / still has in-flight requests.
-	 */
-	public void release(Connection conn) {
-		if (conn instanceof RemoteConnection remote) {
-			park(remote);
-		}
 	}
 
 	/**

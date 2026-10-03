@@ -198,10 +198,12 @@ public class QueryParser {
 		if (query.joinClause() != null && !query.joinClause().isEmpty()) {
 			final ArrayList<JoinSpec> acc = new ArrayList<>(query.joinClause().size());
 			for (JoinClauseContext jc : query.joinClause()) {
+				final String rightTable = SqlIdentParseUtil.joinTableName(jc);
+				final String rightAlias = SqlIdentParseUtil.joinTargetAlias(jc.joinTarget());
 				acc.add(new JoinSpec(
-						SqlIdentParseUtil.joinTableName(jc),
-						SqlIdentParseUtil.joinTargetAlias(jc.joinTarget()),
-						SqlIdentParseUtil.joinEqs(jc.joinCond()),
+						rightTable,
+						rightAlias,
+						SqlIdentParseUtil.joinEqs(jc.joinCond(), rightTable, rightAlias),
 						SqlIdentParseUtil.joinKindOf(jc)
 				));
 			}

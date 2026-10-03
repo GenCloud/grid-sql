@@ -79,14 +79,14 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<опции>
 
 ### Смена пишущего в приложении
 
-После отказа узла **не** крутите следующий host в URL вручную.
+После отказа узла **не** крутите следующий хост в URL вручную.
 
 | Сигнал | Что делать приложению |
 |--------|----------------------|
 | `PROMOTE_NOTIFY` / обновлённый `ServerMeta` на живом канале | Следовать promote-подсказке; фабрика может вызвать `rediscoverWriter()` сама |
-| Запись всё ещё падает / липнет к мёртвому host | Вызвать `rediscoverWriter()` на `RemoteConnectionFactory` (новый `Connection`); смотреть `lastServerMeta()` / `connection.serverMeta()` — `writerEligible`, `promoteHint`, `regionEpoch` |
+| Запись всё ещё падает / липнет к мёртвому хосту | Вызвать `rediscoverWriter()` на `RemoteConnectionFactory` (новый `Connection`); смотреть `lastServerMeta()` / `connection.serverMeta()` — `writerEligible`, `promoteHint`, `regionEpoch` |
 
-Повторы connect (`retryMode`) не заменяют rediscover после смены роли. Регламент: [повышение роли](../configure-and-operate/operations/ha-promote.md).
+Повторы connect (`retryMode`) не заменяют `rediscoverWriter()` после смены роли. Бюджет AUTH-редиректа: на пути записи — **один** hop по `promoteHint`; на `READ_REPLICA` — до `ring−1` по кольцу эндпоинтов; после исчерпания бюджета — fail-closed (в т.ч. `applyLagStale`). Sync/JDBC: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` (без `Mono.block` на hot path). Регламент: [повышение роли](../configure-and-operate/operations/ha-promote.md).
 
 ## Автокоммит
 

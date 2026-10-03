@@ -12,7 +12,7 @@
 
 На практике клиенту важны три поля: `writerEligible` (можно ли писать на этот узел), `promoteHint` (куда смотреть, если текущий недоступен), `regionEpoch` (смена Active/Hold между ЦОД). Полный список полей `ServerMeta` — в [состоянии репликации](../../understand/replication-state.md).
 
-`writerEligible=false` бывает не только из‑за роли/epoch (Hold, Witness, `R` ниже порога). Пока локальный tip отстаёт от достижимых пиров (`peerTip > localTip` — unclean-revive / tip-fence), узел тоже не пишущий: сначала catch-up, потом снова `true`. Опережение живого follower без отставания tip само по себе eligibility не снимает.
+`writerEligible=false` бывает не только из‑за роли или epoch (Hold, Witness, `R` ниже порога). Пока локальный tip отстаёт от достижимых пиров (`peerTip > localTip` — грязный рестарт / ограждение tip), узел тоже не пишущий: сначала подтягивание tip, потом снова `true`. Опережение живого ведомого без отставания tip само по себе право писать не снимает. После захвата роли Hold рост `regionEpoch` тоже не равен мгновенному `writerEligible=true`. При ASYNC потере Active-ЦОД, пока нет живой ссылки на удалённую площадку, tip только среди Hold не снимает ограждение — ждать появления remote-DC peer и догона tip; клиент вызывает `rediscoverWriter()`.
 
 Узлы в одном ЦОД получают OpLog через асинхронную доставку журнала (Netty). После записи на пишущем видимость на реплике может отставать (`maxApplyLag` / отсутствующий ключ), пока apply не догонит — это **ожидаемый RPO**, не сбой Applier. См. [сеть репликации](../../understand/replication-network.md). Отставание смотрите в readiness (`applyLagStale`) и метриках; лабораторная сверка `GET /replication/compare` — не источник для выбора пишущего.
 
@@ -21,7 +21,7 @@
 1. Пишущий узел падает или оказывается в разделе сети.
 2. Выжившие снова синхронизируют параметр порядка `R`; новый `min(nodeId)` среди достижимых синхронных предлагает запись.
 3. Подтягивание и HomologousRepair закрывают дыры в OpLog.
-4. Живые клиенты получают `PROMOTE_NOTIFY`; переподключающиеся читают ту же `ServerMeta` через AUTH или ERROR — без ручного повышения роли как в Raft.
+4. Живые клиенты получают `PROMOTE_NOTIFY`; переподключающиеся читают ту же `ServerMeta` через AUTH или ERROR либо вызывают `rediscoverWriter()` — без ручного повышения роли как в Raft. На пути записи AUTH допускает не больше **одного** hop по `promoteHint`; на реплике для чтения — обход кольца — см. [Java-клиент](../../develop/java-client.md).
 
 При `grid.replication.region.enabled=true` потеря целого Active ЦОД может поднять `regionEpoch` после успешного захвата роли Hold. Клиент обязан перепривязаться к новой epoch.
 
@@ -112,7 +112,7 @@ flowchart TB
   B1 -->|победитель_новый_Active| Client[Клиент_закрепление]
 ```
 
-При потере Active: кворум захвата (`RegionClaimQuorum`) выбирает одного победителя среди Hold (+ Witness); клиент закрепляется на новом `writerEligible` без двух пишущих. Роли Active / Hold / Witness — в YAML узлов при `grid.replication.region.enabled=true`. Compose и лабораторные топологии: [развёртывание Compose](deploy-compose.md), [несколько ЦОД](multi-dc.md).
+При потере Active: кворум захвата (`RegionClaimQuorum`) выбирает одного победителя среди Hold (+ Witness); клиент закрепляется на новом `writerEligible` без двух пишущих. Пока tip победителя позади пиров, `writerEligible` остаётся `false` несмотря на новый `regionEpoch`. Роли Active / Hold / Witness — в YAML узлов при `grid.replication.region.enabled=true`. Compose и лабораторные топологии: [развёртывание Compose](deploy-compose.md), [несколько ЦОД](multi-dc.md).
 
 Инциденты: [отказы](failures.md).
 

@@ -24,6 +24,7 @@ import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.netty.NettyReplicationTransport;
 import org.genfork.grid.replication.tx.StreamCommitSerializer;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.store.TableStore;
 
@@ -37,8 +38,13 @@ import java.util.Map;
  * <p>
  * Open TX: dirty only in {@link SqlTxBuffer} (no ORCHID / map visibility).
  * Single-stream + replication: one OpLog group fsync for {@code TX_BEGIN}+data+{@code TX_COMMIT}
- * via {@link TableStore#flushTxUnit}. Multi-stream: barrier begin/end with batched markers
- * (one orchid confirm tip) + per-stream data {@link TableStore#flushTxBatch}.
+ * via {@link TableStore#flushTxUnit}; contiguous tip admits are serialized inside
+ * {@link org.genfork.grid.replication.MutationRecorder} (admit-only
+ * {@link StreamCommitSerializer}, join/digest outside the lock).
+ * Multi-stream: barrier begin/end with batched markers (one orchid confirm tip) +
+ * per-stream data {@link TableStore#flushTxBatch}, holding {@link StreamCommitSerializer}
+ * for the full multi-commit so pipelined proposes cannot interleave {@code TX_BEGIN}
+ * on the same stream (ReplicaApplier staging poison → Elle lost-append / G2-item).
  * Without replication: local install with undo snapshots only.
  *
  * @author: GenCloud
@@ -56,7 +62,8 @@ public final class SqlTxCommitter {
 
 	public void commit(SqlSession session) {
 		final SqlTxBuffer buf = session.requireTx();
-		final boolean locksOnly = buf.isEmpty() && !buf.peerLockedLeases().isEmpty();
+		final List<DistForUpdatePeerLockLease> peerLeases = buf.peerLockedLeases();
+		final boolean locksOnly = buf.isEmpty() && !peerLeases.isEmpty();
 		if (buf.isEmpty() && !locksOnly) {
 			catalog.flushSequencesIfDirty();
 			session.endTx();
@@ -85,12 +92,13 @@ public final class SqlTxCommitter {
 			if (repl) {
 				ReplicaAccessGate.ensureWrite(replication);
 				if (singleStream) {
+					// Admit-only stream lock lives in MutationRecorder.recordTxUnitBlocking.
 					flushDirtyAsUnits(buf, envelopeValue, installed);
 				} else {
 					final StreamCommitSerializer serializer = replication.getStreamCommitSerializer();
 					final List<String> streamKeys = new ArrayList<>(barrier.participatingStreams().size());
 					for (MultiShardCommitBarrier.StreamKey sk : barrier.participatingStreams()) {
-						streamKeys.add(sk.table() + "#" + sk.shard());
+						streamKeys.add(OpLogStreamKeyUtil.format(sk.table(), sk.shard()));
 					}
 					final Runnable multiCommit = () -> {
 						barrier.beginAllBatch(streams -> replication.recordTxMarkersBatch(
@@ -126,14 +134,15 @@ public final class SqlTxCommitter {
 					}
 					final ReplicaApplier applier = replication.applier(sk.table());
 					if (applier != null) {
-						applier.discardOpenTxStaging();
+						// Per-stream only — never clear-all (wipes concurrent units on other shards).
+						applier.discardOpenTxStaging(sk.table(), sk.shard());
 					}
 				});
 				if (singleStream) {
 					for (MultiShardCommitBarrier.StreamKey sk : barrier.participatingStreams()) {
 						final ReplicaApplier applier = replication.applier(sk.table());
 						if (applier != null) {
-							applier.discardOpenTxStaging();
+							applier.discardOpenTxStaging(sk.table(), sk.shard());
 						}
 					}
 				}

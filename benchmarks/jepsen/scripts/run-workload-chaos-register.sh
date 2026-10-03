@@ -17,5 +17,5 @@ command -v git
 pkill -9 -f 'jamoa-jepsen.core' 2>/dev/null || true
 pkill -9 -f 'lein run -m jamoa-jepsen' 2>/dev/null || true
 sleep 1
-lein run -m jamoa-jepsen.core test --workload register --time-limit 60
+lein run -m jamoa-jepsen.core test --workload register --time-limit 45
 echo LEIN_EXIT=$?

@@ -20,7 +20,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -29,6 +28,7 @@ import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.query.filters.FilterCondition;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.WireSpan;
+import org.genfork.grid.sql.SqlIdentParseUtil;
 import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.JoinEdge;
 import org.genfork.grid.sql.ast.SelectAst.JoinKind;
@@ -519,7 +519,7 @@ public final class SqlJoinOps {
 			List<String> projection,
 			boolean star,
 			List<SelectItem> selectItems,
-			List<String> sideTables
+			SelectSql select
 	) {
 		if (star) {
 			return row;
@@ -532,18 +532,22 @@ public final class SqlJoinOps {
 			if (selectItems != null && i < selectItems.size() && selectItems.get(i) instanceof ColumnSelectItem csi) {
 				item = csi;
 			}
-			final int ord = resolveJoinProjectionOrdinal(cols, col, item, sideTables);
+			final int ord = resolveJoinProjectionOrdinal(cols, col, item, select);
 			projected[i] = row[ord];
 		}
 
 		return projected;
 	}
 
+	/**
+	 * Resolve projection ordinal; join aliases ({@code p.id}) match {@link JoinEdge#tableAlias()}
+	 * the same way ON qualifiers do — physical side table list alone is insufficient.
+	 */
 	static int resolveJoinProjectionOrdinal(
 			List<ColumnDef> cols,
 			String projectionLabel,
 			ColumnSelectItem item,
-			List<String> sideTables
+			SelectSql select
 	) {
 		final String simple;
 		final String tableQual;
@@ -560,16 +564,8 @@ public final class SqlJoinOps {
 				simple = projectionLabel;
 			}
 		}
-		if (tableQual != null && sideTables != null && !sideTables.isEmpty()) {
-			int sideIndex = -1;
-			for (int s = 0; s < sideTables.size(); s++) {
-				final String side = sideTables.get(s);
-				if (side.equalsIgnoreCase(tableQual)
-						|| side.toLowerCase(Locale.ROOT).endsWith("." + tableQual.toLowerCase(Locale.ROOT))) {
-					sideIndex = s;
-					break;
-				}
-			}
+		if (tableQual != null && select != null) {
+			final int sideIndex = joinProjectionSideIndex(select, tableQual);
 			if (sideIndex >= 0) {
 				int seen = 0;
 				for (int i = 0; i < cols.size(); i++) {
@@ -589,5 +585,22 @@ public final class SqlJoinOps {
 			}
 		}
 		throw new IllegalArgumentException("Unknown column in projection: " + projectionLabel);
+	}
+
+	private static int joinProjectionSideIndex(SelectSql select, String tableQual) {
+		if (SqlIdentParseUtil.matchesTableOrAlias(tableQual, select.table(), null)) {
+			return 0;
+		}
+		final List<JoinEdge> joins = select.joins();
+		if (joins == null || joins.isEmpty()) {
+			return -1;
+		}
+		for (int j = 0; j < joins.size(); j++) {
+			final JoinEdge edge = joins.get(j);
+			if (SqlIdentParseUtil.matchesTableOrAlias(tableQual, edge.table(), edge.tableAlias())) {
+				return j + 1;
+			}
+		}
+		return -1;
 	}
 }

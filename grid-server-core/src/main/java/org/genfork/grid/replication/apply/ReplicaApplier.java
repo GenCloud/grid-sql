@@ -29,6 +29,7 @@ import org.genfork.grid.replication.transport.ApplyAckSender;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -57,9 +58,20 @@ import java.util.function.Function;
  * @since: 1.0
  */
 public class ReplicaApplier {
+	private static final String ERR_APPLIER_BY_DOMAIN_UNSET =
+			"applierByDomain unset; cannot flush multi-stream envelope";
+	private static final String ERR_APPLIER_MISSING_PREFIX = "no ReplicaApplier for domain ";
+	private static final String ERR_TX_BEGIN_NONEMPTY_STAGING =
+			"TX_BEGIN with non-empty staging on ";
+	private static final String ERR_TX_BEGIN_OPEN_TX =
+			"TX_BEGIN while open TX already present on ";
+	private static final String ERR_TX_BEGIN_STAGED_MID = " staged=";
+	private static final String ERR_TX_BEGIN_INTERLEAVE_SUFFIX =
+			" (concurrent TX unit interleave)";
+
 	private final ReplicationNodeState nodeState;
 	private final OpLog opLog;
-    private final Function<Integer, GridEntriesProcessor> processorByShard;
+	private final Function<Integer, GridEntriesProcessor> processorByShard;
 	private final ApplyAckSender ackSender;
 	private final boolean applyToLocalMap;
 
@@ -71,6 +83,11 @@ public class ReplicaApplier {
 	private final Map<String, Long> openTxIdByStream = new ConcurrentHashMap<>();
 	private volatile CatalogDdlHandler catalogDdlHandler;
 	private volatile TxEnvelopeCoordinator envelopeCoordinator;
+	/**
+	 * Resolve peer domain appliers so multi-stream envelope flush installs keys into the
+	 * owning table processors (not the last TX_COMMIT stream's map).
+	 */
+	private volatile Function<String, ReplicaApplier> applierByDomain;
 	/**
 	 * LAZY OpLog hydrate: map-only install + deferred batch index (no async queue / no full reindex).
 	 */
@@ -155,6 +172,14 @@ public class ReplicaApplier {
 	}
 
 	/**
+	 * Wire domain → applier lookup for multi-table envelope flush (set from
+	 * {@code ReplicationCoordinator} after registerDomain).
+	 */
+	public void setApplierByDomain(Function<String, ReplicaApplier> applierByDomain) {
+		this.applierByDomain = applierByDomain;
+	}
+
+	/**
 	 * Applies committed ops. {@code opSeq} is the global ORCHID sequence (not per-shard dense).
 	 * Per-shard watermark only requires {@code opSeq > applied} (gaps across shards are expected).
 	 *
@@ -183,6 +208,11 @@ public class ReplicaApplier {
 		synchronized (shardLocks.computeIfAbsent(lockKey, _ -> new Object())) {
 			final long applied = nodeState.appliedWatermark(op.domainType(), op.shard());
 			if (op.opSeq() <= applied) {
+				// Watermark already past must not skip TX_COMMIT/ABORT close — otherwise staged
+				// UPSERTs stay invisible forever (Jepsen Elle G-single / HAS≈0 after :ok append).
+				if (closeOpenTxIfPresent(lockKey, op)) {
+					return;
+				}
 				if (!forceInstall) {
 					return;
 				}
@@ -190,6 +220,10 @@ public class ReplicaApplier {
 				// clobber a newer primary watermark — ASYNC learners lag and FETCH_ROW/RESHIP
 				// can return pre-catch-up row bytes (Elle lost-append / G0 under dc-link heal).
 				if (op.opSeq() < applied) {
+					return;
+				}
+				// Never force-reinstall TX markers (no map payload); UPSERT/DELETE only.
+				if (op.type() != ReplicationOpType.UPSERT && op.type() != ReplicationOpType.DELETE) {
 					return;
 				}
 				forceReinstall(op);
@@ -215,7 +249,20 @@ public class ReplicaApplier {
 			}
 
 			if (op.type() == ReplicationOpType.TX_BEGIN) {
-				// Nested / restarted unit: discard prior incomplete staging.
+				// Contiguous TX admits (MutationRecorder stream lock) prevent interleave; this
+				// guard is fail-closed defense in depth. Reject any second TX_BEGIN while an
+				// open TX id is present — including empty staging (BEGIN before first UPSERT).
+				final List<StagedMutation> priorStaging = txStaging.get(lockKey);
+				if (priorStaging != null && !priorStaging.isEmpty()) {
+					throw new IllegalStateException(
+							ERR_TX_BEGIN_NONEMPTY_STAGING + lockKey
+									+ ERR_TX_BEGIN_STAGED_MID + priorStaging.size()
+									+ ERR_TX_BEGIN_INTERLEAVE_SUFFIX);
+				}
+				if (openTxIdByStream.containsKey(lockKey)) {
+					throw new IllegalStateException(
+							ERR_TX_BEGIN_OPEN_TX + lockKey + ERR_TX_BEGIN_INTERLEAVE_SUFFIX);
+				}
 				txStaging.put(lockKey, new ArrayList<>());
 				final long txId = TxEnvelopeCodec.txIdFromKey(op.key());
 				openTxIdByStream.put(lockKey, txId);
@@ -242,7 +289,7 @@ public class ReplicaApplier {
 					openTxIdByStream.remove(lockKey);
 					txStaging.remove(lockKey);
 					if (gate.noteApplyCommit(txId, stream)) {
-						flushEnvelopeStaging(gate.takeApplyStaging(txId));
+						flushEnvelopeStagingByOwningDomain(gate.takeApplyStagingByStream(txId));
 					}
 					return;
 				}
@@ -350,6 +397,10 @@ public class ReplicaApplier {
 	/**
 	 * Discard any open TX staging (incomplete unit after hydrate or crash mid-commit).
 	 * Map never sees partial TX rows.
+	 * <p>
+	 * Clears <em>all</em> streams — PITR / snapshot only. Commit abort must use
+	 * {@link #discardOpenTxStaging(String, int)} so a failed unit on shard A cannot wipe
+	 * in-flight staging on shard B (Elle lost-append / G-single under concurrent workers).
 	 */
 	public void discardOpenTxStaging() {
 		txStaging.clear();
@@ -360,7 +411,75 @@ public class ReplicaApplier {
 		}
 	}
 
+	/**
+	 * Discard open TX staging for one {@code domain#shard} stream only.
+	 */
+	public void discardOpenTxStaging(String domainType, int shard) {
+		final String lockKey = domainType + "#" + shard;
+		synchronized (shardLocks.computeIfAbsent(lockKey, _ -> new Object())) {
+			final Long txId = openTxIdByStream.remove(lockKey);
+			txStaging.remove(lockKey);
+			final TxEnvelopeCoordinator gate = envelopeCoordinator;
+			if (txId != null && gate != null) {
+				gate.discardApply(txId);
+			}
+		}
+	}
+
+	/**
+	 * Close open TX staging when {@code TX_COMMIT}/{@code TX_ABORT} is applied at or behind
+	 * the watermark (duplicate / repair / tip race). Returns {@code true} when handled.
+	 */
+	private boolean closeOpenTxIfPresent(String lockKey, ReplicationOp op) {
+		if (op.type() == ReplicationOpType.TX_COMMIT) {
+			if (!hasOpenStaging(lockKey)) {
+				return false;
+			}
+			final long txId = openTxIdByStream.getOrDefault(
+					lockKey, TxEnvelopeCodec.txIdFromKey(op.key()));
+			final TxEnvelopeCoordinator gate = envelopeCoordinator;
+			final TxEnvelopeCodec.StreamRef stream =
+					new TxEnvelopeCodec.StreamRef(op.domainType(), op.shard());
+			if (gate != null && gate.isMultiApplyOpen(txId)) {
+				openTxIdByStream.remove(lockKey);
+				txStaging.remove(lockKey);
+				if (gate.noteApplyCommit(txId, stream)) {
+					flushEnvelopeStagingByOwningDomain(gate.takeApplyStagingByStream(txId));
+				}
+				return true;
+			}
+			flushStaging(lockKey, op.shard());
+			txStaging.remove(lockKey);
+			openTxIdByStream.remove(lockKey);
+			return true;
+		}
+		if (op.type() == ReplicationOpType.TX_ABORT) {
+			if (!hasOpenStaging(lockKey)) {
+				return false;
+			}
+			final long txId = openTxIdByStream.getOrDefault(
+					lockKey, TxEnvelopeCodec.txIdFromKey(op.key()));
+			final TxEnvelopeCoordinator gate = envelopeCoordinator;
+			if (gate != null && gate.isMultiApplyOpen(txId)) {
+				gate.discardApply(txId);
+			}
+			txStaging.remove(lockKey);
+			openTxIdByStream.remove(lockKey);
+			return true;
+		}
+		return false;
+	}
+
+	private boolean hasOpenStaging(String lockKey) {
+		if (openTxIdByStream.containsKey(lockKey)) {
+			return true;
+		}
+		final List<StagedMutation> staging = txStaging.get(lockKey);
+		return staging != null;
+	}
+
 	/** Test helper: whether a stream currently buffers an open TX. */
+	@VisibleForTesting
 	public boolean hasOpenTx(String domainType, int shard) {
 		final String lockKey = domainType + "#" + shard;
 		if (openTxIdByStream.containsKey(lockKey)) {
@@ -406,7 +525,7 @@ public class ReplicaApplier {
 			}
 			throw new IllegalStateException("DDL op missing SQL value opSeq=" + op.opSeq());
 		}
-		final String ddlSql = new String(value, java.nio.charset.StandardCharsets.UTF_8);
+		final String ddlSql = new String(value, StandardCharsets.UTF_8);
 		try {
 			handler.applyCatalogDdl(ddlSql, op.schemaEpoch());
 		} catch (RuntimeException ex) {
@@ -446,10 +565,37 @@ public class ReplicaApplier {
 		}
 	}
 
-	private void flushEnvelopeStaging(List<TxEnvelopeCoordinator.StagedMutation> staging) {
-		if (staging == null || staging.isEmpty()) {
+	/**
+	 * Install each stream's staged mutations via that stream's domain applier.
+	 * Never fall back to {@code this} for a foreign domain (cross-table TX / Elle G2).
+	 */
+	private void flushEnvelopeStagingByOwningDomain(
+			Map<TxEnvelopeCodec.StreamRef, List<TxEnvelopeCoordinator.StagedMutation>> byStream
+	) {
+		if (byStream == null || byStream.isEmpty()) {
 			return;
 		}
+		final Function<String, ReplicaApplier> resolver = applierByDomain;
+		if (resolver == null) {
+			throw new IllegalStateException(ERR_APPLIER_BY_DOMAIN_UNSET);
+		}
+		for (Map.Entry<TxEnvelopeCodec.StreamRef, List<TxEnvelopeCoordinator.StagedMutation>> e
+				: byStream.entrySet()) {
+			final TxEnvelopeCodec.StreamRef ref = e.getKey();
+			final List<TxEnvelopeCoordinator.StagedMutation> staging = e.getValue();
+			if (ref == null || staging == null || staging.isEmpty()) {
+				continue;
+			}
+			final ReplicaApplier owner = resolver.apply(ref.domain());
+			if (owner == null) {
+				throw new IllegalStateException(ERR_APPLIER_MISSING_PREFIX + ref.domain());
+			}
+			owner.installOwnedEnvelopeStaging(staging);
+		}
+	}
+
+	/** Map+index install for envelope staging owned by this domain applier. */
+	private void installOwnedEnvelopeStaging(List<TxEnvelopeCoordinator.StagedMutation> staging) {
 		for (TxEnvelopeCoordinator.StagedMutation m : staging) {
 			installToMap(m.shard(), m.type(), m.key(), m.value());
 		}

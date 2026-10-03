@@ -31,6 +31,17 @@ cp -f "$JAR" "$STAGING_DIR/app.jar"
 echo "Staged $(basename "$JAR") -> benchmarks/jepsen/docker-staging/app.jar"
 
 echo "docker build runtime-hostjar ..."
-docker build -f "$ROOT/benchmarks/jepsen/Dockerfile" --target runtime-hostjar \
-  --build-arg "APP_JAR=benchmarks/jepsen/docker-staging/app.jar" -t "$IMAGE" "$ROOT"
+# Git Bash on Windows: docker.exe needs a drive-letter context, not /d/...
+DOCKER_ROOT="$ROOT"
+DOCKER_FILE="$ROOT/benchmarks/jepsen/Dockerfile"
+if command -v cygpath >/dev/null 2>&1; then
+  DOCKER_ROOT="$(cygpath -w "$ROOT")"
+  DOCKER_FILE="$(cygpath -w "$DOCKER_FILE")"
+elif [[ "$ROOT" =~ ^/([a-zA-Z])/(.*)$ ]]; then
+  drive="$(echo "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]')"
+  DOCKER_ROOT="${drive}:/${BASH_REMATCH[2]}"
+  DOCKER_FILE="${DOCKER_ROOT}/benchmarks/jepsen/Dockerfile"
+fi
+docker build -f "$DOCKER_FILE" --target runtime-hostjar \
+  --build-arg "APP_JAR=benchmarks/jepsen/docker-staging/app.jar" -t "$IMAGE" "$DOCKER_ROOT"
 echo "OK: $IMAGE"

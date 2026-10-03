@@ -65,13 +65,31 @@ public final class AdaptiveChunkScheduler {
 	}
 
 	/**
-	 * Re-split a flat remaining key list into {@code parts} buckets (hash).
+	 * Re-split a flat remaining key list into {@code parts} size-balanced contiguous chunks.
+	 * Prefer this over hash buckets when residual work is proportional to key count.
 	 */
 	@VisibleForTesting
 	public static List<List<byte[]>> resplit(List<byte[]> remaining, int parts) {
-		return AdaptiveParallelScan.splitByShardRange(
-				remaining == null ? List.of() : remaining,
-				Math.max(SINGLE, parts));
+		return resplitSizeBalanced(remaining, parts);
+	}
+
+	/**
+	 * Contiguous size-balanced partition (ceil division); empty input → empty list.
+	 */
+	@VisibleForTesting
+	public static List<List<byte[]>> resplitSizeBalanced(List<byte[]> remaining, int parts) {
+		if (remaining == null || remaining.isEmpty()) {
+			return List.of();
+		}
+		final int n = Math.max(SINGLE, parts);
+		final int total = remaining.size();
+		final int chunkSize = Math.max(SINGLE, (total + n - 1) / n);
+		final List<List<byte[]>> out = new ArrayList<>(n);
+		for (int from = 0; from < total; from += chunkSize) {
+			final int to = Math.min(total, from + chunkSize);
+			out.add(List.copyOf(remaining.subList(from, to)));
+		}
+		return out;
 	}
 
 	/**

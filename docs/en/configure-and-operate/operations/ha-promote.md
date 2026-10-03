@@ -12,7 +12,7 @@ Writer pin comes only from protocol meta. For orchestrator readiness use Actuato
 
 In practice three fields matter: `writerEligible` (may this node accept writes), `promoteHint` (where to look if the current writer is gone), `regionEpoch` (Active/Hold hand-off across sites). Full `ServerMeta` field list: [replication state](../../understand/replication-state.md).
 
-`writerEligible=false` is not only role/epoch (Hold, Witness, `R` below threshold). While the local tip lags reachable peers (`peerTip > localTip` — unclean revive / tip fence), the node is not writable either: catch up first, then eligibility returns. Being ahead of a live follower without a tip lag does not clear eligibility by itself.
+`writerEligible=false` is not only role/epoch (Hold, Witness, `R` below threshold). While the local tip lags reachable peers (`peerTip > localTip` — unclean revive / tip fence), the node is not writable either: catch up first, then eligibility returns. Being ahead of a live follower without a tip lag does not clear eligibility by itself. After a Hold claim, a bumped `regionEpoch` also does not mean immediate `writerEligible=true`. Under ASYNC Active-site loss, while there is no live remote-DC link, Hold-only tips do not clear the fence — wait until a remote-DC peer is seen again and tip has caught up; clients call `rediscoverWriter()`.
 
 Peers in the same site receive OpLog via async Netty push. After a writer commit, replica map visibility can lag (`maxApplyLag` / missing key) until apply — that is **expected RPO**, not Applier failure. See [replication network](../../understand/replication-network.md). Watch lag in readiness (`applyLagStale`) and metrics; lab `GET /replication/compare` is not the writer pin source.
 
@@ -21,7 +21,7 @@ Peers in the same site receive OpLog via async Netty push. After a writer commit
 1. The writer dies or partitions.
 2. Survivors re-sync order parameter `R`; the new `min(nodeId)` among reachable synced nodes proposes.
 3. Catch-up / HomologousRepair closes OpLog gaps.
-4. Active clients receive `PROMOTE_NOTIFY`; reconnecting clients rediscover the same `ServerMeta` via AUTH or ERROR — no manual Raft promote.
+4. Active clients receive `PROMOTE_NOTIFY`; reconnecting clients get the same `ServerMeta` via AUTH or ERROR, or call `rediscoverWriter()` — no manual Raft promote. Writer AUTH follows at most **one** `promoteHint` hop; read-replica AUTH may walk the ring — see [java-client](../../develop/java-client.md).
 
 With `grid.replication.region.enabled=true`, a whole Active site loss can also advance `regionEpoch` when Hold completes a claim quorum — clients must re-pin on the new epoch.
 
@@ -112,12 +112,12 @@ flowchart TB
   B1 -->|winner_new_Active| Client[Client_pin]
 ```
 
-On Active loss: claim quorum (`RegionClaimQuorum`) picks a single winner among Hold (+ Witness); the client pins to the new `writerEligible` without dual-writer. Active / Hold / Witness roles live in node YAML when `grid.replication.region.enabled=true`. Compose and lab topologies: [Compose deploy](deploy-compose.md), [multi-site](multi-dc.md).
+On Active loss: claim quorum (`RegionClaimQuorum`) picks a single winner among Hold (+ Witness); the client pins to the new `writerEligible` without dual-writer. While the winner’s tip lags peers, `writerEligible` stays `false` despite the new `regionEpoch`. Active / Hold / Witness roles live in node YAML when `grid.replication.region.enabled=true`. Compose and lab topologies: [Compose deploy](deploy-compose.md), [multi-site](multi-dc.md).
 
 Incidents: [failures](failures.md).
 
 ## Next
 
-Optional replica reads (off by default): [replica reads](replica-reads.md). Actuator readiness fields (`writerEligible`, `applyLagStale`, …): [monitoring](../monitoring.md).
+Optional replica reads (off by default): [replica reads](replica-reads.md). Actuator readiness fields (`writerEligible`, `promoteHint`, `regionEpoch`, `regionRole`, `applyLagStale`, …) mirror wire `ServerMeta` for orchestrators — clients still pin only from protocol meta: [monitoring](../monitoring.md).
 
 Next: [multi-site](multi-dc.md), [Java client](../../develop/java-client.md), [ORCHID](../../understand/orchid-consensus.md).

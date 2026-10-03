@@ -42,6 +42,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -189,11 +190,15 @@ public class SqlUpdateModifyIT {
 			final SqlEngine peer = a.isWriterEligible() ? engineB : engineA;
 
 			writer.execute("CREATE TABLE append_domain (id INT PRIMARY KEY, number VARCHAR, score INT)");
+			// exists() is true while creatingTables; wait for bindStore like SqlCatalogDdlReplicationIT.
 			final long ddlDeadline = System.currentTimeMillis() + 10_000;
-			while (System.currentTimeMillis() < ddlDeadline && !peer.catalog().exists("append_domain")) {
+			while (System.currentTimeMillis() < ddlDeadline
+					&& peer.catalog().getStore("append_domain") == null) {
 				Thread.sleep(50);
 			}
-			assertTrue(peer.catalog().exists("append_domain"));
+			assertTrue(peer.catalog().exists("append_domain"), "peer catalog missing table after DDL sync");
+			final TableStore peerStore = peer.catalog().getStore("append_domain");
+			assertNotNull(peerStore, "peer TableStore not opened after CREATE TABLE sync");
 
 			executeOnEligibleWriter(a, b, engineA, engineB,
 					"INSERT INTO append_domain (id, number, score) VALUES (7, '', 0)");
@@ -203,7 +208,6 @@ public class SqlUpdateModifyIT {
 					"UPDATE append_domain SET number = number || ' ' || 'beta' WHERE id = 7");
 
 			// Peer SQL SELECT is gate-closed (proposer-only). Assert apply via committed wire bytes.
-			final TableStore peerStore = peer.catalog().getStore("append_domain");
 			final TableSchema peerSchema = peerStore.schema();
 			final byte[] pk = PrimaryKeyCodec.encodeArgument(peerSchema, 7);
 			final long waitUntil = System.currentTimeMillis() + 10_000;

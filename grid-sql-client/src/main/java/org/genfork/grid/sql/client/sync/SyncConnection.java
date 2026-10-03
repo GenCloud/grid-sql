@@ -21,12 +21,15 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.TreeMap;
 
 import org.genfork.grid.sql.SqlBinds;
 import org.genfork.grid.sql.SqlRouteClassifier;
+import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.client.ArrayRow;
+import org.genfork.grid.sql.client.Connection;
 import org.genfork.grid.sql.client.ConnectionFactory;
 import org.genfork.grid.sql.client.DefaultRowMetadata;
 import org.genfork.grid.sql.client.RemoteConnection;
@@ -78,11 +81,10 @@ public final class SyncConnection implements AutoCloseable {
 	}
 
 	/**
-	 * Accepts a reactive {@link org.genfork.grid.sql.client.Connection} that must be
-	 * {@link RemoteConnection}.
+	 * Accepts a reactive {@link Connection} that must be {@link RemoteConnection}.
 	 */
 	public SyncConnection(
-			org.genfork.grid.sql.client.Connection connection,
+			Connection connection,
 			ConnectionFactory factory,
 			Duration timeout,
 			Executor syncExecutor
@@ -90,18 +92,19 @@ public final class SyncConnection implements AutoCloseable {
 		this(requireRemote(connection), factory, null, timeout, syncExecutor);
 	}
 
-	private static RemoteConnection requireRemote(org.genfork.grid.sql.client.Connection connection) {
+	private static RemoteConnection requireRemote(Connection connection) {
 		if (!(connection instanceof RemoteConnection remoteConnection)) {
 			throw new IllegalArgumentException("SyncConnection requires RemoteConnection");
 		}
 		return remoteConnection;
 	}
 
-	public org.genfork.grid.sql.client.Connection reactive() {
+	public Connection reactive() {
 		return remote;
 	}
 
-	RemoteConnection remote() {
+	/** Underlying remote transport (JDBC / Sync edge — avoids SPI/JDBC {@code Connection} name clash). */
+	public RemoteConnection remote() {
 		return remote;
 	}
 
@@ -127,7 +130,9 @@ public final class SyncConnection implements AutoCloseable {
 		}
 		final Integer sessionId = SyncAwait.await(transport.openSession(), timeout, null, syncExecutor);
 		final TransportOutcome beginOutcome =
-				SyncAwait.await(transport.exec(sessionId, "BEGIN", null, 0), timeout, null, syncExecutor);
+				SyncAwait.await(
+						transport.exec(sessionId, SqlStatementTag.BEGIN.wire(), null, 0),
+						timeout, null, syncExecutor);
 		final long handle = beginOutcome instanceof TransportOutcome.Dml dml ? dml.affected() : 0L;
 		return new SyncTxContext(transport, sessionId, handle, timeout, syncExecutor);
 	}
@@ -162,7 +167,7 @@ public final class SyncConnection implements AutoCloseable {
 				? timeout
 				: execTimeout;
 		if (readFactory != null && SqlClientRouteUtil.allRead(prepareRouteCache, sqls)) {
-			final org.genfork.grid.sql.client.Connection borrowed =
+			final Connection borrowed =
 					SyncAwait.await(readFactory.obtainStage(), effective, null, syncExecutor);
 			if (!(borrowed instanceof RemoteConnection readRemote)) {
 				throw new IllegalStateException("read obtainStage must return RemoteConnection");
@@ -187,6 +192,14 @@ public final class SyncConnection implements AutoCloseable {
 			return dml.affected();
 		}
 		return 0L;
+	}
+
+	/**
+	 * Autocommit SELECT (or other result-set SQL) → dense cell rows.
+	 */
+	public List<Object[]> query(String sql) {
+		final SyncResult result = statement(sql).executeOne();
+		return result == null ? List.of() : result.objectRows();
 	}
 
 	public SyncPreparedHandle prepare(String name, String bodySql) {
@@ -268,7 +281,7 @@ public final class SyncConnection implements AutoCloseable {
 	 */
 	private void drainActiveRequestsBeforePark() {
 		final long deadlineNanos = System.nanoTime()
-				+ java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(PARK_DRAIN_BUDGET_MS);
+				+ TimeUnit.MILLISECONDS.toNanos(PARK_DRAIN_BUDGET_MS);
 		while (transport.activeRequests() > 0 && System.nanoTime() < deadlineNanos) {
 			try {
 				Thread.sleep(PARK_DRAIN_SPIN_MS);

@@ -82,7 +82,7 @@ public class PitrRestoreIT {
 					liveDir.resolve(SealedBaseBackupUtil.INDEX_CKPT_DIR).resolve("ckpt.meta"),
 					"wm=2");
 
-			final int backed = SealedBaseBackupUtil.backupBase(liveDir, baseDir, 2L);
+			final int backed = SealedBaseBackupUtil.backupBase(liveDir, baseDir, 0L);
 			assertTrue(backed >= 2);
 
 			OpLogArchiveUtil.archiveBeforeTruncate(live, archiveRoot, DOMAIN, SHARD, 2L);

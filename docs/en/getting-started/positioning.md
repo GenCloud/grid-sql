@@ -28,9 +28,7 @@ Turn them on independently. Details: [durability](../configure-and-operate/confi
 
 With durability on, a row is visible **after** the journal and checksum agreement — not “memory first, disk later”. A failure at any step returns an error to the client with no half-applied row. Better a reject than two journals.
 
-That means: `fsync` on working profiles; one writer at a time (phase-ranked); role hand-off via `ServerMeta` / `PROMOTE_NOTIFY`, without rotating URL hosts by hand.
-
-More: [architecture overview](../understand/architecture-overview.md), [ORCHID](../understand/orchid-consensus.md), [promote](../configure-and-operate/operations/ha-promote.md).
+That means: `fsync` on working profiles; one writer at a time among synced peers (`min(nodeId)`); role hand-off via `ServerMeta` / `PROMOTE_NOTIFY`, without rotating URL hosts by hand.
 
 ## Speed where the hot set lives
 

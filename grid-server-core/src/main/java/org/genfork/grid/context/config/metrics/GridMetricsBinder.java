@@ -26,11 +26,13 @@ import org.genfork.grid.metrics.SqlTxMetrics;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.crossdc.CrossDcPublisher;
+import org.genfork.grid.replication.metrics.DurabilityMetrics;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.snapshot.sealed.SealedMetrics;
 import org.genfork.grid.replication.swarm.AdaptiveReplicaSwarm;
 import org.genfork.grid.replication.swarm.PlacementHint;
+import org.genfork.grid.replication.swarm.SwarmMigrateLoadGate;
 import org.springframework.beans.factory.ObjectProvider;
 
 /**
@@ -60,12 +62,24 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_REPAIR_APPLIED = "grid.replication.repair_applied";
 	public static final String METRIC_RPO_ESTIMATE_MS = "grid.replication.rpo_estimate_ms";
 	public static final String METRIC_SWARM_HINT = "grid.replication.swarm_hint";
+	public static final String METRIC_MIGRATE_IO_ALLOWED = "grid.replication.migrate_io_allowed";
+	public static final String METRIC_MIGRATE_IO_SUPPRESSED = "grid.replication.migrate_io_suppressed";
+	public static final String METRIC_MIGRATE_IO_SUPPRESSED_LAG = "grid.replication.migrate_io_suppressed_lag";
+	public static final String METRIC_MIGRATE_IO_SUPPRESSED_PRESSURE = "grid.replication.migrate_io_suppressed_pressure";
+	public static final String METRIC_MIGRATE_IO_SUPPRESSED_PIN = "grid.replication.migrate_io_suppressed_pin";
 
 	public static final String METRIC_SEALED_MISS = "grid.sealed.miss";
 	public static final String METRIC_SEALED_WINDOW_REMAP = "grid.sealed.window_remap";
 	public static final String METRIC_SEALED_STICKY_REJECTED = "grid.sealed.sticky_rejected";
 	public static final String METRIC_SEALED_INDEX_HIT = "grid.sealed.index_hit";
 	public static final String METRIC_SEALED_INDEX_MISS = "grid.sealed.index_miss";
+	public static final String METRIC_SEALED_SEAL_FAIL_SIZE = "grid.sealed.seal_fail_size";
+	public static final String METRIC_SEALED_INDEX_PAGE_FAULT = "grid.sealed.index_page_fault";
+	public static final String METRIC_ADAPTIVE_MODE_CHANGES = "grid.durability.adaptive_mode_changes";
+	public static final String METRIC_ADAPTIVE_MODE = "grid.durability.adaptive_mode";
+	public static final String METRIC_WS_SIZE = "grid.durability.ws_size";
+	public static final String METRIC_WS_MAX_ENTRIES = "grid.durability.ws_max_entries";
+	public static final String METRIC_WS_EVICTIONS = "grid.durability.ws_evictions";
 
 	public static final String METRIC_SQL_EXECUTIONS = "grid.sql.executions";
 	public static final String METRIC_SQL_COMMITS = "grid.sql.tx_commits";
@@ -80,9 +94,22 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_SQL_LOCK_WAIT_TIMEOUTS = "grid.sql.lock.wait_timeouts";
 	public static final String METRIC_SQL_LOCK_WAIT_CANCELS = "grid.sql.lock.wait_cancels";
 	public static final String METRIC_SQL_LOCK_WAIT_NANOS = "grid.sql.lock.wait_nanos";
+	public static final String METRIC_SQL_LOCK_PEER_LEASE_EXPIRED = "grid.sql.lock.peer_lease_expired";
+	public static final String METRIC_SQL_LOCK_PEER_RELEASE_MISS = "grid.sql.lock.peer_release_miss";
+	public static final String METRIC_SQL_AQE_RESPLIT = "grid.sql.aqe.resplit";
+	public static final String METRIC_SQL_AQE_COALESCE = "grid.sql.aqe.coalesce";
+	public static final String METRIC_SQL_MAP_REDUCE_CALLS = "grid.sql.distributed.map_reduce_calls";
+	public static final String METRIC_SQL_MAP_REDUCE_STAGES = "grid.sql.distributed.map_reduce_stages";
+	public static final String METRIC_SQL_MAP_REDUCE_ROWS = "grid.sql.distributed.map_reduce_rows";
+	public static final String METRIC_WRITER_ELIGIBLE = "grid.replication.writer_eligible";
+	public static final String METRIC_REGION_EPOCH = "grid.replication.region_epoch";
+	public static final String METRIC_PROMOTE_HINT_EMPTY = "grid.replication.promote_hint_empty";
+	public static final String METRIC_HYDRATE_SHARDS_DONE = "grid.durability.hydrate_shards_done";
+	public static final String METRIC_HYDRATE_SHARDS_TOTAL = "grid.durability.hydrate_shards_total";
 
 	private static final double SWARM_HINT_ABSENT = -1.0d;
 	private static final double ZERO = 0.0d;
+	private static final double ONE = 1.0d;
 
 	private final ObjectProvider<ReplicationCoordinator> coordinatorProvider;
 
@@ -136,6 +163,22 @@ public final class GridMetricsBinder implements MeterBinder {
 		Gauge.builder(METRIC_SWARM_HINT, this, GridMetricsBinder::sampleSwarmHintOrdinal)
 				.description("AdaptiveReplicaSwarm last PlacementHint ordinal (-1 if absent)")
 				.register(registry);
+		FunctionCounter.builder(METRIC_MIGRATE_IO_ALLOWED, this, GridMetricsBinder::sampleMigrateIoAllowed)
+				.description("SwarmMigrateLoadGate migrate I/O allow decisions")
+				.register(registry);
+		FunctionCounter.builder(METRIC_MIGRATE_IO_SUPPRESSED, this, GridMetricsBinder::sampleMigrateIoSuppressed)
+				.description("SwarmMigrateLoadGate migrate I/O suppress decisions (all reasons)")
+				.register(registry);
+		FunctionCounter.builder(METRIC_MIGRATE_IO_SUPPRESSED_LAG, this, GridMetricsBinder::sampleMigrateIoSuppressedLag)
+				.description("Migrate I/O suppressed due to apply lag floor")
+				.register(registry);
+		FunctionCounter.builder(METRIC_MIGRATE_IO_SUPPRESSED_PRESSURE, this, GridMetricsBinder::sampleMigrateIoSuppressedPressure)
+				.description("Migrate I/O suppressed due to queue/heap pressure or calm ticks")
+				.register(registry);
+		FunctionCounter.builder(METRIC_MIGRATE_IO_SUPPRESSED_PIN, ReplicationMetrics.class,
+						m -> ReplicationMetrics.migrateIoSuppressedPin())
+				.description("Migrate I/O skipped because overlay PIN blocked the shard")
+				.register(registry);
 
 		FunctionCounter.builder(METRIC_SEALED_MISS, SealedMetrics.class, m -> SealedMetrics.SEALED_MISS.get())
 				.register(registry);
@@ -146,6 +189,27 @@ public final class GridMetricsBinder implements MeterBinder {
 		FunctionCounter.builder(METRIC_SEALED_INDEX_HIT, SealedMetrics.class, m -> SealedMetrics.SEALED_INDEX_HIT.get())
 				.register(registry);
 		FunctionCounter.builder(METRIC_SEALED_INDEX_MISS, SealedMetrics.class, m -> SealedMetrics.SEALED_INDEX_MISS.get())
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_SEAL_FAIL_SIZE, SealedMetrics.class, m -> SealedMetrics.SEAL_FAIL_SIZE.get())
+				.description("Seal dump failures due to size / IO")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INDEX_PAGE_FAULT, SealedMetrics.class, m -> SealedMetrics.SEALED_INDEX_PAGE_FAULT.get())
+				.description("Sealed .sbpt page faults")
+				.register(registry);
+		FunctionCounter.builder(METRIC_ADAPTIVE_MODE_CHANGES, ReplicationMetrics.class, m -> ReplicationMetrics.adaptiveModeChanges())
+				.description("Adaptive disk-first mode transitions")
+				.register(registry);
+		Gauge.builder(METRIC_ADAPTIVE_MODE, this, GridMetricsBinder::sampleAdaptiveModeOrdinal)
+				.description("Adaptive disk-first mode ordinal (-1 if off)")
+				.register(registry);
+		Gauge.builder(METRIC_WS_SIZE, DurabilityMetrics.class, m -> DurabilityMetrics.wsSize())
+				.description("Working-set live entry count")
+				.register(registry);
+		Gauge.builder(METRIC_WS_MAX_ENTRIES, DurabilityMetrics.class, m -> DurabilityMetrics.wsMaxEntries())
+				.description("Working-set max entries cap")
+				.register(registry);
+		FunctionCounter.builder(METRIC_WS_EVICTIONS, DurabilityMetrics.class, m -> DurabilityMetrics.wsEvictions())
+				.description("Working-set CLOCK evictions")
 				.register(registry);
 
 		FunctionCounter.builder(METRIC_SQL_EXECUTIONS, SqlTxMetrics.class, m -> SqlTxMetrics.executions())
@@ -187,6 +251,46 @@ public final class GridMetricsBinder implements MeterBinder {
 		FunctionCounter.builder(METRIC_SQL_LOCK_WAIT_NANOS, SqlLockMetrics.class,
 						m -> SqlLockMetrics.waitNanosTotal())
 				.description("Total nanoseconds spent waiting for record locks")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_LOCK_PEER_LEASE_EXPIRED, SqlLockMetrics.class,
+						m -> SqlLockMetrics.peerLeaseExpired())
+				.description("Peer FOR UPDATE leases expired by TTL sweeper")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_LOCK_PEER_RELEASE_MISS, SqlLockMetrics.class,
+						m -> SqlLockMetrics.peerReleaseMiss())
+				.description("Peer FOR UPDATE release ACK miss / timeout")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_AQE_RESPLIT, DistributedQueryMetrics.class,
+						m -> DistributedQueryMetrics.aqeResplit())
+				.description("AQE mid-flight chunk re-splits")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_AQE_COALESCE, DistributedQueryMetrics.class,
+						m -> DistributedQueryMetrics.aqeCoalesce())
+				.description("AQE mid-flight chunk coalesces")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_MAP_REDUCE_CALLS, DistributedQueryMetrics.class,
+						m -> DistributedQueryMetrics.mapReduceCalls())
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_MAP_REDUCE_STAGES, DistributedQueryMetrics.class,
+						m -> DistributedQueryMetrics.mapReduceStages())
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_MAP_REDUCE_ROWS, DistributedQueryMetrics.class,
+						m -> DistributedQueryMetrics.mapReduceRows())
+				.register(registry);
+		Gauge.builder(METRIC_WRITER_ELIGIBLE, this, GridMetricsBinder::sampleWriterEligible)
+				.description("Writer eligible 0/1")
+				.register(registry);
+		Gauge.builder(METRIC_REGION_EPOCH, this, GridMetricsBinder::sampleRegionEpoch)
+				.description("Region epoch")
+				.register(registry);
+		Gauge.builder(METRIC_PROMOTE_HINT_EMPTY, this, GridMetricsBinder::samplePromoteHintEmpty)
+				.description("1 when promoteHint is empty/absent")
+				.register(registry);
+		Gauge.builder(METRIC_HYDRATE_SHARDS_DONE, this, GridMetricsBinder::sampleHydrateShardsDone)
+				.description("FULL hydrate shards completed")
+				.register(registry);
+		Gauge.builder(METRIC_HYDRATE_SHARDS_TOTAL, this, GridMetricsBinder::sampleHydrateShardsTotal)
+				.description("FULL hydrate shards total")
 				.register(registry);
 	}
 
@@ -232,6 +336,87 @@ public final class GridMetricsBinder implements MeterBinder {
 		}
 		final PlacementHint hint = swarm.getLastHint().get();
 		return hint == null ? SWARM_HINT_ABSENT : (double) hint.ordinal();
+	}
+
+	private double sampleMigrateIoAllowed() {
+		final SwarmMigrateLoadGate gate = loadGateOrNull();
+		return gate == null ? ZERO : (double) gate.migrateIoAllowedCount();
+	}
+
+	private double sampleMigrateIoSuppressed() {
+		final SwarmMigrateLoadGate gate = loadGateOrNull();
+		return gate == null ? ZERO : (double) gate.migrateIoSuppressedTotal();
+	}
+
+	private double sampleMigrateIoSuppressedLag() {
+		final SwarmMigrateLoadGate gate = loadGateOrNull();
+		return gate == null ? ZERO : (double) gate.migrateIoSuppressedLagCount();
+	}
+
+	private double sampleMigrateIoSuppressedPressure() {
+		final SwarmMigrateLoadGate gate = loadGateOrNull();
+		return gate == null ? ZERO : (double) gate.migrateIoSuppressedPressureCount();
+	}
+
+	private SwarmMigrateLoadGate loadGateOrNull() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return null;
+		}
+		final AdaptiveReplicaSwarm swarm = coordinator.getSwarm();
+		if (swarm == null) {
+			return null;
+		}
+		return swarm.getLoadGate();
+	}
+
+	private double sampleAdaptiveModeOrdinal() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled() || !coordinator.isAdaptiveDiskFirst()) {
+			return SWARM_HINT_ABSENT;
+		}
+		return (double) coordinator.adaptiveModeOrdinal();
+	}
+
+	private double sampleWriterEligible() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return coordinator.isWriterEligible() ? ONE : ZERO;
+	}
+
+	private double sampleRegionEpoch() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return (double) coordinator.regionEpoch();
+	}
+
+	private double samplePromoteHintEmpty() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ONE;
+		}
+		final String hint = coordinator.promoteHint();
+		return hint == null || hint.isEmpty() ? ONE : ZERO;
+	}
+
+	private double sampleHydrateShardsDone() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return coordinator.hydrateShardsDone();
+	}
+
+	private double sampleHydrateShardsTotal() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return coordinator.hydrateShardsTotal();
 	}
 
 	private HomologousRepair homologousRepairOrNull() {

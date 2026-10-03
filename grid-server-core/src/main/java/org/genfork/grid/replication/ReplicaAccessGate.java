@@ -35,6 +35,7 @@ public final class ReplicaAccessGate {
 	private static final String WRITE_LEARNER_DENIED = "write denied on cross-dc learner (write-admission=false)";
 	private static final String WRITE_REGION_FENCED = "write denied: region fenced (not Active or epoch mismatch)";
 	private static final String WRITE_STALE = "write denied until apply lag caught up";
+	private static final String WRITE_SHARD_DRAINING = "write denied: shard draining (QUIESCE/CATCH_UP)";
 	private static final String READ_LEARNER_DENIED = "read denied on cross-dc learner (write-admission=false)";
 	private static final String READ_STALE = "stale replica read (apply lag exceeded)";
 	private static final String READ_REQUIRES_PROPOSER = "read requires phase-ranked proposer";
@@ -58,6 +59,28 @@ public final class ReplicaAccessGate {
 				replication.isWriterEligible(),
 				replication.isApplyLagStale(),
 				replication.regionAllowsWrites());
+	}
+
+	/**
+	 * Fail-closed write fence while {@link org.genfork.grid.replication.swarm.ShardPlacementMap#isDraining}
+	 * for the target stream (QUIESCE / CATCH_UP). No-op when replication disabled or migrator absent.
+	 *
+	 * @throws OrchidNotSyncedException when the shard is draining
+	 */
+	public static void ensureShardWritable(ReplicationCoordinator replication, String domainType, int shard) {
+		if (replication == null || !replication.isEnabled()) {
+			return;
+		}
+		if (replication.isShardDraining(domainType, shard)) {
+			throw new OrchidNotSyncedException(WRITE_SHARD_DRAINING);
+		}
+	}
+
+	@VisibleForTesting
+	public static void ensureShardWritableState(boolean draining) {
+		if (draining) {
+			throw new OrchidNotSyncedException(WRITE_SHARD_DRAINING);
+		}
 	}
 
 	/**

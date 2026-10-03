@@ -25,13 +25,14 @@ import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.query.filters.impl.LogicalOperatorCondition;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.SqlWireUtil;
-import org.genfork.grid.utils.ArrayVectors;
+import org.genfork.grid.serial.WireRangeOps;
+import org.genfork.grid.serial.WireSpan;
 
 /**
  * Batch residual filter over wire blobs (SIMD EQ path + scalar fallback).
  * <p>
- * Simple single-column {@code EQ} uses {@link ArrayVectors#bytesEqual} on
- * {@link LogicalFieldCursor#indexKeyBytes}; complex trees fall back to
+ * Simple single-column {@code EQ} uses {@link WireRangeOps#equals} on
+ * {@link LogicalFieldCursor#indexKeySpan}; complex trees fall back to
  * {@link FilterCondition#matches(byte[], TableSchema)}.
  *
  * @author: GenCloud
@@ -39,8 +40,6 @@ import org.genfork.grid.utils.ArrayVectors;
  * @since: 1.0
  */
 public final class WireResidualBatch {
-	private static final int EMPTY = 0;
-
 	private WireResidualBatch() {
 	}
 
@@ -62,6 +61,36 @@ public final class WireResidualBatch {
 			return filterEqSimd(values, schema, (LogicalOperatorCondition) filter);
 		}
 		return filterScalar(values, schema, filter);
+	}
+
+	/**
+	 * Single-blob residual (same EQ span path as {@link #filterBlobs}).
+	 */
+	public static boolean matchesBlob(byte[] blob, TableSchema schema, FilterCondition filter) {
+		if (blob == null) {
+			return false;
+		}
+		if (filter == null) {
+			return true;
+		}
+		if (schema != null && isSimpleEq(filter)) {
+			final LogicalOperatorCondition eq = (LogicalOperatorCondition) filter;
+			final ColumnDef col = schema.column(eq.getField());
+			if (col == null) {
+				return filter.matches(blob, schema);
+			}
+			try {
+				final LogicalFieldCursor cursor = LogicalFieldCursor.open(schema, blob);
+				final WireSpan actual = cursor.indexKeySpan(col.ordinal());
+				final byte[] expected = SqlWireUtil.toGenericArray(eq.getValues()[0]);
+				return WireRangeOps.equals(
+						actual.blob(), actual.offset(), actual.length(),
+						expected, 0, expected == null ? 0 : expected.length);
+			} catch (RuntimeException ex) {
+				return false;
+			}
+		}
+		return filter.matches(blob, schema);
 	}
 
 	@VisibleForTesting
@@ -93,8 +122,10 @@ public final class WireResidualBatch {
 			}
 			try {
 				final LogicalFieldCursor cursor = LogicalFieldCursor.open(schema, blob);
-				final byte[] actual = cursor.indexKeyBytes(ordinal);
-				if (ArrayVectors.bytesEqual(actual, expected)) {
+				final WireSpan actual = cursor.indexKeySpan(ordinal);
+				if (WireRangeOps.equals(
+						actual.blob(), actual.offset(), actual.length(),
+						expected, 0, expected.length)) {
 					out.add(blob);
 				}
 			} catch (RuntimeException ex) {
@@ -121,9 +152,4 @@ public final class WireResidualBatch {
 		return out;
 	}
 
-	/** Named empty size (tests). */
-	@VisibleForTesting
-	public static int emptySize() {
-		return EMPTY;
-	}
 }
