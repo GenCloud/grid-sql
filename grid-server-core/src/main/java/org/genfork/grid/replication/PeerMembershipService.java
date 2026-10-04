@@ -17,6 +17,8 @@ package org.genfork.grid.replication;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationPeerProps;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -60,6 +62,13 @@ public final class PeerMembershipService {
 	private final CrossDcPublisher crossDcPublisher;
 	private final List<ReplicationPeer> peers;
 	private final RegionClaimService regionClaimService;
+	/**
+	 * Operator {@link #removePeer} tombstones: discovery HELLO must not silently re-{@link #addPeer}.
+	 * Without this, a late HELLO restored membership after intentional shrink; then
+	 * {@code channelInactive} {@code forgetPeer} left a configured peer with no live view
+	 * so the survivor never became solo-synced / writerEligible.
+	 */
+	private final Set<String> intentionallyRemovedPeerIds = ConcurrentHashMap.newKeySet();
 	/** Optional sealed source for HELLO catch-up past OpLog truncate (set after ctor). */
 	private volatile SealedGridMapService sealedGridMapService;
 
@@ -104,6 +113,7 @@ public final class PeerMembershipService {
 		if (!enabled || peer == null) {
 			return;
 		}
+		intentionallyRemovedPeerIds.remove(peer.id());
 		peers.removeIf(p -> peer.id().equals(p.id()));
 		peers.add(peer);
 		nettyTransport.addPeer(peer);
@@ -121,6 +131,7 @@ public final class PeerMembershipService {
 		if (!enabled || peerId == null) {
 			return;
 		}
+		intentionallyRemovedPeerIds.add(peerId);
 		peers.removeIf(p -> peerId.equals(p.id()));
 		nettyTransport.removePeer(peerId);
 		orchidNode.unconfigurePeer(peerId);
@@ -157,7 +168,10 @@ public final class PeerMembershipService {
 			return;
 		}
 		final boolean known = peers.stream().anyMatch(p -> discovered.id().equals(p.id()));
-		if (!known && discovered.port() > 0) {
+		// Intentional removePeer must stick until explicit addPeer — do not resurrect via HELLO.
+		if (!known
+				&& discovered.port() > 0
+				&& !intentionallyRemovedPeerIds.contains(discovered.id())) {
 			addPeer(new ReplicationPeer(discovered.id(), discovered.host(), discovered.port(), discovered.dc()));
 		}
 		if (regionClaimService != null
