@@ -53,6 +53,10 @@ More detail: [docs/en/internal/development.md](docs/en/internal/development.md).
 - Bugs and features: GitHub Issues on this repository
 - Security: follow the project’s disclosed channel in `SECURITY.md` if present; otherwise open a private report with the maintainers
 
-## License
+## License and CLA
 
-By contributing you agree that your contributions are licensed under the Apache License, Version 2.0 (`LICENSE`).
+The open tree is licensed under the Apache License, Version 2.0 (`LICENSE`).
+
+**External contributors must accept the [Contributor License Agreement](CLA.md) (CLA)** before a pull request can be merged. The CLA assigns copyright to GenCloud (with a fallback exclusive license) so GenCloud can relicense future versions and combine contributions with proprietary Open Core modules. A DCO-only sign-off is **not** enough for this project.
+
+In your PR description, include the acceptance text from `CLA.md`. If your employer owns your work, use the Corporate CLA section in `CLA.md`.

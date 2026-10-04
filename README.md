@@ -148,4 +148,4 @@ Product clients speak Grid frames over TCP: `grid://` and `jdbc:grid://` (same p
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [CLA.md](CLA.md) (required for external PRs), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

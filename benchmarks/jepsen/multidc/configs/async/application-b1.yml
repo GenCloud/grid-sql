@@ -103,3 +103,9 @@ management:
 
 server:
   port: 7780
+
+logging:
+  level:
+    root: INFO
+    org.genfork.grid: DEBUG
+    grid.diag.visibility: DEBUG

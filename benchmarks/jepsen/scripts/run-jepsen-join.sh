@@ -127,7 +127,22 @@ EOF
   return "$code"
 }
 
+
+
+dump_cluster_logs_on_fail() {
+  local ec="${1:-1}"
+  if [[ "$ec" -eq 0 ]]; then
+    return 0
+  fi
+  echo "=== FAIL (exit=$ec): dumping cluster docker logs before purge ==="
+  if [[ -x "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+    bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+  fi
+}
+
 release_ports() {
+  local _ec=$?
+  dump_cluster_logs_on_fail "$_ec" || true
   unset JEPSEN_JOIN_SHARDS || true
   if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
     bash "$JEPSEN_DIR/scripts/jepsen-purge.sh" 1dc || true
@@ -155,4 +170,5 @@ if [[ "$code" -eq 0 ]]; then
   exit 0
 fi
 stamp_outcome FAIL "join-shards=FAIL"
+dump_cluster_logs_on_fail 1 || true
 exit 1

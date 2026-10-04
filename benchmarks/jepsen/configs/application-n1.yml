@@ -82,3 +82,9 @@ management:
 
 server:
   port: 7777
+
+logging:
+  level:
+    root: INFO
+    org.genfork.grid: DEBUG
+    grid.diag.visibility: DEBUG

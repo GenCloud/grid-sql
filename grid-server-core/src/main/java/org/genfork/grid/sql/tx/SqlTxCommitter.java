@@ -16,6 +16,7 @@
 package org.genfork.grid.sql.tx;
 
 import org.genfork.grid.catalog.TableCatalog;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.metrics.SqlTxMetrics;
 import org.genfork.grid.replication.ReplicaAccessGate;
 import org.genfork.grid.replication.ReplicationCoordinator;
@@ -65,6 +66,7 @@ public final class SqlTxCommitter {
 		final List<DistForUpdatePeerLockLease> peerLeases = buf.peerLockedLeases();
 		final boolean locksOnly = buf.isEmpty() && !peerLeases.isEmpty();
 		if (buf.isEmpty() && !locksOnly) {
+			VisibilityDiag.debug("tx.commit", "empty dirty (no-op)");
 			catalog.flushSequencesIfDirty();
 			session.endTx();
 			SqlTxMetrics.recordCommit();
@@ -88,6 +90,18 @@ public final class SqlTxCommitter {
 		}
 		final byte[] envelopeValue = encodeEnvelope(buf);
 		final boolean singleStream = barrier.participatingStreams().size() == 1;
+		if (VisibilityDiag.enabled()) {
+			final StringBuilder streams = new StringBuilder();
+			for (MultiShardCommitBarrier.StreamKey sk : barrier.participatingStreams()) {
+				if (!streams.isEmpty()) {
+					streams.append(',');
+				}
+				streams.append(sk.table()).append('#').append(sk.shard());
+			}
+			VisibilityDiag.debugf("tx.commit",
+					"txId=%d repl=%s singleStream=%s streams=[%s] dirtyTables=%d",
+					buf.txId(), repl, singleStream, streams, buf.tables().size());
+		}
 		try {
 			if (repl) {
 				ReplicaAccessGate.ensureWrite(replication);
@@ -121,7 +135,9 @@ public final class SqlTxCommitter {
 			catalog.flushSequencesIfDirty();
 			session.endTx();
 			SqlTxMetrics.recordCommit();
+			VisibilityDiag.debugf("tx.commit", "OK txId=%d installed=%d", buf.txId(), installed.size());
 		} catch (RuntimeException ex) {
+			VisibilityDiag.debugf("tx.commit", "FAIL txId=%d err=%s", buf.txId(), ex.toString());
 			finishForUpdatePrepare(session, buf, false);
 			if (!repl) {
 				restoreInstalled(installed);
@@ -214,7 +230,7 @@ public final class SqlTxCommitter {
 			for (SqlTxBuffer.DirtyEntry e : te.getValue().values()) {
 				byStream.computeIfAbsent(
 						new MultiShardCommitBarrier.StreamKey(te.getKey(), e.shard()),
-						k -> new ArrayList<>()
+                        _ -> new ArrayList<>()
 				).add(e);
 			}
 		}

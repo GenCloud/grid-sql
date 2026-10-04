@@ -156,7 +156,17 @@ function Ensure-SqlClient {
   Push-Location $ROOT
   try { mvn -B -pl grid-sql-client -am install "-DskipTests"; if ($LASTEXITCODE -ne 0) { throw "mvn install failed" } } finally { Pop-Location }
 }
+function Dump-ClusterLogsOnFail {
+  if ($script:ExitCode -eq 0) { return }
+  Write-Host "=== FAIL: dumping cluster docker logs before purge ==="
+  $bash = "C:\Program Files\Git\bin\bash.exe"
+  $dump = Join-Path $JEPSEN_DIR "scripts/dump-jepsen-cluster-logs.sh"
+  if (Test-Path $dump) {
+    & $bash $dump
+  }
+}
 function Release-JepsenPorts {
+  Dump-ClusterLogsOnFail
   Write-Host "Releasing Jepsen host ports (1dc+multidc compose down)..."
   $purge = Join-Path $JEPSEN_DIR "scripts\jepsen-purge.ps1"
   if (Test-Path $purge) {
@@ -353,16 +363,33 @@ $script:ExitCode = 2
 try {
   Ensure-SqlClient
   Ensure-Cluster
-  Write-Host "=== Multi-DC $ModeLabel workload: register ==="
-  $reg = Run-Workload register
-  $REGISTER_OUTCOME = if ($reg.code -eq 0) { "PASS (:valid? true)" } else { "FAIL" }
-  Ensure-Cluster
-  Write-Host "=== Multi-DC $ModeLabel workload: append ==="
-  $app = Run-Workload append
-  $APPEND_OUTCOME = if ($app.code -eq 0) { "PASS (:valid? true)" } else { "FAIL" }
+  $workloadList = @()
+  foreach ($w in ($env:MULTIDC_WORKLOADS -split ",")) {
+    $t = $w.Trim()
+    if ($t -ne "") { $workloadList += $t }
+  }
+  if ($workloadList.Count -eq 0) { $workloadList = @("register", "append") }
+  $regCode = 0
+  $appCode = 0
+  $REGISTER_OUTCOME = "n/a"
+  $APPEND_OUTCOME = "n/a"
+  if ($workloadList -contains "register") {
+    Write-Host "=== Multi-DC $ModeLabel workload: register ==="
+    $reg = Run-Workload register
+    $regCode = $reg.code
+    $REGISTER_OUTCOME = if ($regCode -eq 0) { "PASS (:valid? true)" } else { "FAIL" }
+    if ($regCode -ne 0) { $script:ExitCode = 1; Dump-ClusterLogsOnFail }
+    Ensure-Cluster
+  }
+  if ($workloadList -contains "append") {
+    Write-Host "=== Multi-DC $ModeLabel workload: append ==="
+    $app = Run-Workload append
+    $appCode = $app.code
+    $APPEND_OUTCOME = if ($appCode -eq 0) { "PASS (:valid? true)" } else { "FAIL" }
+  }
   $Lat = "register: $(Latency-Line register); append: $(Latency-Line append)"
-  $NOTES = "register=$REGISTER_OUTCOME; append=$APPEND_OUTCOME; time-limit=$TimeLimit"
-  $Outcome = if ($reg.code -eq 0 -and $app.code -eq 0) { "PASS" } else { "FAIL" }
+  $NOTES = "register=$REGISTER_OUTCOME; append=$APPEND_OUTCOME; time-limit=$TimeLimit; workloads=$($workloadList -join ',')"
+  $Outcome = if ($regCode -eq 0 -and $appCode -eq 0) { "PASS" } else { "FAIL" }
   Stamp-Multidc -Outcome $Outcome -Notes $NOTES -Reg $REGISTER_OUTCOME -App $APPEND_OUTCOME -Lat $Lat
   $script:ExitCode = if ($Outcome -eq "PASS") { 0 } else { 1 }
 } catch {

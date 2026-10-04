@@ -321,7 +321,25 @@ run_workload() {
 }
 
 ensure_cluster
+dump_cluster_logs_if_needed() {
+  local ec="${1:-}"
+  if [[ -z "$ec" ]]; then
+    if [[ "${ALL_PASS:-1}" == "1" ]]; then
+      return 0
+    fi
+    ec=1
+  elif [[ "$ec" -eq 0 ]]; then
+    return 0
+  fi
+  echo "=== FAIL (exit=$ec): dumping cluster docker logs before purge ==="
+  if [[ -x "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+    bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+  fi
+}
+
 release_jepsen_ports() {
+  local _ec=$?
+  dump_cluster_logs_if_needed "$_ec" || true
   echo "Releasing Jepsen host ports (1dc+multidc compose down)..."
   if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
     bash "$JEPSEN_DIR/scripts/jepsen-purge.sh" all || true
@@ -351,6 +369,8 @@ for wl in "${WORKLOAD_LIST[@]}"; do
   else
     outcome=FAIL
     ALL_PASS=0
+    # Dump before next ensure_cluster / EXIT purge wipes containers.
+    dump_cluster_logs_if_needed 1 || true
   fi
   case "$wl" in
     register) REG_OUTCOME="$outcome" ;;
@@ -369,4 +389,5 @@ if [[ "$ALL_PASS" == "1" ]]; then
   exit 0
 fi
 stamp_multidc "$STAMP_BASE" "FAIL" "$NOTES" "$REG_OUTCOME" "$APP_OUTCOME"
+dump_cluster_logs_if_needed 1 || true
 exit 1
