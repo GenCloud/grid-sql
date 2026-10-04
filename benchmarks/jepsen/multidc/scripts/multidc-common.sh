@@ -15,16 +15,22 @@ MODE="${1:?mode required: async|sync-voters|async-swarm}"
 MULTIDC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 JEPSEN_DIR="$(cd "$MULTIDC_DIR/.." && pwd)"
 ROOT="$(cd "$JEPSEN_DIR/../.." && pwd)"
-RESULTS="$MULTIDC_DIR/RESULTS.md"
+# shellcheck source=../../scripts/jepsen-instance-env.sh
+. "$JEPSEN_DIR/scripts/jepsen-instance-env.sh"
+RESULTS="${JEPSEN_RESULTS_FILE:-$MULTIDC_DIR/RESULTS.md}"
 cd "$MULTIDC_DIR"
 
 export MULTIDC_MODE="$MODE"
 export JEPSEN_M2="${JEPSEN_M2:-${HOME}/.m2}"
 export JEPSEN_NODES="${JEPSEN_NODES:-a1,a2,a3,b1,b2}"
-export JEPSEN_HTTP_PORTS="${JEPSEN_HTTP_PORTS:-7777,7778,7779,7780,7781}"
-export JEPSEN_SQL_PORTS="${JEPSEN_SQL_PORTS:-15432,15433,15434,15435,15436}"
+export JEPSEN_HTTP_PORTS="${JEPSEN_HTTP_PORTS:-$JEPSEN_HTTP_PORTS_MDC}"
+export JEPSEN_SQL_PORTS="${JEPSEN_SQL_PORTS:-$JEPSEN_SQL_PORTS_MDC}"
 export JEPSEN_USE_LOCALHOST="${JEPSEN_USE_LOCALHOST:-0}"
 export JEPSEN_MULTI_HOST="${JEPSEN_MULTI_HOST:-1}"
+MDC_PREFIX="${JEPSEN_MDC_CTR_PREFIX:-jamoa-multidc}"
+CONTROL_NAME="${CONTROL_NAME:-${MDC_PREFIX}-control}"
+HOST_SQL_URL="grid://grid:grid@127.0.0.1:${JEPSEN_HOST_SQL_N1},127.0.0.1:${JEPSEN_HOST_SQL_N2},127.0.0.1:${JEPSEN_HOST_SQL_N3},127.0.0.1:${JEPSEN_HOST_SQL_B1}/public"
+ACTIVE_HTTP_PORTS="${JEPSEN_HOST_HTTP_N1},${JEPSEN_HOST_HTTP_N2},${JEPSEN_HOST_HTTP_N3}"
 # Comma-separated Jepsen workloads (default register+append). Edge: append | join.
 MULTIDC_WORKLOADS="${MULTIDC_WORKLOADS:-register,append}"
 TIME_LIMIT="${JEPSEN_TIME_LIMIT:-30}"
@@ -97,7 +103,7 @@ ${lat_line}| notes | $notes |
 Multi-host SQL URL:
 
 \`\`\`
-grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public
+${HOST_SQL_URL}
 \`\`\`
 
 See [README.md](README.md). Coverage: [../COVERAGE.md](../COVERAGE.md). Parent 1-DC: [../RESULTS.md](../RESULTS.md).
@@ -112,8 +118,8 @@ EOF
   echo "Wrote $RESULTS stamp=$stamp outcome=$outcome register=$reg append=$app chaos=$CHAOS_NOTE"
 }
 
-echo "=== Multi-DC $MODE_LABEL (nemesis=$MULTIDC_NEMESIS) ==="
-echo "SQL URL: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public"
+echo "=== Multi-DC $MODE_LABEL (nemesis=$MULTIDC_NEMESIS instance=${JEPSEN_INSTANCE:-default} offset=${JEPSEN_PORT_OFFSET:-0}) ==="
+echo "SQL URL: ${HOST_SQL_URL}"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   echo "Docker unavailable"
@@ -154,23 +160,29 @@ else
   "$JEPSEN_DIR/scripts/build-jepsen-image.sh"
 fi
 
-echo "Installing grid-sql-client..."
-( cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests )
+if [[ "${JEPSEN_SKIP_MVN_INSTALL:-0}" == "1" ]]; then
+  echo "Skip per-cell mvn install (JEPSEN_SKIP_MVN_INSTALL=1; use shared ~/.m2)"
+else
+  echo "Installing grid-sql-client..."
+  ( cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -Dmaven.test.skip=true )
+fi
 
 ensure_cluster() {
-  # Scope=all frees leftover 1-DC host binds (15432+) before Multi-DC up.
-  if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
+  # Parallel cells: only tear down this COMPOSE_PROJECT_NAME. Singleton: full purge frees binds.
+  if [[ -n "${JEPSEN_INSTANCE:-}" ]]; then
+    docker compose down -v --remove-orphans || true
+  elif [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
     bash "$JEPSEN_DIR/scripts/jepsen-purge.sh" all || true
   else
     docker compose down -v --remove-orphans || true
   fi
   docker compose up -d --force-recreate a1 a2 a3 b1 b2
-  echo "Waiting for health..."
+  echo "Waiting for health (prefix=$MDC_PREFIX)..."
   deadline=$((SECONDS + 240))
   ok=0
   while (( SECONDS < deadline )); do
     ok=1
-    for name in jamoa-multidc-a1 jamoa-multidc-a2 jamoa-multidc-a3 jamoa-multidc-b1 jamoa-multidc-b2; do
+    for name in "${MDC_PREFIX}-a1" "${MDC_PREFIX}-a2" "${MDC_PREFIX}-a3" "${MDC_PREFIX}-b1" "${MDC_PREFIX}-b2"; do
       st=$(docker inspect -f '{{.State.Health.Status}}' "$name" 2>/dev/null || echo missing)
       [[ "$st" == "healthy" ]] || ok=0
     done
@@ -189,11 +201,9 @@ ensure_cluster() {
       export WRITER_SETTLE_DEADLINE_SEC="${WRITER_SETTLE_DEADLINE_SEC:-240}"
     fi
     # Hard-fail: generators must not start without a phase-ranked writer.
-    bash "$JEPSEN_DIR/scripts/wait-writer-eligible.sh" "7777,7778,7779"
+    bash "$JEPSEN_DIR/scripts/wait-writer-eligible.sh" "$ACTIVE_HTTP_PORTS"
   fi
 }
-
-CONTROL_NAME="${CONTROL_NAME:-jamoa-multidc-control}"
 
 # Git Bash converts /jepsen/... to a host path; keep container paths literal.
 export MSYS_NO_PATHCONV=1

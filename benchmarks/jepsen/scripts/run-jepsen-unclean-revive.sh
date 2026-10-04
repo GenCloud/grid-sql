@@ -5,6 +5,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 JEPSEN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=jepsen-instance-env.sh
+. "$JEPSEN_DIR/scripts/jepsen-instance-env.sh"
 
 export JEPSEN_UNCLEAN_REVIVE=1
 export JEPSEN_UNCLEAN_DOWN_SEC="${JEPSEN_UNCLEAN_DOWN_SEC:-15}"

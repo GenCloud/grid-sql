@@ -294,7 +294,7 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		for (ReplicationOp op : segment.ops()) {
 			ReplicationOp current = op;
 			byte[] value = current.value();
-			if (value != null && DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
+			if (DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
 				value = homologousRepair != null
 						? homologousRepair.verifyOrRebuildValue(value)
 						: DuplexCodecSupport.getCodec().getVerifier()

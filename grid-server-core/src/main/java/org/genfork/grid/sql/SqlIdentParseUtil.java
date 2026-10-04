@@ -152,10 +152,7 @@ public final class SqlIdentParseUtil {
 		if (aOnRight && !bOnRight) {
 			return new JoinEq(bCol, aCol);
 		}
-		if (!aOnRight && bOnRight) {
-			return new JoinEq(aCol, bCol);
-		}
-		return new JoinEq(aCol, bCol);
+        return new JoinEq(aCol, bCol);
 	}
 
 	/**

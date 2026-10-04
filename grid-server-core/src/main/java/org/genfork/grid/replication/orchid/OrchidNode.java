@@ -292,6 +292,9 @@ public class OrchidNode {
 		}
 		final PeerView view = peers.computeIfAbsent(peerId, PeerView::new);
 		view.seen = true; // HELLO / channel up (may be remote voter without phase coupling)
+		// Tip not yet known from this peer — writerEligible / admit stay false until phase tip
+		// (unclean heal: lex-smaller lagging node was eligible with stale maxSeen → Elle G-single).
+		view.tipAdvertised = false;
 		if (isPhaseCoupledPeer(peerId) || isLocalPeer(peerId)) {
 			broadcastOwnPhase(0L, 0L);
 		}
@@ -371,27 +374,50 @@ public class OrchidNode {
 	 */
 	private void scheduleSealBufferedThenClearProposer(String proposerId) {
 		if (!running.get()) {
-			clearRemoteInflightForProposer(proposerId);
+			clearStaleRemoteInflightForProposer(proposerId);
 			return;
 		}
 		commitApplyQueue.submit(ThreadService.getLogicExecutor(), () -> {
 			sealBufferedProposesFromProposerSerial(proposerId);
-			clearRemoteInflightForProposer(proposerId);
+			// Keep ahead-of-tip digested inflight — clearing them forged Elle G-single after unclean kill.
+			clearStaleRemoteInflightForProposer(proposerId);
 		});
 	}
 
 	/**
-	 * Drop pipeline accept tips registered for a disconnected proposer.
-	 * Caller must seal contiguous entries first ({@link #sealBufferedProposesSerial()}).
+	 * Drop only stale (at/behind tip) pipeline tips for a disconnected proposer.
+	 * Ahead-of-tip digested proposes stay until {@link #sealBufferedProposesSerial()} can advance tip
+	 * contiguously (admit / claim drain). Must run on {@link #commitApplyQueue} or when stopped.
 	 */
-	private void clearRemoteInflightForProposer(String proposerId) {
+	private void clearStaleRemoteInflightForProposer(String proposerId) {
 		if (proposerId == null) {
 			return;
 		}
+		final long tip = lastCommittedSeq;
 		remoteInflightExpected.entrySet().removeIf(e -> {
 			final RemoteInflight inflight = e.getValue();
-			return inflight != null && proposerId.equals(inflight.proposerId());
+			if (inflight == null || !proposerId.equals(inflight.proposerId())) {
+				return false;
+			}
+			return inflight.expectedOpSeq() <= tip;
 		});
+	}
+
+	/**
+	 * Test hook: count remote inflight proposes retained for {@code proposerId}.
+	 */
+	@VisibleForTesting
+	public int testingRemoteInflightCountForProposer(String proposerId) {
+		if (proposerId == null) {
+			return 0;
+		}
+		int n = 0;
+		for (RemoteInflight inflight : remoteInflightExpected.values()) {
+			if (inflight != null && proposerId.equals(inflight.proposerId())) {
+				n++;
+			}
+		}
+		return n;
 	}
 
 	public void markVoterEligible(String peerId) {
@@ -536,6 +562,10 @@ public class OrchidNode {
 		}
 		if (!isPhaseRankedProposer()) {
 			return AdmittedPropose.failed(new OrchidNotSyncedException("not phase-ranked proposer; active=" + phaseRankedProposerId()));
+		}
+		if (awaitsPeerTipAdvertisement()) {
+			return AdmittedPropose.failed(new OrchidNotSyncedException(
+					"awaiting peer tip advertisement after reconnect; refuse admit until phase tip"));
 		}
 		// Failover-only: seal quorum-digested buffer before minting a new tip. Healthy path is O(1).
 		if (!remoteInflightExpected.isEmpty()) {
@@ -682,6 +712,7 @@ public class OrchidNode {
 		view.proposeId = msg.proposeId();
 		view.digest = msg.digest();
 		view.seen = true;
+		view.tipAdvertised = true;
 		noteObservedPeerCommittedSeq(msg.lastCommittedSeq());
 		if (msg.proposeId() > 0L) {
 			final PendingPropose pendingPropose = pending.get(msg.proposeId());
@@ -803,11 +834,27 @@ public class OrchidNode {
 	public long maxSeenPeerCommittedSeq() {
 		long max = maxObservedPeerCommittedSeq.get();
 		for (PeerView peer : peers.values()) {
-			if (peer != null && peer.seen && peer.lastCommittedSeq > max) {
+			if (peer != null && peer.seen && peer.tipAdvertised && peer.lastCommittedSeq > max) {
 				max = peer.lastCommittedSeq;
 			}
 		}
 		return max;
+	}
+
+	/**
+	 * True when a live local (or phase-coupled) peer is channel-{@code seen} but has not yet
+	 * sent a phase tip after {@link #onPeerAvailable}. Writer admission must fail-closed meanwhile.
+	 */
+	public boolean awaitsPeerTipAdvertisement() {
+		for (PeerView peer : peers.values()) {
+			if (peer == null || !peer.seen || peer.tipAdvertised) {
+				continue;
+			}
+			if (isLocalPeer(peer.id) || isPhaseCoupledPeer(peer.id)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void noteObservedPeerCommittedSeq(long committedSeq) {
@@ -830,6 +877,7 @@ public class OrchidNode {
 		}
 		final PeerView view = peers.computeIfAbsent(peerId, PeerView::new);
 		view.seen = true;
+		view.tipAdvertised = true;
 		if (committedSeq > view.lastCommittedSeq) {
 			view.lastCommittedSeq = committedSeq;
 		}
@@ -1713,6 +1761,11 @@ public class OrchidNode {
 		volatile long proposeId;
 		volatile long digest;
 		volatile boolean seen;
+		/**
+		 * Set on phase tip (or test tip hook). Cleared on {@link OrchidNode#onPeerAvailable}
+		 * so HELLO-only peers cannot clear tip-catch-up / mint writerEligible.
+		 */
+		volatile boolean tipAdvertised;
 
 		PeerView(String id) {
 			this.id = id;

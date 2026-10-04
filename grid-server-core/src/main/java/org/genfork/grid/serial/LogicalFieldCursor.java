@@ -27,11 +27,7 @@ import org.genfork.grid.utils.SerialUtil;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
 /**
  * Reads/rewrites selected fields on logical (or duplex-unwrapped) row bytes without full domain convert.
@@ -43,24 +39,18 @@ import java.util.UUID;
  * @since: 1.0
  */
 public final class LogicalFieldCursor {
-	private enum TrailerKind { ABS_STARTS, HASH_OFFSET }
-
 	private final FieldMetaData[] fields;
 	private final byte[] logical;
 	private final int[] starts;
-	private final int[] hashes;
-	private final int payloadEnd;
-	private final TrailerKind trailerKind;
+    private final int payloadEnd;
 
-	private LogicalFieldCursor(FieldMetaData[] fields, byte[] logical,
-	                           int[] starts, int[] hashes, int payloadEnd, TrailerKind trailerKind) {
+    private LogicalFieldCursor(FieldMetaData[] fields, byte[] logical,
+                               int[] starts, int payloadEnd) {
 		this.fields = fields;
 		this.logical = logical;
 		this.starts = starts;
-		this.hashes = hashes;
-		this.payloadEnd = payloadEnd;
-		this.trailerKind = trailerKind;
-	}
+        this.payloadEnd = payloadEnd;
+    }
 
 	public static LogicalFieldCursor open(TableSchema schema, byte[] stored) {
 		final byte[] logical = SqlWireUtil.toLogicalBytes(stored);
@@ -76,10 +66,8 @@ public final class LogicalFieldCursor {
 		final int[] hashes;
 		final int payloadEnd = trailerLenPos - trailerBytes;
 
-		final TrailerKind kind;
-		if (trailerBytes == n * 8) {
-			kind = TrailerKind.HASH_OFFSET;
-			hashes = new int[n];
+        if (trailerBytes == n * 8) {
+            hashes = new int[n];
 
 			final int[] rawByOrd = new int[n];
 			Arrays.fill(rawByOrd, Integer.MIN_VALUE);
@@ -115,20 +103,16 @@ public final class LogicalFieldCursor {
 				System.arraycopy(rawByOrd, 0, starts, 0, n);
 			}
 		} else if (trailerBytes == n * 4) {
-			kind = TrailerKind.ABS_STARTS;
-			hashes = null;
 
-			int pos = trailerLenPos - trailerBytes;
+            int pos = trailerLenPos - trailerBytes;
 			for (int i = 0; i < n; i++) {
 				starts[i] = SerialUtil.readI32(logical, pos);
 				pos += 4;
 			}
 		} else if (trailerBytes % 4 == 0 && trailerBytes / 4 < n && trailerBytes / 4 > 0) {
 			// ALTER ADD COLUMN: blob written with fewer trailing fields — pad missing as empty/null.
-			kind = TrailerKind.ABS_STARTS;
-			hashes = null;
 
-			final int wire = trailerBytes / 4;
+            final int wire = trailerBytes / 4;
 			int pos = trailerLenPos - trailerBytes;
 			for (int i = 0; i < wire; i++) {
 				starts[i] = SerialUtil.readI32(logical, pos);
@@ -141,7 +125,7 @@ public final class LogicalFieldCursor {
 		} else {
 			throw new IllegalStateException("schema fields " + n + " incompatible with trailer bytes " + trailerBytes);
 		}
-		return new LogicalFieldCursor(fields, logical, starts, hashes, payloadEnd, kind);
+		return new LogicalFieldCursor(fields, logical, starts, payloadEnd);
 	}
 
 	private static int ordinalByHash(FieldMetaData[] fields, int hash) {
@@ -186,11 +170,6 @@ public final class LogicalFieldCursor {
 		}
 		final Object raw = SerialUtil.readPrimitives(logical, start, type);
 		return decodeWireNull(type, raw);
-	}
-
-	/** Absolute start of field payload in {@link #logical}. */
-	public int fieldStart(int ordinal) {
-		return starts[ordinal];
 	}
 
 	/** Exclusive end of field payload in {@link #logical}. */

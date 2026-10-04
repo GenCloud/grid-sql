@@ -15,25 +15,12 @@
  */
 package org.genfork.grid.sql.exec;
 
-import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.FuncArg;
-import org.genfork.grid.sql.ast.SelectAst.FunctionFrom;
-import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
-import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
-import org.genfork.grid.sql.ast.SelectAst.JoinEdge;
-import org.genfork.grid.sql.ast.SelectAst.JoinKind;
-import org.genfork.grid.sql.ast.SelectAst.SelectItem;
-import org.genfork.grid.sql.ast.SelectAst.SelectSql;
-import org.genfork.grid.sql.ast.SelectAst.WindowSelectItem;
-
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.misc.Interval;
-
 import org.genfork.grid.antlr.SimplifiedSqlLexer;
 import org.genfork.grid.antlr.SimplifiedSqlParser;
+import org.genfork.grid.sql.ast.SelectAst.*;
 
 import java.util.List;
 
@@ -57,11 +44,6 @@ public final class SqlSelectSqlRender {
 	 */
 	public static String render(SelectSql s) {
 		return render(s, true);
-	}
-
-	/** Render the same SELECT without its locking suffix for local key resolution. */
-	public static String renderWithoutForUpdate(SelectSql s) {
-		return render(s, false, true);
 	}
 
 	/**
@@ -287,7 +269,7 @@ public final class SqlSelectSqlRender {
 		);
 	}
 
-	
+
 	private static void appendFrom(StringBuilder sb, SelectSql s) {
 		if (s.fromFunctionOrNull() != null) {
 			final FunctionFrom from = s.fromFunctionOrNull();
@@ -359,11 +341,7 @@ public final class SqlSelectSqlRender {
 			}
 			return col.column();
 		}
-		if (item instanceof AggregateSelectItem || item instanceof WindowSelectItem
-				|| item instanceof FunctionSelectItem) {
-			return item.label();
-		}
-		return item.label();
+        return item.label();
 	}
 
 	private static String joinKeyword(JoinKind kind) {
@@ -427,7 +405,7 @@ public final class SqlSelectSqlRender {
 			final SimplifiedSqlLexer lexer = new SimplifiedSqlLexer(CharStreams.fromString(sql));
 			final SimplifiedSqlParser parser = new SimplifiedSqlParser(new CommonTokenStream(lexer));
 			final SimplifiedSqlParser.QueryContext q = parser.query();
-			if (q == null || q.selectQuery() == null) {
+			if (q.selectQuery() == null) {
 				return null;
 			}
 			return q.selectQuery();

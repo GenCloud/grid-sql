@@ -1,6 +1,7 @@
 # Jepsen / chaos 3-node cluster. Build context = repo root.
 # Configs are baked into the image (no host bind mounts — Windows Docker share prompts).
-# HTTP: 7777/7778/7779  SQL: 15432/15433/15434  replication: 5615/5616/5617
+# Default host HTTP/SQL/repl: 7777/15432/5615 (+n). Parallel cells: source jepsen-instance-env.sh
+# (JEPSEN_INSTANCE + JEPSEN_PORT_OFFSET) before compose up.
 services:
   n1:
     build:
@@ -8,7 +9,7 @@ services:
       dockerfile: benchmarks/jepsen/Dockerfile
       target: runtime-hostjar
     image: jamoa-grid-jepsen:local
-    container_name: jamoa-jepsen-n1
+    container_name: ${JEPSEN_1DC_CTR_PREFIX:-jamoa-jepsen}-n1
     hostname: n1
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,n1
@@ -18,9 +19,9 @@ services:
     command:
       - --spring.config.additional-location=file:/app/config/application-n1.yml
     ports:
-      - "7777:7777"
-      - "15432:15432"
-      - "5615:5615"
+      - "${JEPSEN_HOST_HTTP_N1:-7777}:7777"
+      - "${JEPSEN_HOST_SQL_N1:-15432}:15432"
+      - "${JEPSEN_HOST_REPL_N1:-5615}:5615"
     networks:
       - jepsen-net
     healthcheck:
@@ -36,7 +37,7 @@ services:
       dockerfile: benchmarks/jepsen/Dockerfile
       target: runtime-hostjar
     image: jamoa-grid-jepsen:local
-    container_name: jamoa-jepsen-n2
+    container_name: ${JEPSEN_1DC_CTR_PREFIX:-jamoa-jepsen}-n2
     hostname: n2
     depends_on:
       n1:
@@ -49,9 +50,9 @@ services:
     command:
       - --spring.config.additional-location=file:/app/config/application-n2.yml
     ports:
-      - "7778:7778"
-      - "15433:15433"
-      - "5616:5616"
+      - "${JEPSEN_HOST_HTTP_N2:-7778}:7778"
+      - "${JEPSEN_HOST_SQL_N2:-15433}:15433"
+      - "${JEPSEN_HOST_REPL_N2:-5616}:5616"
     networks:
       - jepsen-net
     healthcheck:
@@ -67,7 +68,7 @@ services:
       dockerfile: benchmarks/jepsen/Dockerfile
       target: runtime-hostjar
     image: jamoa-grid-jepsen:local
-    container_name: jamoa-jepsen-n3
+    container_name: ${JEPSEN_1DC_CTR_PREFIX:-jamoa-jepsen}-n3
     hostname: n3
     depends_on:
       n1:
@@ -80,9 +81,9 @@ services:
     command:
       - --spring.config.additional-location=file:/app/config/application-n3.yml
     ports:
-      - "7779:7779"
-      - "15434:15434"
-      - "5617:5617"
+      - "${JEPSEN_HOST_HTTP_N3:-7779}:7779"
+      - "${JEPSEN_HOST_SQL_N3:-15434}:15434"
+      - "${JEPSEN_HOST_REPL_N3:-5617}:5617"
     networks:
       - jepsen-net
     healthcheck:
@@ -96,7 +97,7 @@ services:
     profiles: ["control"]
     # JDK 25 required: grid-sql-client is compiled for Java 25 (+ preview).
     image: eclipse-temurin:25-jdk
-    container_name: jamoa-jepsen-control
+    container_name: ${JEPSEN_1DC_CTR_PREFIX:-jamoa-jepsen}-control
     hostname: jepsen
     working_dir: /jepsen/jamoa
     volumes:
@@ -110,6 +111,10 @@ services:
       JEPSEN_NODES: "n1,n2,n3"
       JEPSEN_HTTP_PORTS: "7777,7778,7779"
       JEPSEN_SQL_PORTS: "15432,15433,15434"
+      JEPSEN_1DC_CTR_PREFIX: "${JEPSEN_1DC_CTR_PREFIX:-jamoa-jepsen}"
+      JEPSEN_MDC_CTR_PREFIX: "${JEPSEN_MDC_CTR_PREFIX:-jamoa-multidc}"
+      JEPSEN_1DC_NET: "${JEPSEN_1DC_NET:-jamoa-jepsen-net}"
+      JEPSEN_MDC_NET_LINK: "${JEPSEN_MDC_NET_LINK:-jamoa-multidc-dc-link}"
       JEPSEN_SCRIPTS: /jepsen/scripts
       JEPSEN_USE_LOCALHOST: "0"
       JAVA_HOME: /opt/java/openjdk
@@ -139,7 +144,7 @@ services:
 
 networks:
   jepsen-net:
-    name: jamoa-jepsen-net
+    name: ${JEPSEN_1DC_NET:-jamoa-jepsen-net}
     driver: bridge
 
 volumes:

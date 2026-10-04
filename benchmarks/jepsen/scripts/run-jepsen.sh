@@ -13,6 +13,8 @@ run_mvn() {
 }
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 JEPSEN_DIR="$ROOT/benchmarks/jepsen"
+# shellcheck source=jepsen-instance-env.sh
+. "$JEPSEN_DIR/scripts/jepsen-instance-env.sh"
 cd "$JEPSEN_DIR"
 
 TIME_LIMIT="${JEPSEN_TIME_LIMIT:-60}"
@@ -72,8 +74,8 @@ wait_healthy() {
       continue
     fi
     # Acceptance path: SQL TCP listen + sticky discovery HTTP (not /jepsen/register).
-    if curl -sf "http://127.0.0.1:7777/health/liveness" >/dev/null 2>&1 \
-      && sql_port_open 15432 && sql_port_open 15433 && sql_port_open 15434; then
+    if curl -sf "http://127.0.0.1:${JEPSEN_HOST_HTTP_N1}/health/liveness" >/dev/null 2>&1 \
+      && sql_port_open "$JEPSEN_HOST_SQL_N1" && sql_port_open "$JEPSEN_HOST_SQL_N2" && sql_port_open "$JEPSEN_HOST_SQL_N3"; then
       return 0
     fi
     sleep 2
@@ -84,8 +86,9 @@ wait_healthy() {
 }
 
 ensure_cluster() {
-  echo "Ensuring Compose cluster is up (fresh nodes + clean volumes)..."
+  echo "Ensuring Compose cluster is up (fresh nodes + clean volumes; instance=${JEPSEN_INSTANCE:-default} offset=${JEPSEN_PORT_OFFSET:-0})..."
   # Named volumes retain OpLog/map across --force-recreate and poison register/append histories.
+  # Parallel cells only down their COMPOSE_PROJECT_NAME (set by jepsen-instance-env.sh).
   docker compose down -v --remove-orphans || true
   if [[ "$REBUILD" == "1" ]]; then
     echo "Rebuilding images (JEPSEN_REBUILD / --rebuild)..."
@@ -100,8 +103,14 @@ ensure_cluster() {
 }
 
 install_sql_client() {
+  # Parallel matrix: shared install once in the orchestrator (JEPSEN_SKIP_MVN_INSTALL=1).
+  if [[ "${JEPSEN_SKIP_MVN_INSTALL:-0}" == "1" ]]; then
+    echo "Skip per-cell mvn install (JEPSEN_SKIP_MVN_INSTALL=1; use shared ~/.m2)"
+    return 0
+  fi
   echo "Installing grid-sql-client to local Maven repo (Jepsen classpath)..."
-  (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
+  # maven.test.skip: avoid parallel-cell testCompile races on shared target/
+  (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -Dmaven.test.skip=true)
 }
 
 run_workload() {
@@ -135,7 +144,7 @@ run_workload() {
   MSYS_NO_PATHCONV=1 docker compose --profile control exec -T \
     -e JAVA_HOME=/opt/java/openjdk \
     -e JAVA_CMD=/opt/java/openjdk/bin/java \
-    jepsen sh -c "set -e; export PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd /jepsen/jamoa; export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=15432,15433,15434 JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0; java -version; lein run -m jamoa-jepsen.core test --workload ${workload} --time-limit ${TIME_LIMIT}"
+    jepsen sh -c "set -e; export PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd /jepsen/jamoa; export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=15432,15433,15434 JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0 JEPSEN_1DC_CTR_PREFIX=${JEPSEN_1DC_CTR_PREFIX:-jamoa-jepsen} JEPSEN_MDC_CTR_PREFIX=${JEPSEN_MDC_CTR_PREFIX:-jamoa-multidc} JEPSEN_1DC_NET=${JEPSEN_1DC_NET:-jamoa-jepsen-net} JEPSEN_MDC_NET_LINK=${JEPSEN_MDC_NET_LINK:-jamoa-multidc-dc-link}; java -version; lein run -m jamoa-jepsen.core test --workload ${workload} --time-limit ${TIME_LIMIT}"
 }
 
 install_sql_client

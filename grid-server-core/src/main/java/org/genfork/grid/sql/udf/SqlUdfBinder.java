@@ -182,7 +182,6 @@ public final class SqlUdfBinder {
 		}
 	}
 
-	@SuppressWarnings("unchecked")
 	private static SqlTableUdf bindStaticObjectArrayAsTable(Class<?> type, String methodName) {
 		final Method method;
 		try {
@@ -200,30 +199,34 @@ public final class SqlUdfBinder {
 		return args -> {
 			try {
 				final Object result = method.invoke(null, (Object) args);
-				if (result == null) {
-					return List.of();
-				}
-				if (result instanceof List<?> list) {
-					final List<byte[]> out = new ArrayList<>(list.size());
-					for (Object row : list) {
-						if (!(row instanceof byte[] bytes)) {
-							throw new IllegalStateException("table UDF must return List<byte[]>");
-						}
-						out.add(bytes);
-					}
-					return out;
-				}
-				if (result instanceof Iterable<?> it) {
-					final List<byte[]> out = new ArrayList<>();
-					for (Object row : it) {
-						if (!(row instanceof byte[] bytes)) {
-							throw new IllegalStateException("table UDF must return Iterable<byte[]>");
-						}
-						out.add(bytes);
-					}
-					return out;
-				}
-				throw new IllegalStateException("table UDF must return List/Iterable of byte[]");
+                switch (result) {
+                    case null -> {
+                        return List.of();
+                    }
+                    case List<?> list -> {
+                        final List<byte[]> out = new ArrayList<>(list.size());
+                        for (Object row : list) {
+                            if (!(row instanceof byte[] bytes)) {
+                                throw new IllegalStateException("table UDF must return List<byte[]>");
+                            }
+                            out.add(bytes);
+                        }
+                        return out;
+                    }
+                    case Iterable<?> it -> {
+                        final List<byte[]> out = new ArrayList<>();
+                        for (Object row : it) {
+                            if (!(row instanceof byte[] bytes)) {
+                                throw new IllegalStateException("table UDF must return Iterable<byte[]>");
+                            }
+                            out.add(bytes);
+                        }
+                        return out;
+                    }
+                    default -> {
+                    }
+                }
+                throw new IllegalStateException("table UDF must return List/Iterable of byte[]");
 			} catch (ReflectiveOperationException e) {
 				throw new IllegalStateException("UDF invoke failed: " + type.getName() + "." + methodName, e);
 			}

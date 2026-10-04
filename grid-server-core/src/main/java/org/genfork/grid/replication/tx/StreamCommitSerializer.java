@@ -46,16 +46,6 @@ public final class StreamCommitSerializer {
 		}
 	}
 
-	public <T> T callWithLocks(Collection<String> streamKeys, Supplier<T> action) {
-		final List<String> ordered = orderedKeys(streamKeys);
-		lockAll(ordered);
-		try {
-			return action.get();
-		} finally {
-			unlockAll(ordered);
-		}
-	}
-
 	/**
 	 * Single-stream fast path — no list/sort allocation (hot TX unit admit).
 	 */

@@ -120,6 +120,10 @@ public final class RegionClaimService {
 		if (!regionAllowsWrites()) {
 			return false;
 		}
+		// HELLO-seen peer without phase tip yet — do not advertise writerEligible (Jepsen sticky fork).
+		if (orchidNode.awaitsPeerTipAdvertisement()) {
+			return false;
+		}
 		refreshRegionTipCatchUp();
 		if (regionTipCatchUpPending.get()) {
 			return false;
@@ -310,8 +314,10 @@ public final class RegionClaimService {
 			}
 			final long peerTip = orchidNode.maxSeenPeerCommittedSeq();
 			final long localTip = orchidNode.getLastCommittedSeq();
-			if (crossDcEnabled && !hasActiveRemoteDcLink()) {
-				// ASYNC Active loss: Hold-only tips must not clear the fence (Elle G2).
+			if (crossDcEnabled) {
+				// Always arm after Hold→Active claim: clear only via live remote-DC tip catch-up
+				// (hasActiveRemoteDcLink && peerTip > 0 && localTip >= peerTip). Link flicker must
+				// not leave await unset (2011-r1 / H-claim-link).
 				regionClaimAwaitRemoteDc.set(true);
 				regionTipCatchUpPending.set(true);
 				log.info("Region claim await remote-DC tip localTip={} peerTip={}",

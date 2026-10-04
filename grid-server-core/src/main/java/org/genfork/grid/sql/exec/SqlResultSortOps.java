@@ -167,7 +167,6 @@ public final class SqlResultSortOps {
 			};
 		}
 
-		@SuppressWarnings({"rawtypes", "unchecked"})
 		private static int compareHaving(Object a, Object b) {
 			if (a == b) {
 				return 0;

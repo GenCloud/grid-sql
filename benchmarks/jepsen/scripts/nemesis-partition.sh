@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Isolate or heal a Compose node on jamoa-jepsen-net.
+# Isolate or heal a Compose node on the 1-DC Jepsen network.
 # Usage: nemesis-partition.sh isolate n3 | nemesis-partition.sh heal
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 ACTION="${1:-}"
 TARGET="${2:-n3}"
-NET="jamoa-jepsen-net"
-CTR="jamoa-jepsen-${TARGET}"
+NET="${JEPSEN_1DC_NET:-jamoa-jepsen-net}"
+PREFIX="${JEPSEN_1DC_CTR_PREFIX:-jamoa-jepsen}"
+CTR="${PREFIX}-${TARGET}"
 
 case "$ACTION" in
   isolate)
@@ -17,7 +18,7 @@ case "$ACTION" in
   heal)
     echo "Reconnect all nodes to $NET"
     for n in n1 n2 n3; do
-      c="jamoa-jepsen-${n}"
+      c="${PREFIX}-${n}"
       docker network connect "$NET" "$c" 2>/dev/null || true
     done
     ;;

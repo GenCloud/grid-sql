@@ -94,11 +94,6 @@ public final class SequenceAllocator {
 		return nextMonotonic();
 	}
 
-	/** Current next-to-allocate peek (does not advance). Prefer session {@code currval}. */
-	public long peekHiWater() {
-		return nextValue.get();
-	}
-
 	/**
 	 * Return a value to the reclaim pool (only when {@link SequenceDef#reclaim()}).
 	 * No-op for monotonic sequences.
@@ -234,7 +229,7 @@ public final class SequenceAllocator {
 	}
 
 	private void load() {
-		if (metaFile == null || !GridFs.isRegularFile(metaFile)) {
+		if (!GridFs.isRegularFile(metaFile)) {
 			return;
 		}
 		try {
@@ -268,18 +263,17 @@ public final class SequenceAllocator {
 		if (!persisting.compareAndSet(false, true)) {
 			return;
 		}
-		long written = Long.MIN_VALUE;
+
+		long written;
 		try {
-			for (;;) {
-				written = pendingPersistHi.get();
-				writeMetaFile(written);
-				if (pendingPersistHi.get() == written) {
-					break;
-				}
-			}
+            do {
+                written = pendingPersistHi.get();
+                writeMetaFile(written);
+            } while (pendingPersistHi.get() != written);
 		} finally {
 			persisting.set(false);
 		}
+
 		if (pendingPersistHi.get() != written) {
 			drainPersist();
 		}

@@ -3,12 +3,13 @@
 # Usage: nemesis-dc-link.sh isolate | heal | kill-voter | kill-dc-a | revive-dc-a
 set -eu
 ACTION="${1:-}"
-NET="jamoa-multidc-dc-link"
-B1="jamoa-multidc-b1"
-B2="jamoa-multidc-b2"
-A1="jamoa-multidc-a1"
-A2="jamoa-multidc-a2"
-A3="jamoa-multidc-a3"
+PREFIX="${JEPSEN_MDC_CTR_PREFIX:-jamoa-multidc}"
+NET="${JEPSEN_MDC_NET_LINK:-jamoa-multidc-dc-link}"
+B1="${PREFIX}-b1"
+B2="${PREFIX}-b2"
+A1="${PREFIX}-a1"
+A2="${PREFIX}-a2"
+A3="${PREFIX}-a3"
 
 case "$ACTION" in
   isolate)

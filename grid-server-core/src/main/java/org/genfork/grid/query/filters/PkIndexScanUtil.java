@@ -121,7 +121,7 @@ public final class PkIndexScanUtil {
 			return false;
 		}
 		if (tree instanceof AbstractBPTree bpTree) {
-			bpTree.forEachLeafEntryUntil((indexKey, rowKey) -> visitor.visit(rowKey));
+			bpTree.forEachLeafEntryUntil((_, rowKey) -> visitor.visit(rowKey));
 			return true;
 		}
 		// Sealed fallback / non-BPTree PK: searchAll then walk pointers (no leaf cursor).
@@ -148,7 +148,7 @@ public final class PkIndexScanUtil {
 	 *
 	 * @return cursor, or {@code null} when PK tree missing
 	 */
-	@SuppressWarnings({"rawtypes", "unchecked"})
+	@SuppressWarnings({"rawtypes"})
 	public static AbstractBPTree.RowKeyCursor<?, ?> openPrimaryKeyRowCursor(
 			Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 			Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,

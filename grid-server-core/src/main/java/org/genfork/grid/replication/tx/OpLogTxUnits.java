@@ -41,10 +41,6 @@ public final class OpLogTxUnits {
 				|| type == ReplicationOpType.TX_ABORT;
 	}
 
-	public static boolean isTxMutation(ReplicationOpType type) {
-		return type == ReplicationOpType.UPSERT || type == ReplicationOpType.DELETE;
-	}
-
 	/**
 	 * Exclusive end index of the longest prefix that does not leave an open TX unit.
 	 * Returns {@code 0} when the list starts with an incomplete unit and has no complete prefix.
@@ -66,12 +62,11 @@ public final class OpLogTxUnits {
 			} else if (type == ReplicationOpType.TX_COMMIT || type == ReplicationOpType.TX_ABORT) {
 				if (depth > 0) {
 					depth = 0;
-					lastComplete = i + 1;
-				} else {
-					// Orphan commit/abort — treat as complete singleton.
-					lastComplete = i + 1;
-				}
-			} else if (depth == 0) {
+                }
+
+                // Orphan commit/abort — treat as complete singleton.
+                lastComplete = i + 1;
+            } else if (depth == 0) {
 				lastComplete = i + 1;
 			}
 		}
@@ -95,10 +90,6 @@ public final class OpLogTxUnits {
 			return false;
 		}
 		return endIndexOfCompletePrefix(ops) < ops.size();
-	}
-
-	public static boolean startsWithOpenTx(List<ReplicationOp> ops) {
-		return ops != null && !ops.isEmpty() && ops.getFirst().type() == ReplicationOpType.TX_BEGIN;
 	}
 
 	/**

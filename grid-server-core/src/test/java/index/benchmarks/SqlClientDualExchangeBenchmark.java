@@ -87,7 +87,7 @@ public class SqlClientDualExchangeBenchmark extends AbstractLatencyBenchmark {
 		factory = new RemoteConnectionFactory("127.0.0.1", PORT, "u", "p", 32, 4, "public", false);
 		reactive = factory.obtain().block(OP_TIMEOUT);
 		final Connection syncRemote = SyncAwait.await(factory.obtainStage(), OP_TIMEOUT);
-		sync = new SyncConnection((RemoteConnection) syncRemote, factory, OP_TIMEOUT, null);
+		sync = new SyncConnection((RemoteConnection) syncRemote, OP_TIMEOUT, null);
 		Class.forName(GridDriver.class.getName());
 		jdbc = DriverManager.getConnection("jdbc:grid://u:p@127.0.0.1:" + PORT + "/public");
 		jdbcStatement = jdbc.createStatement();

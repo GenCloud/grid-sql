@@ -42,18 +42,16 @@ public final class OffHeapBuffer implements AutoCloseable {
 	}
 
 	private long address;
-	private long capacity;
+	private final long capacity;
 	private long position;
 	private final boolean owned;
-	private final ByteBuffer keepAlive;
-	private boolean closed;
+    private boolean closed;
 
-	private OffHeapBuffer(long address, long capacity, boolean owned, ByteBuffer keepAlive) {
+	private OffHeapBuffer(long address, long capacity, boolean owned) {
 		this.address = address;
 		this.capacity = capacity;
 		this.owned = owned;
-		this.keepAlive = keepAlive;
-		this.position = 0L;
+        this.position = 0L;
 		if (owned) {
 			new Cleaner(this) {
 				@Override
@@ -69,11 +67,11 @@ public final class OffHeapBuffer implements AutoCloseable {
 		for (long i = 0; i < capacity; i++) {
 			UnsafeMemory.writeByte(addr + i, (byte) 0);
 		}
-		return new OffHeapBuffer(addr, capacity, true, null);
+		return new OffHeapBuffer(addr, capacity, true);
 	}
 
-	public static OffHeapBuffer wrapMappedAddress(long address, long capacity, ByteBuffer keepAlive) {
-		return new OffHeapBuffer(address, capacity, false, keepAlive);
+	public static OffHeapBuffer wrapMappedAddress(long address, long capacity) {
+		return new OffHeapBuffer(address, capacity, false);
 	}
 
 	public static long addressOf(ByteBuffer buffer) {

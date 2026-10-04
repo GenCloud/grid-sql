@@ -111,6 +111,9 @@ public class OrchidUncleanReviveListAppendIT {
 				appendAcked(engineA, "pre" + i, ackedTokens);
 			}
 
+			final long tipAtKill = Math.max(
+					b.getOrchidNode().getLastCommittedSeq(),
+					c.getOrchidNode().getLastCommittedSeq());
 			b.isolatePeer(NODE_A);
 			c.isolatePeer(NODE_A);
 			a.isolatePeer(NODE_B);
@@ -121,6 +124,15 @@ public class OrchidUncleanReviveListAppendIT {
 			shipSurvivorTipGap(b, c);
 			waitTipsEqual(b, c, FAILOVER_TIMEOUT_MS);
 			waitSurvivorProposer(b, c, NODE_B, FAILOVER_TIMEOUT_MS);
+			// Seal-before-clear / contiguous tip: survivors must not regress orchid tip after kill.
+			assertTrue(b.getOrchidNode().getLastCommittedSeq() >= tipAtKill
+							&& c.getOrchidNode().getLastCommittedSeq() >= tipAtKill,
+					() -> "survivor tip regression after unclean kill tipAtKill=" + tipAtKill
+							+ " " + tipJournalSnapshot(b, "b")
+							+ " " + tipJournalSnapshot(c, "c"));
+			// Drain any retained ahead-of-tip inflight from dead proposer (must not have been wiped).
+			b.getOrchidNode().sealBufferedCrossDcProposes();
+			c.getOrchidNode().sealBufferedCrossDcProposes();
 
 			for (int i = 0; i < APPEND_ROUNDS_AFTER_KILL; i++) {
 				noteDualEligible(b, c, dualEligibleHits);

@@ -156,7 +156,7 @@ public final class TableSchema {
 			}
 		}
 		if (!hasPkIndex) {
-			effectiveIndexes.add(0, new IndexDef(
+			effectiveIndexes.addFirst(new IndexDef(
 					CatalogPersistUtil.syntheticPkIndexName(this.catalogKey),
 					primaryKeys.stream().map(ColumnDef::name).toList(),
 					IndexType.STRICT));
@@ -436,7 +436,7 @@ public final class TableSchema {
 			next.add(new ColumnDef(
 					col.name(),
 					col.type(),
-					pk ? false : col.nullable(),
+                    !pk && col.nullable(),
 					col.ordinal(),
 					pk,
 					col.externalOrder(),

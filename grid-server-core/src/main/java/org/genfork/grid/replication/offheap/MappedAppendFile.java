@@ -61,9 +61,7 @@ public final class MappedAppendFile implements AutoCloseable {
 		MAP0 = map0;
 	}
 
-	private final Path path;
-	private final Path wposPath;
-	private final boolean fsync;
+    private final boolean fsync;
 	private FileChannel channel;
 	private FileChannel wposChannel;
 	private MappedByteBuffer mapped;
@@ -74,8 +72,6 @@ public final class MappedAppendFile implements AutoCloseable {
 	private boolean closed;
 
 	public MappedAppendFile(Path path, boolean fsync) throws IOException {
-		this.path = path;
-		this.wposPath = Path.of(path.toString() + WPOS_SUFFIX);
 		this.fsync = fsync;
 		GridFs.createParentDirs(path);
 		this.channel = FileChannel.open(
@@ -84,6 +80,8 @@ public final class MappedAppendFile implements AutoCloseable {
 				StandardOpenOption.READ,
 				StandardOpenOption.WRITE
 		);
+
+        final Path wposPath = Path.of(path + WPOS_SUFFIX);
 		this.wposChannel = ChannelDurableIo.openRw(wposPath);
 		final long fileSize = channel.size();
 		long logical = fileSize;
@@ -114,10 +112,6 @@ public final class MappedAppendFile implements AutoCloseable {
 				}
 			}
 		};
-	}
-
-	public long writePosition() {
-		return writePos.get();
 	}
 
 	public long append(long srcAddr, int length) throws IOException {
@@ -152,7 +146,7 @@ public final class MappedAppendFile implements AutoCloseable {
 	 * Group fsync: concurrent waiters share one {@link FileChannel#force} covering dirty bytes.
 	 */
 	private void groupForce(long coverThrough) throws IOException {
-		forceGate.awaitCovered(coverThrough, tip -> {
+		forceGate.awaitCovered(coverThrough, _ -> {
 			final long t0 = System.nanoTime();
 			channel.force(false);
 			ReplicationMetrics.recordOplogFsyncNs(System.nanoTime() - t0);
@@ -165,7 +159,7 @@ public final class MappedAppendFile implements AutoCloseable {
 		if (offset < 0 || offset + length > writePos.get()) {
 			throw new IllegalArgumentException("view out of range offset=" + offset + " len=" + length);
 		}
-		return OffHeapBuffer.wrapMappedAddress(buffer.address() + offset, length, mapped);
+		return OffHeapBuffer.wrapMappedAddress(buffer.address() + offset, length);
 	}
 
 	public long size() {
@@ -213,17 +207,6 @@ public final class MappedAppendFile implements AutoCloseable {
 		wposChannel.truncate(bytes.length);
 	}
 
-	public void rewriteFrom(long srcAddr, long length) throws IOException {
-		remap(Math.max(length, INITIAL_CAPACITY));
-		if (length > 0) {
-			UnsafeMemory.copy(null, srcAddr, null, buffer.address(), length);
-		}
-		writePos.set(length);
-		if (fsync) {
-			mapped.force();
-		}
-	}
-
 	private void ensureCapacity(long required) throws IOException {
 		if (required <= mappedSize) {
 			return;
@@ -242,7 +225,7 @@ public final class MappedAppendFile implements AutoCloseable {
 		final MappedByteBuffer nextMapped = map(channel, newSize);
 		this.mapped = nextMapped;
 		this.mappedSize = newSize;
-		this.buffer = OffHeapBuffer.wrapMappedAddress(OffHeapBuffer.addressOf(nextMapped), newSize, nextMapped);
+		this.buffer = OffHeapBuffer.wrapMappedAddress(OffHeapBuffer.addressOf(nextMapped), newSize);
 	}
 
 	private static MappedByteBuffer map(FileChannel channel, long size) throws IOException {

@@ -43,11 +43,8 @@ public final class SealedPackShipGate {
 	 */
 	public boolean shouldShip(String domainType, int shard, long fingerprint) {
 		final StreamShipState state = streamState(domainType, shard);
-		if (state.catchUpShipDone.get() && state.lastFingerprint.get() == fingerprint) {
-			return false;
-		}
-		return true;
-	}
+        return !state.catchUpShipDone.get() || state.lastFingerprint.get() != fingerprint;
+    }
 
 	/**
 	 * Record a successful sealed ship (or intentional skip of empty pack) for this CATCH_UP.
@@ -69,7 +66,7 @@ public final class SealedPackShipGate {
 	}
 
 	private StreamShipState streamState(String domainType, int shard) {
-		return byStream.computeIfAbsent(streamKey(domainType, shard), k -> new StreamShipState());
+		return byStream.computeIfAbsent(streamKey(domainType, shard), _ -> new StreamShipState());
 	}
 
 	private static String streamKey(String domainType, int shard) {

@@ -136,13 +136,8 @@ public final class PrivilegeCatalog {
 			final byte[] salt = new byte[SALT_BYTES];
 			random.nextBytes(salt);
 			final byte[] hash = hashPbkdf2(password, salt);
-			final UserRecord existing = users.get(normalized);
-			if (existing == null) {
-				users.put(normalized, new UserRecord(salt, hash, true, KDF_PBKDF2));
-			} else {
-				users.put(normalized, new UserRecord(salt, hash, true, KDF_PBKDF2));
-			}
-			grantAllStarStarLocked(normalized);
+            users.put(normalized, new UserRecord(salt, hash, true, KDF_PBKDF2));
+            grantAllStarStarLocked(normalized);
 		});
 	}
 

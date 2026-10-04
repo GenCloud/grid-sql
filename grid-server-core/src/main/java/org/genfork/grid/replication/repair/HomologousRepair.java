@@ -357,7 +357,7 @@ public class HomologousRepair {
 	}
 
 	public byte[] verifyOrRebuildValue(byte[] value) {
-		if (value == null || !DuplexBlob.isWire(value)) {
+		if (!DuplexBlob.isWire(value)) {
 			return value;
 		}
 		final DuplexVerifier verifier = DuplexCodecSupport.getCodec().getVerifier();

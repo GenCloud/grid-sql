@@ -56,6 +56,7 @@ import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 import org.genfork.grid.replication.util.CrossDcVoterUtil;
 import org.genfork.grid.replication.util.OpLogArchiveUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+import org.genfork.grid.replication.util.SchemaBarrierEmitUtil;
 import org.genfork.grid.sql.tx.DistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.NettyDistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
@@ -503,30 +504,8 @@ public class ReplicationCoordinator {
 		if (!enabled) {
 			return null;
 		}
-		final ApplyAckSender ackSender = new ApplyAckSender() {
-			@Override
-			public void sendAck(ReplicationOp op) {
-				if (peerTransportEnabled) {
-					nettyTransport.broadcastApplyAck(op);
-				}
-			}
-			@Override
-			public void sendNack(ReplicationOp op, String reason) {
-				if (!peerTransportEnabled) {
-					return;
-				}
-				for (ReplicationPeer peer : peers) {
-					nettyTransport.sendApplyNack(peer.id(), op, reason);
-				}
-			}
-		};
-		final ReplicaApplier applier = new ReplicaApplier(nodeState, opLog, processorByShard, ackSender, applyRemoteToLocalMap);
-		applier.setEnvelopeCoordinator(txEnvelopeCoordinator);
-		applier.setApplierByDomain(appliers::get);
-		if (CATALOG_DOMAIN.equals(domainType) && catalogDdlHandler != null) {
-			applier.setCatalogDdlHandler(catalogDdlHandler);
-		}
-		appliers.put(domainType, applier);
+        final ReplicaApplier applier = providerReplicaApplier(domainType, processorByShard, applyRemoteToLocalMap);
+        appliers.put(domainType, applier);
 
 		orchidNode.addApplyListener((op, journalRemote) -> {
 			if (op != null && domainType.equals(op.domainType())) {
@@ -541,8 +520,7 @@ public class ReplicationCoordinator {
 
 		final MutationRecorder recorder = new MutationRecorder(
 				nodeState,
-				opLog,
-				domainType,
+                domainType,
 				publisher,
 				crossDcEnabled ? crossDcPublisher : null,
 				homologousRepair,
@@ -586,7 +564,34 @@ public class ReplicationCoordinator {
 		return recorder;
 	}
 
-	/**
+    private ReplicaApplier providerReplicaApplier(String domainType, Function<Integer, GridEntriesProcessor> processorByShard, boolean applyRemoteToLocalMap) {
+        final ApplyAckSender ackSender = new ApplyAckSender() {
+            @Override
+            public void sendAck(ReplicationOp op) {
+                if (peerTransportEnabled) {
+                    nettyTransport.broadcastApplyAck(op);
+                }
+            }
+            @Override
+            public void sendNack(ReplicationOp op, String reason) {
+                if (!peerTransportEnabled) {
+                    return;
+                }
+                for (ReplicationPeer peer : peers) {
+                    nettyTransport.sendApplyNack(peer.id(), op, reason);
+                }
+            }
+        };
+        final ReplicaApplier applier = new ReplicaApplier(nodeState, opLog, processorByShard, ackSender, applyRemoteToLocalMap);
+        applier.setEnvelopeCoordinator(txEnvelopeCoordinator);
+        applier.setApplierByDomain(appliers::get);
+        if (CATALOG_DOMAIN.equals(domainType) && catalogDdlHandler != null) {
+            applier.setCatalogDdlHandler(catalogDdlHandler);
+        }
+        return applier;
+    }
+
+    /**
 	 * LAZY hydrate: load one shard into the local map on first touch.
 	 * No-op when durability off or hydrateMode=FULL (already loaded).
 	 */
@@ -709,8 +714,8 @@ public class ReplicationCoordinator {
 		}
 		for (String domain : List.copyOf(pendingSchemaBarriers)) {
 			try {
+				// emitSchemaBarriers alone decides pending clear (keep until real BARRIER / streams exist).
 				emitSchemaBarriers(domain);
-				pendingSchemaBarriers.remove(domain);
 			} catch (RuntimeException ex) {
 				log.warn("Deferred schema barrier failed domain={}: {}", domain, ex.toString());
 			}
@@ -718,7 +723,13 @@ public class ReplicationCoordinator {
 	}
 
 	private void emitSchemaBarriers(String domainType) {
+		if (!SchemaBarrierEmitUtil.hasCommittedDomainStreams(opLog, domainType)) {
+			// No OpLog tip yet — keep pending until first committed stream appears.
+			pendingSchemaBarriers.add(domainType);
+			return;
+		}
 		final byte[] layout = domainType.getBytes(StandardCharsets.UTF_8);
+		final long schemaEpoch = nodeState.getSchemaEpoch();
 		for (String streamKey : opLog.streamKeys()) {
 			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
 				continue;
@@ -729,15 +740,11 @@ public class ReplicationCoordinator {
 			}
 			final int shard = parsed.shard();
 			final long last = opLog.lastSeq(domainType, shard);
-			if (last <= 0) {
+			if (last <= 0L) {
 				continue;
 			}
-			final List<ReplicationOp> tail = opLog.readFrom(domainType, shard, last, 1);
-			if (!tail.isEmpty()) {
-				final ReplicationOp op = tail.getFirst();
-				if (op.type() == ReplicationOpType.BARRIER && op.schemaEpoch() == nodeState.getSchemaEpoch()) {
-					continue;
-				}
+			if (SchemaBarrierEmitUtil.isCurrentEpochBarrierAtTip(opLog, domainType, shard, schemaEpoch)) {
+				continue;
 			}
 			try {
 				installSchemaBarrier(domainType, shard, layout);

@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 JEPSEN_DIR="$ROOT/benchmarks/jepsen"
+# shellcheck source=jepsen-instance-env.sh
+. "$JEPSEN_DIR/scripts/jepsen-instance-env.sh"
 cd "$JEPSEN_DIR"
 
 TIME_LIMIT="${JEPSEN_TIME_LIMIT:-60}"
@@ -135,8 +137,12 @@ release_ports() {
 }
 trap release_ports EXIT
 
-echo "Installing grid-sql-client..."
-(cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
+if [[ "${JEPSEN_SKIP_MVN_INSTALL:-0}" == "1" ]]; then
+  echo "Skip per-cell mvn install (JEPSEN_SKIP_MVN_INSTALL=1; use shared ~/.m2)"
+else
+  echo "Installing grid-sql-client..."
+  (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
+fi
 
 ensure_cluster
 echo "=== Jepsen JOIN/shards: Elle via cross-shard JOIN read ==="

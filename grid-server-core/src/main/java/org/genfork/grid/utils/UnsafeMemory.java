@@ -102,7 +102,6 @@ public final class UnsafeMemory {
 		return unsafe.getDouble(addr);
 	}
 
-	@SuppressWarnings("deprecation")
 	public static long objectFieldOffset(Field field) {
 		return unsafe.objectFieldOffset(field);
 	}

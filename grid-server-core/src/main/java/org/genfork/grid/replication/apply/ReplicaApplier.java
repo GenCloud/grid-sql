@@ -606,7 +606,7 @@ public class ReplicaApplier {
 	 */
 	private void forceReinstall(ReplicationOp op) {
 		byte[] value = op.value();
-		if (value != null && DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
+		if (DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
 			final DuplexBlob blob = DuplexBlob.fromWireBytes(value);
 			final DuplexBlob verified = DuplexCodecSupport.getCodec().getVerifier().verifyOrRepair(blob);
 			value = verified.toWireBytes();

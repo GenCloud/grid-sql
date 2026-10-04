@@ -60,6 +60,8 @@ public class ReplicaReadEndpointsRotateIT {
 	private static final String SELECT = "SELECT v FROM rr_n WHERE id = 1";
 	private static final String EXPECTED_VALUE = "ok";
 	private static final String STALE_ERR_SNIPPET = "apply lag stale";
+	/** Stress iterations: min-pool warmup + concurrent stale AUTH must not tear sticky meta. */
+	private static final int META_STABILITY_ROUNDS = 40;
 
 	private SqlEngine primaryEngine;
 	private SqlEngine replica0Engine;
@@ -129,6 +131,35 @@ public class ReplicaReadEndpointsRotateIT {
 		assertEquals(1, readFactory.stickyIndex(), "should land on fresh replica1 after rotate");
 		final ServerMeta meta = readFactory.lastServerMeta();
 		assertFalse(meta.applyLagStale());
+	}
+
+	/**
+	 * CI flake canary: ring warmup opens stale peers; factory-global lastServerMeta must stay
+	 * non-stale after sticky lands on fresh replica1 (no last-writer tear from reject AUTH).
+	 */
+	@Test
+	void rotateMetaStableAcrossRepeatedWarmupObtain() {
+		replica0.overrideApplyLagStale(Boolean.TRUE);
+		replica1.overrideApplyLagStale(null);
+		primary.overrideApplyLagStale(Boolean.TRUE);
+
+		for (int round = 0; round < META_STABILITY_ROUNDS; round++) {
+			final RemoteConnectionFactory factory = RemoteConnectionFactory.createReadFactory(
+					readUrl(replica0Port, replica1Port));
+			try {
+				final String v = factory.obtain()
+						.flatMapMany(conn -> conn.createStatement(SELECT).execute()
+								.flatMap(r -> r.map((row, meta) -> String.valueOf(row.get(0)))))
+						.blockFirst(TIMEOUT);
+				assertEquals(EXPECTED_VALUE, v, "round=" + round);
+				assertEquals(1, factory.stickyIndex(), "fresh sticky round=" + round);
+				assertFalse(
+						factory.lastServerMeta().applyLagStale(),
+						"factory meta must not tear to stale after accept round=" + round);
+			} finally {
+				factory.dispose();
+			}
+		}
 	}
 
 	@Test

@@ -55,7 +55,7 @@ import org.genfork.grid.serial.WireSpan;
 public class LogicalOperatorCondition implements FilterCondition {
 
 	public enum Operator {
-		EQ, NE, GT, GE, LT, LE, LIKE, BETWEEN, IN;
+		EQ, NE, GT, GE, LT, LE, LIKE, BETWEEN, IN
 	}
 
 	private final String field;
@@ -194,7 +194,7 @@ public class LogicalOperatorCondition implements FilterCondition {
 			final boolean eq = WireRangeOps.equals(
 					actual.blob(), actual.offset(), actual.length(),
 					expected, 0, expected == null ? 0 : expected.length);
-			return op == Operator.EQ ? eq : !eq;
+			return (op == Operator.EQ) == eq;
 		}
 		return matchWire(actual.toOwnedBytes(), op, values);
 	}

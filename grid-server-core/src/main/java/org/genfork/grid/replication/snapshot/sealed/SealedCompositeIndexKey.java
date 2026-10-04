@@ -209,11 +209,8 @@ public final class SealedCompositeIndexKey {
 		if (lowInclusiveOrNull != null && compare(actual, lowInclusiveOrNull) < 0) {
 			return false;
 		}
-		if (highInclusiveOrNull != null && compare(actual, highInclusiveOrNull) > 0) {
-			return false;
-		}
-		return true;
-	}
+        return highInclusiveOrNull == null || compare(actual, highInclusiveOrNull) <= 0;
+    }
 
 	@VisibleForTesting
 	static int compare(byte[] left, byte[] right) {

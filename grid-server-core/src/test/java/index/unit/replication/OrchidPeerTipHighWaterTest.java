@@ -15,7 +15,6 @@
  */
 package index.unit.replication;
 
-import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.orchid.DigestQuorum;
 import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.orchid.OrchidTransport;

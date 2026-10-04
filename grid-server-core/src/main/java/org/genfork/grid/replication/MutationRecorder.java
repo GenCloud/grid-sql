@@ -58,8 +58,7 @@ public class MutationRecorder {
 	private static final int TX_MARKER_OVERHEAD_OPS = 2;
 
 	private final ReplicationNodeState nodeState;
-	private final OpLog opLog;
-	private final StreamOpLogAppender streamAppender;
+    private final StreamOpLogAppender streamAppender;
 	private final String domainType;
 	private final ReplicationPublisher publisher;
 	private final CrossDcPublisher crossDcPublisher;
@@ -67,16 +66,14 @@ public class MutationRecorder {
 	private final StreamCommitSerializer streamCommitSerializer;
 
 	public MutationRecorder(ReplicationNodeState nodeState,
-	                        OpLog opLog,
-	                        String domainType,
+                            String domainType,
 	                        ReplicationPublisher publisher,
 	                        CrossDcPublisher crossDcPublisher,
 	                        HomologousRepair homologousRepair,
 	                        StreamOpLogAppender streamAppender,
 	                        StreamCommitSerializer streamCommitSerializer) {
 		this.nodeState = nodeState;
-		this.opLog = opLog;
-		this.streamAppender = Objects.requireNonNull(streamAppender, "streamAppender");
+        this.streamAppender = Objects.requireNonNull(streamAppender, "streamAppender");
 		this.domainType = domainType;
 		this.publisher = publisher;
 		this.crossDcPublisher = crossDcPublisher;
@@ -150,9 +147,9 @@ public class MutationRecorder {
 			final List<ReplicationOp> templates =
 					new ArrayList<>(entries.size() + TX_MARKER_OVERHEAD_OPS);
 			templates.add(markerTemplate(shard, ReplicationOpType.TX_BEGIN, markerKey, beginValue));
-			for (int i = 0; i < entries.size(); i++) {
-				templates.add(toRawOp(shard, entries.get(i)));
-			}
+            for (Entry entry : entries) {
+                templates.add(toRawOp(shard, entry));
+            }
 			templates.add(markerTemplate(shard, ReplicationOpType.TX_COMMIT, markerKey, null));
 			final String streamKey = OpLogStreamKeyUtil.format(domainType, shard);
 			final List<OrchidNode.AdmittedPropose> admitted;
@@ -182,9 +179,9 @@ public class MutationRecorder {
 	 */
 	private List<OrchidNode.AdmittedPropose> admitAllRaw(int shard, List<ReplicationOp> templates) {
 		final List<OrchidNode.AdmittedPropose> admitted = new ArrayList<>(templates.size());
-		for (int i = 0; i < templates.size(); i++) {
-			admitted.add(orchidAdmitRaw(shard, templates.get(i)));
-		}
+        for (ReplicationOp template : templates) {
+            admitted.add(orchidAdmitRaw(shard, template));
+        }
 		return admitted;
 	}
 
@@ -267,7 +264,7 @@ public class MutationRecorder {
 				? ReplicationOpType.DELETE
 				: ReplicationOpType.UPSERT;
 		byte[] value = entry instanceof AddEntry ? entry.getValue() : null;
-		if (value != null && DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
+		if (DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
 			final DuplexBlob verified = DuplexCodecSupport.getCodec().getVerifier()
 					.verifyOrRepair(DuplexBlob.fromWireBytes(value));
 			value = verified.toWireBytes();
@@ -300,7 +297,7 @@ public class MutationRecorder {
 			return;
 		}
 		streamAppender.force(domainType, shard);
-		long tipSeq = committedOps.get(0).opSeq();
+		long tipSeq = committedOps.getFirst().opSeq();
 		for (ReplicationOp committed : committedOps) {
 			if (committed.opSeq() > tipSeq) {
 				tipSeq = committed.opSeq();

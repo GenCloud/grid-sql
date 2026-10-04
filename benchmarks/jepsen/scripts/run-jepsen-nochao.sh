@@ -5,6 +5,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 JEPSEN_DIR="$ROOT/benchmarks/jepsen"
+# shellcheck source=jepsen-instance-env.sh
+. "$JEPSEN_DIR/scripts/jepsen-instance-env.sh"
 cd "$JEPSEN_DIR"
 TIME_LIMIT="${JEPSEN_TIME_LIMIT:-30}"
 REBUILD=0
@@ -41,6 +43,10 @@ run_mvn() {
 }
 
 install_sql_client() {
+  if [[ "${JEPSEN_SKIP_MVN_INSTALL:-0}" == "1" ]]; then
+    echo "Skip per-cell mvn install (JEPSEN_SKIP_MVN_INSTALL=1; use shared ~/.m2)"
+    return 0
+  fi
   echo "Installing grid-sql-client to local Maven repo..."
   (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
 }

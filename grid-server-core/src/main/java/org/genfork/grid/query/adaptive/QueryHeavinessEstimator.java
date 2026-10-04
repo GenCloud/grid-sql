@@ -113,33 +113,40 @@ public final class QueryHeavinessEstimator {
 	@VisibleForTesting
 	public static long estimateFilter(TableAnalyzeStats stats, FilterCondition filter, long tableRows) {
 		final long rows = Math.max(1L, tableRows);
-		if (filter == null || filter instanceof AlwaysTrueCondition) {
-			return rows;
-		}
-		if (filter instanceof AlwaysFalseCondition) {
-			return 0L;
-		}
-		if (filter instanceof AndCondition and) {
-			final long left = estimateFilter(stats, and.getLeft(), rows);
-			final long right = estimateFilter(stats, and.getRight(), rows);
-			return QueryCardinality.estimateAnd(left, right, rows);
-		}
-		if (filter instanceof OrCondition or) {
-			final long left = estimateFilter(stats, or.getLeft(), rows);
-			final long right = estimateFilter(stats, or.getRight(), rows);
-			return Math.min(rows, left + right);
-		}
-		if (filter instanceof NotCondition not) {
-			final long child = estimateFilter(stats, not.getChild(), rows);
-			return Math.max(0L, rows - child);
-		}
-		if (filter instanceof IsNullCondition || filter instanceof IsNotNullCondition) {
-			return Math.max(1L, rows / NULLISH_SELECTIVITY_DENOM);
-		}
-		if (filter instanceof LogicalOperatorCondition loc) {
-			return estimateLogical(stats, loc, rows);
-		}
-		return rows / UNKNOWN_SELECTIVITY_DENOM;
+        switch (filter) {
+            case null -> {
+                return rows;
+            }
+            case AlwaysTrueCondition _ -> {
+                return rows;
+            }
+            case AlwaysFalseCondition _ -> {
+                return 0L;
+            }
+            case AndCondition and -> {
+                final long left = estimateFilter(stats, and.getLeft(), rows);
+                final long right = estimateFilter(stats, and.getRight(), rows);
+                return QueryCardinality.estimateAnd(left, right, rows);
+            }
+            case OrCondition or -> {
+                final long left = estimateFilter(stats, or.getLeft(), rows);
+                final long right = estimateFilter(stats, or.getRight(), rows);
+                return Math.min(rows, left + right);
+            }
+            case NotCondition not -> {
+                final long child = estimateFilter(stats, not.getChild(), rows);
+                return Math.max(0L, rows - child);
+            }
+            case IsNullCondition _, IsNotNullCondition _ -> {
+                return Math.max(1L, rows / NULLISH_SELECTIVITY_DENOM);
+            }
+            case LogicalOperatorCondition loc -> {
+                return estimateLogical(stats, loc, rows);
+            }
+            default -> {
+            }
+        }
+        return rows / UNKNOWN_SELECTIVITY_DENOM;
 	}
 
 	private static long estimateLogical(TableAnalyzeStats stats, LogicalOperatorCondition loc, long rows) {
@@ -158,10 +165,7 @@ public final class QueryHeavinessEstimator {
 			final long fanOut = fanOutOrRows(stats, loc.getField(), rows);
 			return QueryCardinality.estimateIn(fanOut, Math.max(1, n), rows);
 		}
-		if (op == LogicalOperatorCondition.Operator.BETWEEN) {
-			return Math.max(1L, rows / RANGE_SELECTIVITY_DENOM);
-		}
-		// NE / LIKE / ranges — crude fraction, never claim full table without stats evidence.
+        // NE / LIKE / ranges — crude fraction, never claim full table without stats evidence.
 		return Math.max(1L, rows / RANGE_SELECTIVITY_DENOM);
 	}
 

@@ -23,14 +23,19 @@ import org.genfork.grid.replication.ReplicationCoordinator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import org.genfork.grid.context.config.GridConfigurationProperties;
+
 import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * In-process 3-node latency: MutationRecorder commit + async ship visibility on peers.
@@ -43,6 +48,8 @@ public class ThreeNodeClusterLatencyIT {
 
 	private static final int OPS = 50;
 	private static final String DOMAIN = "chaos.Latency3";
+	private static final long SYNC_TIMEOUT_MS = 20_000L;
+	private static final long PARK_NANOS = TimeUnit.MILLISECONDS.toNanos(20L);
 
 	@TempDir
 	Path tempDir;
@@ -52,17 +59,17 @@ public class ThreeNodeClusterLatencyIT {
 		final int portA = freePort();
 		final int portB = freePort();
 		final int portC = freePort();
-		final var propsA = ReplTestSupport.safetyProps(
+		final GridConfigurationProperties propsA = ReplTestSupport.safetyProps(
 				"lat-a", "lat3", "dc-a", portA, tempDir.resolve("a"),
 				List.of(ReplTestSupport.peer("lat-b", "dc-a", portB), ReplTestSupport.peer("lat-c", "dc-a", portC))
 		);
 		propsA.getReplication().getCrossDc().setBatchMaxOps(1);
 		propsA.getReplication().getCrossDc().setBatchMaxWaitMs(1);
-		final var propsB = ReplTestSupport.safetyProps(
+		final GridConfigurationProperties propsB = ReplTestSupport.safetyProps(
 				"lat-b", "lat3", "dc-a", portB, tempDir.resolve("b"),
 				List.of(ReplTestSupport.peer("lat-a", "dc-a", portA), ReplTestSupport.peer("lat-c", "dc-a", portC))
 		);
-		final var propsC = ReplTestSupport.safetyProps(
+		final GridConfigurationProperties propsC = ReplTestSupport.safetyProps(
 				"lat-c", "lat3", "dc-a", portC, tempDir.resolve("c"),
 				List.of(ReplTestSupport.peer("lat-a", "dc-a", portA), ReplTestSupport.peer("lat-b", "dc-a", portB))
 		);
@@ -86,13 +93,7 @@ public class ThreeNodeClusterLatencyIT {
 			b.start();
 			c.start();
 
-			final long deadline = System.currentTimeMillis() + 20_000;
-			while (System.currentTimeMillis() < deadline
-					&& (!a.getOrchidNode().isSynced() || !b.getOrchidNode().isSynced() || !c.getOrchidNode().isSynced()
-					|| !a.getOrchidNode().isPhaseRankedProposer())) {
-				Thread.sleep(50);
-			}
-			assertTrue(a.getOrchidNode().isPhaseRankedProposer(), "lat-a should be proposer");
+			waitReadyForAdmit(a, b, c, SYNC_TIMEOUT_MS);
 
 			for (int i = 0; i < OPS; i++) {
 				final byte[] key = new byte[]{(byte) (i + 1), 7, (byte) (i >> 8)};
@@ -162,6 +163,45 @@ public class ThreeNodeClusterLatencyIT {
 			try { b.stop(); } catch (Exception ignored) {}
 			try { c.stop(); } catch (Exception ignored) {}
 		}
+	}
+
+	/**
+	 * Fail-closed boot wait before MutationRecorder admit.
+	 * <p>
+	 * Prior soft loop could exit on timeout and only assert proposer; first
+	 * {@code recordCommittedBlocking} then hit {@code !isSynced()} with
+	 * {@code OrchidNotSyncedException: ORCHID R below threshold...}. Also require
+	 * {@code !awaitsPeerTipAdvertisement()} after tipAdvertised fence.
+	 */
+	private static void waitReadyForAdmit(
+			ReplicationCoordinator a,
+			ReplicationCoordinator b,
+			ReplicationCoordinator c,
+			long timeoutMs) {
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			if (a.getOrchidNode().isSynced()
+					&& b.getOrchidNode().isSynced()
+					&& c.getOrchidNode().isSynced()
+					&& a.getOrchidNode().isPhaseRankedProposer()
+					&& !a.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !b.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !c.getOrchidNode().awaitsPeerTipAdvertisement()) {
+				return;
+			}
+			LockSupport.parkNanos(PARK_NANOS);
+		}
+		fail("cluster not ready for admit"
+				+ " a.synced=" + a.getOrchidNode().isSynced()
+				+ " b.synced=" + b.getOrchidNode().isSynced()
+				+ " c.synced=" + c.getOrchidNode().isSynced()
+				+ " a.proposer=" + a.getOrchidNode().isPhaseRankedProposer()
+				+ " a.awaitTip=" + a.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " b.awaitTip=" + b.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " c.awaitTip=" + c.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " a.R=" + a.getOrchidNode().orderParameterR()
+				+ " b.R=" + b.getOrchidNode().orderParameterR()
+				+ " c.R=" + c.getOrchidNode().orderParameterR());
 	}
 
 	private static double pct(List<Double> xs, double p) {

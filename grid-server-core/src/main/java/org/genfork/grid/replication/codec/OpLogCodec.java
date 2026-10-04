@@ -194,7 +194,7 @@ public final class OpLogCodec {
 		for (int i = 0; i < count; i++) {
 			final int len = buf.getInt();
 			final long start = buf.position();
-			final OffHeapBuffer view = OffHeapBuffer.wrapMappedAddress(buf.address() + start, len, null);
+			final OffHeapBuffer view = OffHeapBuffer.wrapMappedAddress(buf.address() + start, len);
 			ops.add(decodeOp(view));
 			buf.position(start + len);
 		}

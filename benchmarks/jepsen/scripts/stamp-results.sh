@@ -14,7 +14,7 @@ GIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 HOST="$(hostname 2>/dev/null || echo unknown)"
 DATE="$(date -Iseconds 2>/dev/null || date)"
 
-RESULTS="$ROOT/RESULTS.md"
+RESULTS="${JEPSEN_RESULTS_FILE:-$ROOT/RESULTS.md}"
 TMP="$(mktemp)"
 cat > "$TMP" <<EOF
 # Jepsen RESULTS
