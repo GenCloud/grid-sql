@@ -15,47 +15,22 @@
  */
 package org.genfork.grid.sql.exec;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import org.genfork.grid.catalog.ColumnDef;
-import org.genfork.grid.catalog.FkAction;
-import org.genfork.grid.catalog.FkDef;
-import org.genfork.grid.catalog.SequenceDef;
-import org.genfork.grid.catalog.SqlType;
-import org.genfork.grid.catalog.TableAnalyzeStats;
-import org.genfork.grid.catalog.TableSchema;
-import org.genfork.grid.catalog.TriggerEvent;
+import org.genfork.grid.catalog.*;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.RowEncoder;
-import org.genfork.grid.sql.SqlBuiltinEvalUtil;
+import org.genfork.grid.sql.*;
 import org.genfork.grid.sql.SqlBuiltinExpr.ClockExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
 import org.genfork.grid.sql.SqlBuiltinExpr.ExcludedRef;
-import org.genfork.grid.sql.SqlEngine;
-import org.genfork.grid.sql.SqlResult;
-import org.genfork.grid.sql.SqlSession;
-import org.genfork.grid.sql.SqlStatementParser;
-import org.genfork.grid.sql.ast.DmlAst.AnalyzeSql;
-import org.genfork.grid.sql.ast.DmlAst.ConflictAction;
-import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
-import org.genfork.grid.sql.ast.DmlAst.InsertSql;
-import org.genfork.grid.sql.ast.DmlAst.MergeSql;
-import org.genfork.grid.sql.ast.DmlAst.OnConflict;
-import org.genfork.grid.sql.ast.DmlAst.SequenceCallExpr;
-import org.genfork.grid.sql.ast.DmlAst.TruncateSql;
-import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
-import org.genfork.grid.sql.SqlStatementTag;
+import org.genfork.grid.sql.ast.DmlAst.*;
 import org.genfork.grid.sql.tx.KeyWrapper;
 import org.genfork.grid.sql.tx.SqlTxBuffer;
 import org.genfork.grid.store.TableStore;
-import org.genfork.grid.utils.SerialUtil;
+
+import java.util.*;
 
 /**
  * INSERT / UPDATE / DELETE / MERGE (+ TX staging) and {@code ANALYZE} for {@link org.genfork.grid.sql.SqlEngine}.
@@ -217,7 +192,7 @@ public final class SqlDmlExecutor {
 		}
 	}
 
-	private void enforceParentDelete(SqlSession session, String parentTable, Object pkValue, byte[] parentKey) {
+	private void enforceParentDelete(SqlSession session, String parentTable, byte[] parentKey) {
 		final TableStore parent = tables.requireStore(parentTable);
 		final byte[] parentValue = SqlDmlLockOps.existingBytes(session, parentTable, parent, parentKey);
 		if (parentValue == null || !LogicalFieldCursor.canOpen(parent.schema(), parentValue)) {
@@ -253,7 +228,7 @@ public final class SqlDmlExecutor {
 								"FOREIGN KEY SET NULL requires nullable child columns (" + fk.name() + ")");
 					}
 				}
-				SqlFkMatchOps.forEachChildFkMatch(child, childSchema, fk, want, (key, value, cursor) -> {
+				SqlFkMatchOps.forEachChildFkMatch(child, childSchema, fk, want, (key, value, _) -> {
 					final Map<String, Object> sets = new LinkedHashMap<>();
 					for (String childColumn : fk.childColumns()) {
 						sets.put(childColumn, null);
@@ -323,7 +298,7 @@ public final class SqlDmlExecutor {
 						"MERGE USING table exceeds MAX_MERGE_SOURCE_ROWS=" + MAX_MERGE_SOURCE_ROWS);
 			}
 			final byte[] value = sourceStore.getCommittedBytes(key);
-			if (value == null || !LogicalFieldCursor.canOpen(sourceSchema, value)) {
+			if (!LogicalFieldCursor.canOpen(sourceSchema, value)) {
 				return;
 			}
 			sourceRows.add(LogicalFieldCursor.open(sourceSchema, value).project(null));
@@ -358,7 +333,8 @@ public final class SqlDmlExecutor {
 			throw new IllegalArgumentException("MERGE ON source column unknown: " + s.sourceOnCol());
 		}
 		final Object matchValue = SqlMergeMatchOps.lookupNamed(sourceNamed, s.sourceOnCol());
-		final byte[] conflictKey = SqlMergeMatchOps.resolveMatchKey(store, s.targetOnCol(), List.of(matchValue));
+        assert matchValue != null;
+        final byte[] conflictKey = SqlMergeMatchOps.resolveMatchKey(store, s.targetOnCol(), List.of(matchValue));
 		final byte[] existing = SqlDmlLockOps.existingBytes(session, table, store, conflictKey);
 		if (existing != null) {
 			if (s.matchedSetsOrNull() == null || s.matchedSetsOrNull().isEmpty()) {
@@ -410,7 +386,7 @@ public final class SqlDmlExecutor {
 				final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 				final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
 				SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
-				enforceParentDelete(session, table, s.pkValueOrNull(), key);
+				enforceParentDelete(session, table, key);
 				final long affected = store.deleteByPk(s.pkValueOrNull());
 				SqlTriggerFireOps.fireAfterRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
 				final SqlResult result = SqlResult.affected(SqlStatementTag.DELETE, affected);
@@ -421,9 +397,7 @@ public final class SqlDmlExecutor {
 			for (byte[] key : store.keysMatching(s.whereSql())) {
 				final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
 				SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
-				final Object pkObj = SerialUtil.readPrimitives(
-						key, 0, store.schema().pkColumn().javaType());
-				enforceParentDelete(session, table, pkObj, key);
+				enforceParentDelete(session, table, key);
 				affected += store.deleteByKeyBytes(key);
 				SqlTriggerFireOps.fireAfterRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
 			}
@@ -436,7 +410,7 @@ public final class SqlDmlExecutor {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
 			final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
 			SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
-			enforceParentDelete(session, table, s.pkValueOrNull(), key);
+			enforceParentDelete(session, table, key);
 			SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.DELETE, store.encodeDeletePk(s.pkValueOrNull()));
 			SqlTriggerFireOps.fireAfterRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
 			affected = 1L;
@@ -444,9 +418,7 @@ public final class SqlDmlExecutor {
 			for (byte[] key : store.keysMatching(s.whereSql())) {
 				final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
 				SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
-				final Object pkObj = SerialUtil.readPrimitives(
-						key, 0, store.schema().pkColumn().javaType());
-				enforceParentDelete(session, table, pkObj, key);
+				enforceParentDelete(session, table, key);
 				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.DELETE,
 						new TableStore.EncodedRow(key, null, store.shardOf(key)));
 				SqlTriggerFireOps.fireAfterRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
@@ -541,6 +513,13 @@ public final class SqlDmlExecutor {
 				SqlTriggerFireOps.fireAfterRow(
 						session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
 				affected = 1L;
+				VisibilityDiag.debugf("dml.update.rmw",
+						"table=%s %s staged %s", table, VisibilityDiag.keyTag(key),
+						VisibilityDiag.valTag(encoded.valueBytes()));
+			} else {
+				VisibilityDiag.debugf("dml.update.rmw",
+						"table=%s %s base=null => affected=0 (caller may INSERT)",
+						table, VisibilityDiag.keyTag(key));
 			}
 		} else if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
@@ -603,7 +582,7 @@ public final class SqlDmlExecutor {
 						"UPDATE FROM exceeds MAX_UPDATE_FROM_SOURCE_KEYS=" + MAX_UPDATE_FROM_SOURCE_KEYS);
 			}
 			final byte[] value = source.getCommittedBytes(rowKey);
-			if (value == null || !LogicalFieldCursor.canOpen(sourceSchema, value)) {
+			if (!LogicalFieldCursor.canOpen(sourceSchema, value)) {
 				return;
 			}
 			final byte[] joinKey = LogicalFieldCursor.open(sourceSchema, value).indexKeyBytes(sourceOrdinal);
@@ -658,8 +637,14 @@ public final class SqlDmlExecutor {
 			if (session.inTransaction()) {
 				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
 				affected = 1L;
+				VisibilityDiag.debugf("dml.insert",
+						"table=%s tx-stage %s %s", table, VisibilityDiag.keyTag(encoded.keyBytes()),
+						VisibilityDiag.valTag(encoded.valueBytes()));
 			} else {
 				affected = store.upsert(row);
+				VisibilityDiag.debugf("dml.insert",
+						"table=%s autocommit affected=%d %s", table, affected,
+						VisibilityDiag.keyTag(encoded.keyBytes()));
 			}
 			if (affected > 0L) {
 				SqlTriggerFireOps.fireAfterRow(
@@ -761,7 +746,7 @@ public final class SqlDmlExecutor {
 			Map<String, Object> sets
 	) {
 		final TableSchema schema = store.schema();
-		final Object[] existingValues = existing != null && LogicalFieldCursor.canOpen(schema, existing)
+		final Object[] existingValues = LogicalFieldCursor.canOpen(schema, existing)
 				? RowEncoder.decode(schema, existing)
 				: null;
 		final Map<String, Object> out = new LinkedHashMap<>();
@@ -798,9 +783,7 @@ public final class SqlDmlExecutor {
 		for (byte[] key : keys) {
 			final byte[] oldBlob = SqlDmlLockOps.existingBytes(session, table, store, key);
 			SqlTriggerFireOps.fireBeforeRow(session, engine, table, TriggerEvent.DELETE, oldBlob, null);
-			final Object pkObj = SerialUtil.readPrimitives(
-					key, 0, store.schema().pkColumn().javaType());
-			enforceParentDelete(session, table, pkObj, key);
+			enforceParentDelete(session, table, key);
 			if (session.inTransaction()) {
 				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.DELETE,
 						new TableStore.EncodedRow(key, null, store.shardOf(key)));

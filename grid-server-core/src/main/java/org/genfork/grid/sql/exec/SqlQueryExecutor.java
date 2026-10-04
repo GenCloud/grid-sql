@@ -16,6 +16,7 @@
 package org.genfork.grid.sql.exec;
 
 import org.genfork.grid.catalog.ColumnDef;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.catalog.FunctionKind;
 import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableCatalog.FunctionDef;
@@ -158,7 +159,7 @@ public final class SqlQueryExecutor {
 			SqlForUpdateJoinLockOps.requireSupportedJoinForUpdate(s);
 		}
 		if (s.hasFromFunction()) {
-			return selectFromTableUdf(session, s);
+			return selectFromTableUdf(s);
 		}
 		if (SqlInformationSchemaExecutor.matches(s.table())) {
 			final SqlResult raw = SqlInformationSchemaExecutor.select(tables.catalog(), s);
@@ -293,6 +294,12 @@ public final class SqlQueryExecutor {
 			final byte[] value = dirty == null ? store.getCommittedBytes(key) : dirty.valueBytesOrNull();
 			if (value != null) {
 				rows.add(store.projectBytes(value, projection));
+			} else if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf("query.pkRead",
+						"MISS table=%s inTx=%s dirty=%s %s",
+						table, session.inTransaction(),
+						dirty == null ? "none" : dirty.op(),
+						VisibilityDiag.keyTag(key));
 			}
 		}
 		return SqlResult.resultSet(metas, rows);
@@ -312,7 +319,7 @@ public final class SqlQueryExecutor {
 	}
 
 
-	private SqlResult selectFromTableUdf(SqlSession session, SelectSql s) {
+	private SqlResult selectFromTableUdf(SelectSql s) {
 		final FunctionFrom from = s.fromFunctionOrNull();
 		final FunctionDef def = SqlUdfLookup.require(from.functionName());
 		if (def.kind() != FunctionKind.TABLE || def.tableUdf() == null) {
@@ -1006,7 +1013,6 @@ public final class SqlQueryExecutor {
 			List<Function<String, List<byte[]>>> peers,
 			List<BiFunction<String, byte[], byte[]>> peerBlobs
 	) {
-		final int leftOrd = leftOrds[0];
 		final int rightOrd = rightOrds[0];
 		// PK probe right: left/working stays local; fan-in right build blobs (incl. peer fetch).
 		if (rightOnPk && leftOrds.length == 1 && edge.kind() != JoinKind.RIGHT && edge.kind() != JoinKind.FULL) {
@@ -1053,11 +1059,7 @@ public final class SqlQueryExecutor {
 			List<SqlJoinOps.JoinBlobRow> rows,
 			boolean whereAppliedOnWire
 	) {
-		JoinedWorking(List<ColumnDef> cols, List<TableSchema> sideSchemas, List<SqlJoinOps.JoinBlobRow> rows) {
-			this(cols, sideSchemas, rows, false);
-		}
 	}
-
 
 	private FilterCondition leftOnlyJoinFilter(SelectSql s, TableSchema leftSchema) {
 		final FilterCondition filter = selectFilter(s.sql());

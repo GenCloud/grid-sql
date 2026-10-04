@@ -16,6 +16,7 @@
 package org.genfork.grid.replication;
 
 import org.genfork.grid.codec.duplex.DuplexBlob;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.codec.duplex.DuplexCodecSupport;
 import org.genfork.grid.mem.stage.GridEntriesProcessor.AddEntry;
 import org.genfork.grid.mem.stage.GridEntriesProcessor.Entry;
@@ -139,9 +140,16 @@ public class MutationRecorder {
 			entries = List.of();
 		}
 		if (entries.size() == 1 && (beginValue == null || beginValue.length == 0)) {
+			VisibilityDiag.debugf("recorder.txUnit",
+					"domain=%s shard=%d txId=%d path=data-only entries=1",
+					domainType, shard, txId);
 			recordCommittedBatchBlocking(shard, entries);
 			return;
 		}
+		VisibilityDiag.debugf("recorder.txUnit",
+				"domain=%s shard=%d txId=%d path=markers entries=%d beginLen=%d",
+				domainType, shard, txId, entries.size(),
+				beginValue == null ? 0 : beginValue.length);
 		try {
 			final byte[] markerKey = Long.toHexString(txId).getBytes(StandardCharsets.UTF_8);
 			final List<ReplicationOp> templates =

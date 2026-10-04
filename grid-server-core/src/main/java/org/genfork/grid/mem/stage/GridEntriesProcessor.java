@@ -15,6 +15,8 @@
  */
 package org.genfork.grid.mem.stage;
 
+import org.genfork.grid.diag.VisibilityDiag;
+
 import org.genfork.grid.mem.GridScalableMap;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
@@ -288,9 +290,13 @@ public class GridEntriesProcessor {
 		}
 		final byte[] fromSealed = sealedGet(key);
 		if (fromSealed == null) {
+			VisibilityDiag.debugf("map.getCommitted",
+					"MISS shard=%d %s map=null sealed=null", shardNum, VisibilityDiag.keyTag(key));
 			return null;
 		}
 		if (fromSealed.length == 0) {
+			VisibilityDiag.debugf("map.getCommitted",
+					"MISS shard=%d %s sealedEmpty", shardNum, VisibilityDiag.keyTag(key));
 			return null;
 		}
 		ReplicationMetrics.recordSealedMiss();
@@ -588,11 +594,17 @@ public class GridEntriesProcessor {
 		}
 		if (delete) {
 			final byte[] removed = gridScalableMap.remove(key);
+			VisibilityDiag.debugf("map.installCommitted",
+					"shard=%d DELETE %s removed=%s", shardNum, VisibilityDiag.keyTag(key),
+					removed != null);
 			if (removed != null && gridIndexWorker != null) {
 				gridIndexWorker.indexNowRemove(key);
 			}
 		} else {
 			gridScalableMap.put(key, value);
+			VisibilityDiag.debugf("map.installCommitted",
+					"shard=%d UPSERT %s %s", shardNum, VisibilityDiag.keyTag(key),
+					VisibilityDiag.valTag(value));
 			if (gridIndexWorker != null) {
 				gridIndexWorker.indexNow(key, value);
 			}

@@ -14,6 +14,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,n1
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_GRID_DIAG_VISIBILITY: DEBUG
     volumes:
       - n1-data:/app/data
     command:
@@ -45,6 +47,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,n2
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_GRID_DIAG_VISIBILITY: DEBUG
     volumes:
       - n2-data:/app/data
     command:
@@ -76,6 +80,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,n3
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_GRID_DIAG_VISIBILITY: DEBUG
     volumes:
       - n3-data:/app/data
     command:
@@ -119,6 +125,8 @@ services:
       JEPSEN_USE_LOCALHOST: "0"
       JAVA_HOME: /opt/java/openjdk
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_GRID_DIAG_VISIBILITY: DEBUG
       PATH: /opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     networks:
       - jepsen-net

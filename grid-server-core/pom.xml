@@ -323,6 +323,8 @@
                     <forkedProcessTimeoutInSeconds>${surefire.forkedProcessTimeoutInSeconds}</forkedProcessTimeoutInSeconds>
                     <systemPropertyVariables>
                         <jmh.ignoreLock>true</jmh.ignoreLock>
+                        <logging.level.org.genfork.grid>DEBUG</logging.level.org.genfork.grid>
+                        <logging.level.grid.diag.visibility>DEBUG</logging.level.grid.diag.visibility>
                     </systemPropertyVariables>
                     <argLine>-Xmx2g
                         --enable-preview

@@ -155,6 +155,12 @@ set +e
 run_workload register
 reg_code=$?
 set -e
+if [[ "$reg_code" -ne 0 ]]; then
+  if [[ -x "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+    echo "=== FAIL register: dumping cluster docker logs before recreate ==="
+    bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+  fi
+fi
 ensure_cluster
 echo "=== no-chaos append ==="
 set +e
@@ -173,4 +179,8 @@ if [[ "$REG_OUTCOME" == "PASS" && "$APP_OUTCOME" == "PASS" ]]; then
   exit 0
 fi
 stamp_outcome FAIL "$NOTES"
+if [[ -x "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+  echo "=== FAIL: dumping cluster docker logs before purge ==="
+  bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+fi
 exit 1

@@ -150,7 +150,20 @@ run_workload() {
 install_sql_client
 ensure_cluster
 
+dump_cluster_logs_if_needed() {
+  local ec="${1:-1}"
+  if [[ "$ec" -eq 0 ]]; then
+    return 0
+  fi
+  echo "=== FAIL (exit=$ec): dumping cluster docker logs before purge ==="
+  if [[ -x "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+    bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+  fi
+}
+
 release_jepsen_ports() {
+  local _ec=$?
+  dump_cluster_logs_if_needed "$_ec" || true
   echo "Releasing Jepsen host ports (1dc+multidc compose down)..."
   if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
     bash "$JEPSEN_DIR/scripts/jepsen-purge.sh" all || true
@@ -165,6 +178,7 @@ if run_workload register; then
   REGISTER_OUTCOME=PASS
 else
   REGISTER_OUTCOME=FAIL
+  dump_cluster_logs_if_needed 1 || true
 fi
 
 ensure_cluster
@@ -183,4 +197,5 @@ if [[ "$REGISTER_OUTCOME" == "PASS" && "$APPEND_OUTCOME" == "PASS" ]]; then
 fi
 
 stamp_outcome FAIL "$NOTES"
+dump_cluster_logs_if_needed 1 || true
 exit 1
