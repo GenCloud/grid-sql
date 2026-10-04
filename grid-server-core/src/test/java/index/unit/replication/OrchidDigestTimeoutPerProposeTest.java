@@ -32,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,6 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class OrchidDigestTimeoutPerProposeTest {
 	private static final long AWAIT_MS = 5_000L;
+	private static final long POLL_MS = 20L;
 	private static final long FIRST_PROPOSE_ID = 1L;
 	private static final long STALE_BACKDATE_MS = 6_000L;
 
@@ -67,6 +69,10 @@ class OrchidDigestTimeoutPerProposeTest {
 		final OrchidNode replica = start("age-b", List.of("age-a"));
 		primary.onPeerAvailable("age-b");
 		replica.onPeerAvailable("age-a");
+		// Tip fence clears tipAdvertised on HELLO; onPhase is mailbox-async — wait before hold/admit.
+		assertTrue(await(() -> !primary.awaitsPeerTipAdvertisement()
+						&& !replica.awaitsPeerTipAdvertisement()),
+				"mesh tip advertisement after HELLO before holding phase ACKs");
 
 		mesh.holdPhasesTo("age-a");
 		final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
@@ -90,6 +96,22 @@ class OrchidDigestTimeoutPerProposeTest {
 							&& ex.getCause().getMessage().contains("local propose digest timeout"),
 					"expected digest timeout, got: " + ex);
 		}
+	}
+
+	private static boolean await(BooleanSupplier condition) {
+		final long deadline = System.currentTimeMillis() + AWAIT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			try {
+				Thread.sleep(POLL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return condition.getAsBoolean();
 	}
 
 	private OrchidNode start(String id, List<String> peers) {

@@ -32,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,6 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class OrchidCommitDrainUnsyncedTest {
 	private static final long AWAIT_MS = 5_000L;
+	private static final long POLL_MS = 20L;
 	private static final long FIRST_PROPOSE_ID = 1L;
 
 	private final Map<String, OrchidNode> nodes = new ConcurrentHashMap<>();
@@ -66,6 +68,9 @@ class OrchidCommitDrainUnsyncedTest {
 		final OrchidNode replica = start("drain-b", List.of("drain-a"));
 		primary.onPeerAvailable("drain-b");
 		replica.onPeerAvailable("drain-a");
+		assertTrue(await(() -> !primary.awaitsPeerTipAdvertisement()
+						&& !replica.awaitsPeerTipAdvertisement()),
+				"mesh tip advertisement after HELLO before holding phase ACKs");
 
 		mesh.holdPhasesTo("drain-a");
 		final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
@@ -86,6 +91,22 @@ class OrchidCommitDrainUnsyncedTest {
 		final long seq = future.get(AWAIT_MS, TimeUnit.MILLISECONDS);
 		assertTrue(seq >= 1L, "quorum-acked propose must commit despite post-admit unsynced view");
 		assertTrue(primary.getLastCommittedSeq() >= seq);
+	}
+
+	private static boolean await(BooleanSupplier condition) {
+		final long deadline = System.currentTimeMillis() + AWAIT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			try {
+				Thread.sleep(POLL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return condition.getAsBoolean();
 	}
 
 	private OrchidNode start(String id, List<String> peers) {

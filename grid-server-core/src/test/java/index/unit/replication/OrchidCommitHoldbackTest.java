@@ -64,6 +64,10 @@ class OrchidCommitHoldbackTest {
 		final OrchidNode replica = start("r1", List.of("p1"), MAX_IN_FLIGHT);
 		primary.onPeerAvailable("r1");
 		replica.onPeerAvailable("p1");
+		// onPhase is mailbox-async: admit must wait for tipAdvertised after HELLO clear.
+		assertTrue(await(() -> !primary.awaitsPeerTipAdvertisement()
+						&& !replica.awaitsPeerTipAdvertisement()),
+				"mesh tip advertisement after HELLO before pipelined admit");
 
 		final List<Long> appliedOnReplica = new CopyOnWriteArrayList<>();
 		replica.addApplyListener(op -> appliedOnReplica.add(op.opSeq()));

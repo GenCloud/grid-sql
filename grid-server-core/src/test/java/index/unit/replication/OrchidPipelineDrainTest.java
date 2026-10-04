@@ -32,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,6 +48,7 @@ class OrchidPipelineDrainTest {
 	private static final int MAX_IN_FLIGHT = 64;
 	private static final int PIPELINE_DEPTH = 64;
 	private static final long AWAIT_MS = 15_000L;
+	private static final long POLL_MS = 20L;
 	private static final int HEAVY_APPLY_SPIN = 2_000;
 
 	private final Map<String, OrchidNode> nodes = new ConcurrentHashMap<>();
@@ -96,6 +98,9 @@ class OrchidPipelineDrainTest {
 		final OrchidNode replica = start("r1", List.of("p1"), MAX_IN_FLIGHT);
 		primary.onPeerAvailable("r1");
 		replica.onPeerAvailable("p1");
+		assertTrue(await(() -> !primary.awaitsPeerTipAdvertisement()
+						&& !replica.awaitsPeerTipAdvertisement()),
+				"mesh tip advertisement after HELLO before pipelined admit");
 
 		final AtomicInteger appliedPrimary = new AtomicInteger();
 		primary.addApplyListener(op -> appliedPrimary.incrementAndGet());
@@ -114,6 +119,22 @@ class OrchidPipelineDrainTest {
 		}
 		assertEquals(batch, maxSeq);
 		assertEquals(batch, appliedPrimary.get());
+	}
+
+	private static boolean await(BooleanSupplier condition) {
+		final long deadline = System.currentTimeMillis() + AWAIT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			try {
+				Thread.sleep(POLL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return condition.getAsBoolean();
 	}
 
 	private OrchidNode start(String id, List<String> peers, int maxInFlight) {

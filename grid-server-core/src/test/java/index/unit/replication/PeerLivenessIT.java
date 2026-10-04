@@ -25,6 +25,7 @@ import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -34,6 +35,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * re-{@code addPeer} restores multi-node sync. Distinct from partition {@code isolatePeer}.
  */
 public class PeerLivenessIT {
+
+	private static final long SYNC_TIMEOUT_MS = 5_000L;
+	private static final long POLL_MS = 50L;
 
 	@TempDir
 	Path tempDir;
@@ -66,8 +70,15 @@ public class PeerLivenessIT {
 
 		a.removePeer("live-b");
 		b.stop();
-		Thread.sleep(200);
 
+		assertTrue(await(() -> a.getOrchidNode().livePeerCount() == 0
+						&& a.isWriterEligible()),
+				"after intentional removePeer survivor must be solo writerEligible"
+						+ " live=" + a.getOrchidNode().livePeerCount()
+						+ " synced=" + a.getOrchidNode().isSynced()
+						+ " proposer=" + a.getOrchidNode().isPhaseRankedProposer()
+						+ " awaitTip=" + a.getOrchidNode().awaitsPeerTipAdvertisement()
+						+ " eligible=" + a.isWriterEligible());
 		assertEquals(0, a.getOrchidNode().livePeerCount());
 		a.ensureOrchidSynced();
 
@@ -89,6 +100,17 @@ public class PeerLivenessIT {
 
 		a.stop();
 		b2.stop();
+	}
+
+	private static boolean await(BooleanSupplier condition) throws InterruptedException {
+		final long deadline = System.currentTimeMillis() + SYNC_TIMEOUT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			Thread.sleep(POLL_MS);
+		}
+		return condition.getAsBoolean();
 	}
 
 	private static int freePort() throws Exception {
