@@ -6,18 +6,18 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 
 | Field | Value |
 |-------|--------|
-| stamp | `2026-10-04-2347-hunt-G-nochao-r5` |
-| date | 2026-10-05T00:07:17.5652990+03:00 |
-| git | cd36151 |
+| stamp | `2026-10-04-2347-hunt-G-nochao-r8` |
+| date | 2026-10-05T00:14:30.8132995+03:00 |
+| git | fbd622e |
 | host | DESKTOP-4IC511D |
 | mode | `SYNC_VOTERS_ACROSS_DC` (topology 3+2) |
-| outcome | `PASS` |
-| register | n/a |
-| append | PASS (:valid? true) |
+| outcome | `FAIL` |
+| register | - |
+| append | - |
 | chaos | no-nemesis |
 | multi-host SQL | `grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434,127.0.0.1:15435/public` |
-| latency (ok-ops, warmup 10s) | register: workload=register warmupDrop=10s fail=0 info=0 ok=303 | read: n=122 p50=5.534ms p95=10.349ms p99=13.700ms | write: n=142 p50=13.563ms p95=39.254ms p99=47.462ms | txn_r: n=0 | txn_append: n=0; append: workload=append warmupDrop=10s fail=0 info=0 ok=603 | read: n=0 | write: n=0 | txn_r: n=187 p50=3.936ms p95=13.941ms p99=16.060ms | txn_append: n=341 p50=8.812ms p95=25.781ms p99=37.787ms |
-| notes | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
+| latency (ok-ops, warmup 10s) | n/a |
+| notes | BLOCKED/ERROR: compose up failed: 1 |
 
 ## History
 
@@ -78,5 +78,8 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 | `2026-10-04-2347-hunt-G-nochao-r3` | SYNC_VOTERS_ACROSS_DC | n/a | PASS (:valid? true) | PASS | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
 | `2026-10-04-2347-hunt-G-nochao-r4` | SYNC_VOTERS_ACROSS_DC | n/a | PASS (:valid? true) | PASS | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
 | `2026-10-04-2347-hunt-G-nochao-r5` | SYNC_VOTERS_ACROSS_DC | n/a | PASS (:valid? true) | PASS | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
+| `2026-10-04-2347-hunt-G-nochao-r6` | SYNC_VOTERS_ACROSS_DC | n/a | PASS (:valid? true) | PASS | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
+| `2026-10-04-2347-hunt-G-nochao-r7` | SYNC_VOTERS_ACROSS_DC | n/a | PASS (:valid? true) | PASS | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
+| `2026-10-04-2347-hunt-G-nochao-r8` | SYNC_VOTERS_ACROSS_DC | - | - | FAIL | BLOCKED/ERROR: compose up failed: 1 |
 
 Parent 1-DC: [../RESULTS.md](../RESULTS.md).
