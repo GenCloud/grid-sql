@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstMode;
 import org.genfork.grid.mem.stage.WorkingSetBudget;
@@ -117,6 +118,11 @@ public final class SealedHydrateService {
 			if (e.getValue() > 0) {
 				nodeState.resetApplied(domainType, e.getKey());
 				nodeState.advanceApplied(domainType, e.getKey(), e.getValue());
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_HYDRATE_ADVANCE_APPLIED,
+							"mode=full domain=%s shard=%d appliedWm=%d node=%s",
+							domainType, e.getKey(), e.getValue(), nodeState.getNodeId());
+				}
 			}
 		}
 		final int hydrated = snapshotService.hydrateDomain(domainType, applier, homologousRepair);
@@ -159,6 +165,11 @@ public final class SealedHydrateService {
 		if (wm > 0) {
 			nodeState.resetApplied(domainType, shard);
 			nodeState.advanceApplied(domainType, shard, wm);
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_HYDRATE_ADVANCE_APPLIED,
+						"mode=lazy domain=%s shard=%d appliedWm=%d node=%s",
+						domainType, shard, wm, nodeState.getNodeId());
+			}
 		}
 		rejectHugeOpLogDeltaWithoutSbpt(domainType, shard, wm);
 		final int n = snapshotService.hydrateOpLogFrom(domainType, shard, wm, applier, homologousRepair);

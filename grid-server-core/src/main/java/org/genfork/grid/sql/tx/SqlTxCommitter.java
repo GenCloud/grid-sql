@@ -67,7 +67,10 @@ public final class SqlTxCommitter {
 		final List<DistForUpdatePeerLockLease> peerLeases = buf.peerLockedLeases();
 		final boolean locksOnly = buf.isEmpty() && !peerLeases.isEmpty();
 		if (buf.isEmpty() && !locksOnly) {
-			VisibilityDiag.debug("tx.commit", "empty dirty (no-op)");
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debug("tx.commit", "empty dirty (no-op)");
+            }
+
 			catalog.flushSequencesIfDirty();
 			session.endTx();
 			SqlTxMetrics.recordCommit();
@@ -118,10 +121,12 @@ public final class SqlTxCommitter {
 					break;
 				}
 			}
+
 			VisibilityDiag.debugf("tx.commit",
 					"txId=%d repl=%s singleStream=%s streams=[%s] dirtyTables=%d dirtyKeys=[%s]",
 					buf.txId(), repl, singleStream, streams, buf.tables().size(), keys);
 		}
+
 		try {
 			if (repl) {
 				ReplicaAccessGate.ensureWrite(replication);
@@ -155,9 +160,15 @@ public final class SqlTxCommitter {
 			catalog.flushSequencesIfDirty();
 			session.endTx();
 			SqlTxMetrics.recordCommit();
-			VisibilityDiag.debugf("tx.commit", "OK txId=%d installed=%d", buf.txId(), installed.size());
+
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("tx.commit", "OK txId=%d installed=%d", buf.txId(), installed.size());
+            }
 		} catch (RuntimeException ex) {
-			VisibilityDiag.debugf("tx.commit", "FAIL txId=%d err=%s", buf.txId(), ex.toString());
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("tx.commit", "FAIL txId=%d err=%s", buf.txId(), ex.toString());
+            }
+
 			finishForUpdatePrepare(session, buf, false);
 			if (!repl) {
 				restoreInstalled(installed);

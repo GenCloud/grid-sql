@@ -46,6 +46,37 @@ public final class VisibilityDiag {
 	 */
 	public static final String WHERE_QUERY_EMPTY_READ = "query.emptyRead";
 
+	/**
+	 * Local ORCHID tip advanced without a live contiguous commit broadcast
+	 * ({@code advanceCommittedTip} — ship / catch-up). Grep for tip-ok empty-map forks.
+	 */
+	public static final String WHERE_ORCHID_TIP_ADVANCE = "orchid.tipAdvance";
+
+	/**
+	 * Contiguous buffered proposes sealed into tip after proposer loss (unclean / forgetPeer).
+	 */
+	public static final String WHERE_ORCHID_SEAL_BUFFERED = "orchid.sealBuffered";
+
+	/**
+	 * Peer removed from live view; include tip high-water for claim triage.
+	 */
+	public static final String WHERE_ORCHID_FORGET_PEER = "orchid.forgetPeer";
+
+	/**
+	 * writerEligible transition with localTip vs applied-watermark bounds (GHA a2 class).
+	 */
+	public static final String WHERE_ORCHID_WRITER_ELIGIBLE = "orchid.writerEligible";
+
+	/**
+	 * ASYNC ship op arrived while orchid tip already covers opSeq (tip advance skipped).
+	 */
+	public static final String WHERE_APPLIER_SHIP_TIP_COVERS = "applier.shipTipCovers";
+
+	/**
+	 * Sealed/lazy hydrate advanced applied watermark (may not install every key into RAM map).
+	 */
+	public static final String WHERE_HYDRATE_ADVANCE_APPLIED = "hydrate.advanceApplied";
+
 	private VisibilityDiag() {
 	}
 
@@ -54,16 +85,17 @@ public final class VisibilityDiag {
 	}
 
 	public static void debug(String where, String detail) {
-		if (!LOG.isDebugEnabled()) {
+		if (!enabled()) {
 			return;
 		}
 		LOG.debug("{} thread={} {}", where, Thread.currentThread().getName(), detail);
 	}
 
 	public static void debugf(String where, String format, Object... args) {
-		if (!LOG.isDebugEnabled()) {
+		if (!enabled()) {
 			return;
 		}
+
 		debug(where, String.format(format, args));
 	}
 

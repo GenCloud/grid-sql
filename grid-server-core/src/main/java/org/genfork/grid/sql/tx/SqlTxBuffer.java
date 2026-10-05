@@ -125,24 +125,34 @@ public final class SqlTxBuffer {
 		}
 		map.put(key, entry);
 		participations.add(part);
-		VisibilityDiag.debugf("tx.dirty.put",
-				"txId=%d table=%s op=%s shard=%d dirtyNow=%d %s %s",
-				txId, table, entry.op(), entry.shard(), map.size(),
-				VisibilityDiag.keyTag(entry.keyBytes()),
-				VisibilityDiag.valTag(entry.valueBytesOrNull()));
+
+        if (VisibilityDiag.enabled()) {
+            VisibilityDiag.debugf("tx.dirty.put",
+                    "txId=%d table=%s op=%s shard=%d dirtyNow=%d %s %s",
+                    txId, table, entry.op(), entry.shard(), map.size(),
+                    VisibilityDiag.keyTag(entry.keyBytes()),
+                    VisibilityDiag.valTag(entry.valueBytesOrNull()));
+        }
 	}
 
 	public DirtyEntry get(String table, byte[] keyBytes) {
 		final Map<KeyWrapper, DirtyEntry> m = byTable.get(table);
 		if (m == null) {
-			VisibilityDiag.debugf("tx.dirty.get",
-					"txId=%d table=%s hit=none %s", txId, table, VisibilityDiag.keyTag(keyBytes));
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("tx.dirty.get",
+                        "txId=%d table=%s hit=none %s", txId, table, VisibilityDiag.keyTag(keyBytes));
+            }
+
 			return null;
 		}
 		final DirtyEntry hit = m.get(new KeyWrapper(keyBytes));
-		VisibilityDiag.debugf("tx.dirty.get",
-				"txId=%d table=%s hit=%s %s",
-				txId, table, hit == null ? "none" : hit.op(), VisibilityDiag.keyTag(keyBytes));
+
+        if (VisibilityDiag.enabled()) {
+            VisibilityDiag.debugf("tx.dirty.get",
+                    "txId=%d table=%s hit=%s %s",
+                    txId, table, hit == null ? "none" : hit.op(), VisibilityDiag.keyTag(keyBytes));
+        }
+
 		return hit;
 	}
 

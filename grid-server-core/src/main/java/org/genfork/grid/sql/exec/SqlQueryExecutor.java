@@ -293,11 +293,14 @@ public final class SqlQueryExecutor {
 					: null;
 			final byte[] value = dirty == null ? store.getCommittedBytes(key) : dirty.valueBytesOrNull();
 			if (value != null) {
-				VisibilityDiag.debugf("query.pkRead",
-						"HIT table=%s inTx=%s path=%s %s %s",
-						table, session.inTransaction(),
-						dirty == null ? "committed" : "dirty-" + dirty.op(),
-						VisibilityDiag.keyTag(key), VisibilityDiag.valTag(value));
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf("query.pkRead",
+                            "HIT table=%s inTx=%s path=%s %s %s",
+                            table, session.inTransaction(),
+                            dirty == null ? "committed" : "dirty-" + dirty.op(),
+                            VisibilityDiag.keyTag(key), VisibilityDiag.valTag(value));
+                }
+
 				rows.add(store.projectBytes(value, projection));
 			} else if (VisibilityDiag.enabled()) {
 				VisibilityDiag.debugf(VisibilityDiag.WHERE_QUERY_EMPTY_READ,
@@ -463,14 +466,21 @@ public final class SqlQueryExecutor {
 			final SqlTxBuffer.DirtyEntry dirty = tx.get(table, key);
 			if (dirty != null) {
 				if (dirty.op() == SqlTxBuffer.Op.DELETE) {
-					VisibilityDiag.debugf("query.inTx",
-							"txId=%d table=%s path=tombstone %s", tx.txId(), table,
-							VisibilityDiag.keyTag(key));
+                    if (VisibilityDiag.enabled()) {
+                        VisibilityDiag.debugf("query.inTx",
+                                "txId=%d table=%s path=tombstone %s", tx.txId(), table,
+                                VisibilityDiag.keyTag(key));
+                    }
+
 					return SqlResult.resultSet(metas, List.of());
 				}
-				VisibilityDiag.debugf("query.inTx",
-						"txId=%d table=%s path=dirty %s %s", tx.txId(), table,
-						VisibilityDiag.keyTag(key), VisibilityDiag.valTag(dirty.valueBytesOrNull()));
+
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf("query.inTx",
+                            "txId=%d table=%s path=dirty %s %s", tx.txId(), table,
+                            VisibilityDiag.keyTag(key), VisibilityDiag.valTag(dirty.valueBytesOrNull()));
+                }
+
 				final Object[] row = store.projectBytes(dirty.valueBytesOrNull(), projection);
 				return SqlResult.resultSet(metas, Collections.singletonList(row));
 			}
@@ -479,9 +489,12 @@ public final class SqlQueryExecutor {
 				try {
 					if (SqlTxSnapshotOps.collectRemoteTombstones(table, tables.remoteDirtyPeerTombstoneKeyExecutors())
 							.contains(new KeyWrapper(key))) {
-						VisibilityDiag.debugf("query.inTx",
-								"txId=%d table=%s path=remote-tombstone %s", tx.txId(), table,
-								VisibilityDiag.keyTag(key));
+                        if (VisibilityDiag.enabled()) {
+                            VisibilityDiag.debugf("query.inTx",
+                                    "txId=%d table=%s path=remote-tombstone %s", tx.txId(), table,
+                                    VisibilityDiag.keyTag(key));
+                        }
+
 						return SqlResult.resultSet(metas, List.of());
 					}
 				} finally {
@@ -489,9 +502,12 @@ public final class SqlQueryExecutor {
 				}
 			}
 
-			VisibilityDiag.debugf("query.inTx",
-					"txId=%d table=%s path=fallthrough-committed %s", tx.txId(), table,
-					VisibilityDiag.keyTag(key));
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("query.inTx",
+                        "txId=%d table=%s path=fallthrough-committed %s", tx.txId(), table,
+                        VisibilityDiag.keyTag(key));
+            }
+
 			return selectCommitted(store, s, metas, projection);
 		}
 
@@ -1149,20 +1165,29 @@ public final class SqlQueryExecutor {
 			final byte[] pkKey = store.keyBytesForPk(s.pkValueOrNull());
 			final Object[] full = store.getByPk(s.pkValueOrNull());
 			if (full == null) {
-				VisibilityDiag.debugf(VisibilityDiag.WHERE_QUERY_EMPTY_READ,
-						"MISS tablePk %s pk=%s (Elle-nil if empty)",
-						VisibilityDiag.keyTag(pkKey),
-						VisibilityDiag.preview(s.pkValueOrNull(), 40));
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf(VisibilityDiag.WHERE_QUERY_EMPTY_READ,
+                            "MISS tablePk %s pk=%s (Elle-nil if empty)",
+                            VisibilityDiag.keyTag(pkKey),
+                            VisibilityDiag.preview(s.pkValueOrNull(), 40));
+                }
+
 				rows = List.of();
 			} else if (projection.size() == 1 && "*".equals(projection.getFirst())) {
-				VisibilityDiag.debugf("query.committed",
-						"HIT tablePk %s pk=%s", VisibilityDiag.keyTag(pkKey),
-						VisibilityDiag.preview(s.pkValueOrNull(), 40));
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf("query.committed",
+                            "HIT tablePk %s pk=%s", VisibilityDiag.keyTag(pkKey),
+                            VisibilityDiag.preview(s.pkValueOrNull(), 40));
+                }
+
 				rows = Collections.singletonList(full);
 			} else {
-				VisibilityDiag.debugf("query.committed",
-						"HIT tablePk %s pk=%s", VisibilityDiag.keyTag(pkKey),
-						VisibilityDiag.preview(s.pkValueOrNull(), 40));
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf("query.committed",
+                            "HIT tablePk %s pk=%s", VisibilityDiag.keyTag(pkKey),
+                            VisibilityDiag.preview(s.pkValueOrNull(), 40));
+                }
+
 				final Object[] projected = new Object[projection.size()];
 				for (int i = 0; i < projection.size(); i++) {
 					projected[i] = full[store.schema().requireColumn(projection.get(i)).ordinal()];

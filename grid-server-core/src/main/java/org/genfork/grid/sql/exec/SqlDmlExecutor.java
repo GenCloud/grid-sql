@@ -515,13 +515,18 @@ public final class SqlDmlExecutor {
 				SqlTriggerFireOps.fireAfterRow(
 						session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
 				affected = 1L;
-				VisibilityDiag.debugf("dml.update.rmw",
-						"table=%s %s staged %s", table, VisibilityDiag.keyTag(key),
-						VisibilityDiag.valTag(encoded.valueBytes()));
+
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf("dml.update.rmw",
+                            "table=%s %s staged %s", table, VisibilityDiag.keyTag(key),
+                            VisibilityDiag.valTag(encoded.valueBytes()));
+                }
 			} else {
-				VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
-						"table=%s path=rmw %s base=null => affected=0 (caller may INSERT)",
-						table, VisibilityDiag.keyTag(key));
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
+                            "table=%s path=rmw %s base=null => affected=0 (caller may INSERT)",
+                            table, VisibilityDiag.keyTag(key));
+                }
 			}
 		} else if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
@@ -550,9 +555,12 @@ public final class SqlDmlExecutor {
 				: SqlDmlLockOps.existingBytes(session, table, store, key);
 		if (base == null) {
 			// Smoking gun class: UPDATE0 after prior ok append → client INSERT fork (GHA I / D).
-			VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
-					"table=%s stageInTx=%s %s => affected=0 (caller may INSERT)",
-					table, stageInTx, VisibilityDiag.keyTag(key));
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
+                        "table=%s stageInTx=%s %s => affected=0 (caller may INSERT)",
+                        table, stageInTx, VisibilityDiag.keyTag(key));
+            }
+
 			return 0L;
 		}
 		final TableStore.EncodedRow encoded = store.encodeSetLiterals(key, base, sets);
@@ -643,21 +651,30 @@ public final class SqlDmlExecutor {
 			if (session.inTransaction()) {
 				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
 				affected = 1L;
-				VisibilityDiag.debugf("dml.insert",
-						"table=%s tx-stage %s %s", table, VisibilityDiag.keyTag(encoded.keyBytes()),
-						VisibilityDiag.valTag(encoded.valueBytes()));
+
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf("dml.insert",
+                            "table=%s tx-stage %s %s", table, VisibilityDiag.keyTag(encoded.keyBytes()),
+                            VisibilityDiag.valTag(encoded.valueBytes()));
+                }
 			} else {
 				affected = store.upsert(row);
-				VisibilityDiag.debugf("dml.insert",
-						"table=%s autocommit affected=%d %s", table, affected,
-						VisibilityDiag.keyTag(encoded.keyBytes()));
+
+                if (VisibilityDiag.enabled()) {
+                    VisibilityDiag.debugf("dml.insert",
+                            "table=%s autocommit affected=%d %s", table, affected,
+                            VisibilityDiag.keyTag(encoded.keyBytes()));
+                }
 			}
+
 			if (affected > 0L) {
 				SqlTriggerFireOps.fireAfterRow(
 						session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
 			}
+
 			return affected;
 		}
+
 		// Resolve conflict before encodeUpsert — UNIQUE on target columns must not reject DO UPDATE hit.
 		final byte[] conflictKey = SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
 		final byte[] existing;

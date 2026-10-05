@@ -207,6 +207,11 @@ public class OrchidNode {
 		if (!running.compareAndSet(false, true)) {
 			return;
 		}
+		if (VisibilityDiag.enabled() && lastCommittedSeq > 0L) {
+			VisibilityDiag.debugf("orchid.tipBoot",
+					"localTip=%d proposeChainPrev=%d node=%s",
+					lastCommittedSeq, proposeChainPrev, nodeId);
+		}
 		tickThread = Thread.ofPlatform().name("orchid-tick-" + nodeId).daemon(true).start(this::tickLoop);
 		final double freePerTick = omega * (tickMs / 1000.0);
 		if (freePerTick > 0.35) {
@@ -296,8 +301,10 @@ public class OrchidNode {
 		// Tip not yet known from this peer — writerEligible / admit stay false until phase tip
 		// (unclean heal: lex-smaller lagging node was eligible with stale maxSeen → Elle G-single).
 		view.tipAdvertised = false;
-		VisibilityDiag.debugf("orchid.tipAdvertised",
-				"event=HELLO_CLEAR peer=%s awaitsTip=%s", peerId, awaitsPeerTipAdvertisement());
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf("orchid.tipAdvertised",
+					"event=HELLO_CLEAR peer=%s awaitsTip=%s", peerId, awaitsPeerTipAdvertisement());
+		}
 		if (isPhaseCoupledPeer(peerId) || isLocalPeer(peerId)) {
 			broadcastOwnPhase(0L, 0L);
 		}
@@ -367,6 +374,16 @@ public class OrchidNode {
 		voterEligible.remove(peerId);
 		scheduleSealBufferedThenClearProposer(peerId);
 		log.debug("Orchid forgot peer={}", peerId);
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_FORGET_PEER,
+					"peer=%s localTip=%d maxSeenPeerTip=%d inflight=%d holdback=%d node=%s",
+					peerId,
+					lastCommittedSeq,
+					maxSeenPeerCommittedSeq(),
+					remoteInflightExpected.size(),
+					commitHoldback.size(),
+					nodeId);
+		}
 	}
 
 	/**
@@ -716,9 +733,11 @@ public class OrchidNode {
 		view.digest = msg.digest();
 		view.seen = true;
 		view.tipAdvertised = true;
-		VisibilityDiag.debugf("orchid.tipAdvertised",
-				"event=PHASE_SET peer=%s lastCommittedSeq=%d awaitsTip=%s",
-				msg.nodeId(), msg.lastCommittedSeq(), awaitsPeerTipAdvertisement());
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf("orchid.tipAdvertised",
+					"event=PHASE_SET peer=%s lastCommittedSeq=%d awaitsTip=%s",
+					msg.nodeId(), msg.lastCommittedSeq(), awaitsPeerTipAdvertisement());
+		}
 		noteObservedPeerCommittedSeq(msg.lastCommittedSeq());
 		if (msg.proposeId() > 0L) {
 			final PendingPropose pendingPropose = pending.get(msg.proposeId());
@@ -988,13 +1007,33 @@ public class OrchidNode {
 	 */
 	private int sealBufferedProposesFromProposerSerial(String proposerId) {
 		int sealed = 0;
+		final long tipBefore = lastCommittedSeq;
 		for (; ; ) {
 			final RemoteInflight next = findContiguousBufferedInflight();
 			if (next == null || next.op() == null) {
+				if (VisibilityDiag.enabled() && sealed > 0) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_SEAL_BUFFERED,
+							"proposerFilter=%s sealed=%d tipFrom=%d tipTo=%d node=%s",
+							proposerId == null ? "*" : proposerId,
+							sealed,
+							tipBefore,
+							lastCommittedSeq,
+							nodeId);
+				}
 				return sealed;
 			}
 			if (proposerId != null && !proposerId.equals(next.proposerId())) {
 				// Tip held by another proposer — do not mint their commit because a third peer flapped.
+				if (VisibilityDiag.enabled() && sealed > 0) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_SEAL_BUFFERED,
+							"proposerFilter=%s sealed=%d tipFrom=%d tipTo=%d stoppedOtherProposer=%s node=%s",
+							proposerId,
+							sealed,
+							tipBefore,
+							lastCommittedSeq,
+							next.proposerId(),
+							nodeId);
+				}
 				return sealed;
 			}
 			final long opSeq = next.expectedOpSeq();
@@ -1013,6 +1052,17 @@ public class OrchidNode {
 			lock.lock();
 			try {
 				if (synthetic.opSeq() != lastCommittedSeq + 1L || synthetic.prevOpSeq() != lastCommittedSeq) {
+					if (VisibilityDiag.enabled() && sealed > 0) {
+						VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_SEAL_BUFFERED,
+								"proposerFilter=%s sealed=%d tipFrom=%d tipTo=%d stoppedGap opSeq=%d localTip=%d node=%s",
+								proposerId == null ? "*" : proposerId,
+								sealed,
+								tipBefore,
+								lastCommittedSeq,
+								synthetic.opSeq(),
+								lastCommittedSeq,
+								nodeId);
+					}
 					return sealed;
 				}
 				lastCommittedSeq = synthetic.opSeq();
@@ -1064,8 +1114,10 @@ public class OrchidNode {
 	 */
 	private void onCommitSerial(OrchidCommitMessage msg) {
 		final List<OrchidCommitMessage> toApply = new ArrayList<>(4);
+		final long tipBefore;
 		lock.lock();
 		try {
+			tipBefore = lastCommittedSeq;
 			if (msg.opSeq() <= lastCommittedSeq) {
 				return;
 			}
@@ -1087,6 +1139,16 @@ public class OrchidNode {
 			finishCommitApply(commit);
 		}
 		confirmPersistedAfterDrain(toApply);
+		// Batch / large tip jumps only — single contiguous commits are the healthy hot path.
+		if (VisibilityDiag.enabled() && toApply.size() > 1) {
+			VisibilityDiag.debugf("orchid.commitDrain",
+					"batch=%d tipFrom=%d tipTo=%d firstType=%s node=%s",
+					toApply.size(),
+					tipBefore,
+					lastCommittedSeq,
+					msg.op() == null ? "null" : msg.op().type(),
+					nodeId);
+		}
 	}
 
 	/**
@@ -1724,19 +1786,39 @@ public class OrchidNode {
 	 * while map/OpLog already hold higher seqs via {@link #confirmPersisted} alone.
 	 */
 	public void advanceCommittedTip(long seq) {
+		advanceCommittedTip(seq, "unspecified");
+	}
+
+	/**
+	 * @param reason diag tag for {@link VisibilityDiag#WHERE_ORCHID_TIP_ADVANCE} (ship / persistAndAck / test)
+	 */
+	public void advanceCommittedTip(long seq, String reason) {
 		if (seq <= 0L) {
 			return;
 		}
+		long fromTip = 0L;
+		boolean jumped = false;
 		lock.lock();
 		try {
+			fromTip = lastCommittedSeq;
 			if (seq > lastCommittedSeq) {
 				lastCommittedSeq = seq;
 				proposeChainPrev = Math.max(proposeChainPrev, seq);
+				jumped = true;
 			}
 		} finally {
 			lock.unlock();
 		}
 		persistCommitted(seq);
+		if (VisibilityDiag.enabled() && jumped) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_TIP_ADVANCE,
+					"reason=%s from=%d to=%d delta=%d node=%s",
+					reason == null ? "unspecified" : reason,
+					fromTip,
+					seq,
+					seq - fromTip,
+					nodeId);
+		}
 	}
 
 	private void fireApply(ReplicationOp op, boolean journalRemote) {

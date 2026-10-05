@@ -821,11 +821,23 @@ public class ReplicationCoordinator {
 		// Transition-only: polling waitWriter / claim loops must not flood DEBUG.
 		if (VisibilityDiag.enabled()) {
 			final Boolean prev = lastWriterEligibleDiag.getAndSet(eligible);
-			if (prev == null || prev.booleanValue() != eligible) {
+			if (prev == null || prev != eligible) {
 				final boolean awaits = orchidNode != null && orchidNode.awaitsPeerTipAdvertisement();
-				VisibilityDiag.debugf("orchid.writerEligible",
-						"eligible=%s awaitsPeerTip=%s node=%s",
-						eligible, awaits, nodeState.getNodeId());
+				final long localTip = orchidNode == null ? 0L : orchidNode.getLastCommittedSeq();
+				final long peerTip = orchidNode == null ? 0L : orchidNode.maxSeenPeerCommittedSeq();
+				final long minApplied = nodeState.minAppliedWatermark();
+				final long maxApplied = nodeState.maxAppliedWatermark();
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_WRITER_ELIGIBLE,
+						"eligible=%s awaitsPeerTip=%s localTip=%d peerTip=%d minApplied=%d maxApplied=%d appliedStreams=%d tipAheadOfMinApplied=%d node=%s",
+						eligible,
+						awaits,
+						localTip,
+						peerTip,
+						minApplied,
+						maxApplied,
+						nodeState.appliedStreamCount(),
+						Math.max(0L, localTip - minApplied),
+						nodeState.getNodeId());
 			}
 		}
 		return eligible;

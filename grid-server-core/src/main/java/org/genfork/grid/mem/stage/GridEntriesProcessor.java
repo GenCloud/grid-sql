@@ -286,35 +286,47 @@ public class GridEntriesProcessor {
 		final byte[] inMap = gridScalableMap.get(key);
 		if (inMap != null) {
 			touchWorkingSet(key);
-			VisibilityDiag.debugf("map.getCommitted",
-					"HIT shard=%d source=ram %s %s", shardNum, VisibilityDiag.keyTag(key),
-					VisibilityDiag.valTag(inMap));
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("map.getCommitted",
+                        "HIT shard=%d source=ram %s %s", shardNum, VisibilityDiag.keyTag(key),
+                        VisibilityDiag.valTag(inMap));
+            }
+
 			return inMap;
 		}
 		final byte[] fromSealed = sealedGet(key);
 		if (fromSealed == null) {
-			VisibilityDiag.debugf("map.getCommitted",
-					"MISS shard=%d %s map=null sealed=null", shardNum, VisibilityDiag.keyTag(key));
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("map.getCommitted",
+                        "MISS shard=%d %s map=null sealed=null", shardNum, VisibilityDiag.keyTag(key));
+            }
 			return null;
 		}
 		if (fromSealed.length == 0) {
-			VisibilityDiag.debugf("map.getCommitted",
-					"MISS shard=%d %s sealedEmpty", shardNum, VisibilityDiag.keyTag(key));
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("map.getCommitted",
+                        "MISS shard=%d %s sealedEmpty", shardNum, VisibilityDiag.keyTag(key));
+            }
 			return null;
 		}
 		ReplicationMetrics.recordSealedMiss();
 		final WorkingSetBudget budget = workingSetBudget;
 		if (budget != null && budget.preferSealedOnly()) {
-			VisibilityDiag.debugf("map.getCommitted",
-					"HIT shard=%d source=sealed-only %s %s", shardNum, VisibilityDiag.keyTag(key),
-					VisibilityDiag.valTag(fromSealed));
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("map.getCommitted",
+                        "HIT shard=%d source=sealed-only %s %s", shardNum, VisibilityDiag.keyTag(key),
+                        VisibilityDiag.valTag(fromSealed));
+            }
 			// Adaptive HIGH: disk-first read — serve sealed bytes without warming RAM.
 			return fromSealed;
 		}
 		loadIntoWorkingSet(key, fromSealed);
-		VisibilityDiag.debugf("map.getCommitted",
-				"HIT shard=%d source=sealed %s %s", shardNum, VisibilityDiag.keyTag(key),
-				VisibilityDiag.valTag(fromSealed));
+
+        if (VisibilityDiag.enabled()) {
+            VisibilityDiag.debugf("map.getCommitted",
+                    "HIT shard=%d source=sealed %s %s", shardNum, VisibilityDiag.keyTag(key),
+                    VisibilityDiag.valTag(fromSealed));
+        }
 		return fromSealed;
 	}
 
@@ -603,17 +615,24 @@ public class GridEntriesProcessor {
 		}
 		if (delete) {
 			final byte[] removed = gridScalableMap.remove(key);
-			VisibilityDiag.debugf("map.installCommitted",
-					"shard=%d DELETE %s removed=%s", shardNum, VisibilityDiag.keyTag(key),
-					removed != null);
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("map.installCommitted",
+                        "shard=%d DELETE %s removed=%s", shardNum, VisibilityDiag.keyTag(key),
+                        removed != null);
+            }
+
 			if (removed != null && gridIndexWorker != null) {
 				gridIndexWorker.indexNowRemove(key);
 			}
 		} else {
 			gridScalableMap.put(key, value);
-			VisibilityDiag.debugf("map.installCommitted",
-					"shard=%d UPSERT %s %s", shardNum, VisibilityDiag.keyTag(key),
-					VisibilityDiag.valTag(value));
+
+            if (VisibilityDiag.enabled()) {
+                VisibilityDiag.debugf("map.installCommitted",
+                        "shard=%d UPSERT %s %s", shardNum, VisibilityDiag.keyTag(key),
+                        VisibilityDiag.valTag(value));
+            }
+
 			if (gridIndexWorker != null) {
 				gridIndexWorker.indexNow(key, value);
 			}
