@@ -121,6 +121,10 @@ public class OrchidNode {
 	private final ConcurrentHashMap<Long, OrchidCommitMessage> commitHoldback = new ConcurrentHashMap<>();
 	private static final int COMMIT_HOLDBACK_CAP_FACTOR = 4;
 	/**
+	 * Arm reason when tip could not advance after a successful apply (serial invariant break).
+	 */
+	private static final String TIP_ADVANCE_RACE_REASON = "tipAdvanceRace";
+	/**
 	 * Fail-closed local digest wait: without this, a mid-failover flap can leave an admitted
 	 * propose wedged forever ({@code future.join} never completes — Elle-unsafe hang).
 	 */
@@ -270,7 +274,7 @@ public class OrchidNode {
 
 	/**
 	 * @param listener second arg {@code journalRemote}: true for peer commit apply
-	 *                 ({@link #finishCommitApply}), false for local {@link #commitOne} (MutationRecorder journals)
+	 *                 ({@link #applyContiguousAndConfirm}), false for local {@link #commitOne} (MutationRecorder journals)
 	 */
 	public void addApplyListener(BiConsumer<ReplicationOp, Boolean> listener) {
 		applyListeners.add(Objects.requireNonNull(listener, "listener"));
@@ -1079,18 +1083,12 @@ public class OrchidNode {
 					}
 					return sealed;
 				}
-				lastCommittedSeq = synthetic.opSeq();
-				proposeChainPrev = Math.max(proposeChainPrev, lastCommittedSeq);
 				toApply.add(synthetic);
-				drainCommitHoldback(toApply);
+				peekCommitHoldback(toApply);
 			} finally {
 				lock.unlock();
 			}
-			for (OrchidCommitMessage commit : toApply) {
-				finishCommitApply(commit);
-			}
-			confirmPersistedAfterDrain(toApply);
-			sealed += toApply.size();
+			sealed += applyContiguousAndConfirm(toApply, tipBefore);
 		}
 	}
 
@@ -1125,6 +1123,7 @@ public class OrchidNode {
 	/**
 	 * Contiguous commit apply with holdback for pipelined reorder.
 	 * Must run only via {@link #commitApplyQueue}.
+	 * Tip advances only after successful {@link #fireApply} (GHA 37346665476).
 	 */
 	private void onCommitSerial(OrchidCommitMessage msg) {
 		final List<OrchidCommitMessage> toApply = new ArrayList<>(4);
@@ -1143,26 +1142,12 @@ public class OrchidNode {
 				log.warn("ORCHID reject commit prevOpSeq mismatch expected={} got={}", lastCommittedSeq, msg.prevOpSeq());
 				return;
 			}
-			lastCommittedSeq = msg.opSeq();
 			toApply.add(msg);
-			drainCommitHoldback(toApply);
+			peekCommitHoldback(toApply);
 		} finally {
 			lock.unlock();
 		}
-		for (OrchidCommitMessage commit : toApply) {
-			finishCommitApply(commit);
-		}
-		confirmPersistedAfterDrain(toApply);
-		// Batch / large tip jumps only — single contiguous commits are the healthy hot path.
-		if (VisibilityDiag.enabled() && toApply.size() > 1) {
-			VisibilityDiag.debugf("orchid.commitDrain",
-					"batch=%d tipFrom=%d tipTo=%d firstType=%s node=%s",
-					toApply.size(),
-					tipBefore,
-					lastCommittedSeq,
-					msg.op() == null ? "null" : msg.op().type(),
-					nodeId);
-		}
+		applyContiguousAndConfirm(toApply, tipBefore);
 	}
 
 	/**
@@ -1210,34 +1195,143 @@ public class OrchidNode {
 	}
 
 	/**
-	 * Caller holds {@link #lock}. Appends contiguous held commits to {@code toApply}.
+	 * Caller holds {@link #lock}. Appends contiguous held commits to {@code toApply} without tip advance
+	 * or holdback removal (removal happens after successful apply).
 	 */
-	private void drainCommitHoldback(List<OrchidCommitMessage> toApply) {
+	private void peekCommitHoldback(List<OrchidCommitMessage> toApply) {
+		long prev = toApply.get(toApply.size() - 1).opSeq();
 		while (true) {
-			final long next = lastCommittedSeq + 1L;
-			final OrchidCommitMessage held = commitHoldback.remove(next);
+			final long next = prev + 1L;
+			final OrchidCommitMessage held = commitHoldback.get(next);
 			if (held == null) {
 				return;
 			}
-			if (held.prevOpSeq() != lastCommittedSeq) {
-				log.warn("ORCHID held commit prevOpSeq mismatch expected={} got={} opSeq={}", lastCommittedSeq, held.prevOpSeq(), held.opSeq());
-				commitHoldback.put(next, held);
+			if (held.prevOpSeq() != prev) {
+				log.warn("ORCHID held commit prevOpSeq mismatch expected={} got={} opSeq={}", prev, held.prevOpSeq(), held.opSeq());
 				return;
 			}
-			lastCommittedSeq = held.opSeq();
 			toApply.add(held);
+			prev = held.opSeq();
 		}
 	}
 
-	private void finishCommitApply(OrchidCommitMessage msg) {
-		remoteInflightExpected.remove(msg.proposeId());
-		rememberCommittedPropose(msg.proposeId());
-		final PendingPropose local = pending.remove(msg.proposeId());
-		// Peer commit path: journalRemote=true so ReplicaApplier writes reshipable OpLog bytes.
-		fireApply(msg.op(), true);
-		if (local != null) {
-			local.future.complete(msg.opSeq());
-			local.releaseFlight();
+	/**
+	 * Apply then tip: each commit {@link #fireApply}s before {@code lastCommittedSeq} advances.
+	 * On failure: purge holdback from the failed seq; tip stays honest (no tip-before-apply).
+	 *
+	 * @return number of commits that advanced tip
+	 */
+	private int applyContiguousAndConfirm(List<OrchidCommitMessage> toApply, long tipBefore) {
+		if (toApply == null || toApply.isEmpty()) {
+			return 0;
+		}
+		final List<OrchidCommitMessage> applied = new ArrayList<>(toApply.size());
+		for (OrchidCommitMessage commit : toApply) {
+			final PendingPropose local = pending.remove(commit.proposeId());
+			try {
+				fireApply(commit.op(), true);
+			} catch (RuntimeException ex) {
+				if (local != null) {
+					local.future.completeExceptionally(ex);
+					local.releaseFlight();
+				}
+				noteApplyFailed(commit, ex);
+				purgeHoldbackFrom(commit.opSeq());
+				// apply-then-tip: tip stays honest; peer tip-behind / repair catch-up fences writers.
+				// Do not arm installCatchUp here — missing-domain failures never install that armed tip.
+				break;
+			}
+			if (!advanceTipAfterApply(commit)) {
+				if (local != null) {
+					local.future.completeExceptionally(new OrchidNotSyncedException(
+							"ORCHID tip advance rejected after apply opSeq=" + commit.opSeq()));
+					local.releaseFlight();
+				}
+				purgeHoldbackFrom(commit.opSeq());
+				// Only fence when tip stayed behind a successfully applied op (dishonest gap).
+				// If tip already covers opSeq, this is a duplicate apply path — do not arm forever.
+				if (lastCommittedSeq < commit.opSeq()) {
+					armInstallCatchUpRequired(TIP_ADVANCE_RACE_REASON, tipBefore, commit.opSeq());
+				}
+				break;
+			}
+			remoteInflightExpected.remove(commit.proposeId());
+			rememberCommittedPropose(commit.proposeId());
+			if (local != null) {
+				// Complete only after tip advanced — else client admit races with dishonest prevOpSeq.
+				local.future.complete(commit.opSeq());
+				local.releaseFlight();
+			}
+			applied.add(commit);
+			if (VisibilityDiag.enabled()) {
+				final ReplicationOp op = commit.op();
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_COMMIT_TIP,
+						"opSeq=%d tipBefore=%d tipAfter=%d domain=%s shard=%d type=%s node=%s",
+						commit.opSeq(),
+						tipBefore,
+						lastCommittedSeq,
+						op == null ? "null" : op.domainType(),
+						op == null ? -1 : op.shard(),
+						op == null ? "null" : op.type(),
+						nodeId);
+			}
+		}
+		confirmPersistedAfterDrain(applied);
+		if (VisibilityDiag.enabled() && applied.size() > 1) {
+			final OrchidCommitMessage first = applied.get(0);
+			VisibilityDiag.debugf("orchid.commitDrain",
+					"batch=%d tipFrom=%d tipTo=%d firstType=%s node=%s",
+					applied.size(),
+					tipBefore,
+					lastCommittedSeq,
+					first.op() == null ? "null" : first.op().type(),
+					nodeId);
+		}
+		return applied.size();
+	}
+
+	private boolean advanceTipAfterApply(OrchidCommitMessage commit) {
+		lock.lock();
+		try {
+			if (commit.opSeq() != lastCommittedSeq + 1L || commit.prevOpSeq() != lastCommittedSeq) {
+				log.warn("ORCHID tip advance rejected after apply expectedTip+1={} got={} prevExpected={} prevGot={}",
+						lastCommittedSeq + 1L, commit.opSeq(), lastCommittedSeq, commit.prevOpSeq());
+				return false;
+			}
+			lastCommittedSeq = commit.opSeq();
+			proposeChainPrev = Math.max(proposeChainPrev, lastCommittedSeq);
+			commitHoldback.remove(commit.opSeq());
+			return true;
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	private void purgeHoldbackFrom(long fromOpSeqInclusive) {
+		lock.lock();
+		try {
+			commitHoldback.entrySet().removeIf(entry -> entry.getKey() >= fromOpSeqInclusive);
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	private void noteApplyFailed(OrchidCommitMessage commit, RuntimeException ex) {
+		final ReplicationOp op = commit == null ? null : commit.op();
+		log.warn("ORCHID apply failed opSeq={} domain={} tip={}: {}",
+				commit == null ? -1L : commit.opSeq(),
+				op == null ? "null" : op.domainType(),
+				lastCommittedSeq,
+				ex.toString());
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_APPLY_FAILED,
+					"opSeq=%d domain=%s shard=%d tip=%d reason=%s node=%s",
+					commit == null ? -1L : commit.opSeq(),
+					op == null ? "null" : op.domainType(),
+					op == null ? -1 : op.shard(),
+					lastCommittedSeq,
+					ex.getClass().getSimpleName(),
+					nodeId);
 		}
 	}
 
@@ -1546,7 +1640,7 @@ public class OrchidNode {
 			}
 			tipBefore = lastCommittedSeq;
 			opSeq = lastCommittedSeq + 1;
-			lastCommittedSeq = opSeq;
+			// Tip advances only after successful fireApply (or DDL skip).
 		} finally {
 			lock.unlock();
 		}
@@ -1554,23 +1648,48 @@ public class OrchidNode {
 				p.op.domainType(), p.op.shard(), opSeq, p.op.type(), p.op.key(), p.op.value(),
 				p.op.schemaEpoch(), p.op.checksum());
 		final ReplicationOp withCs = OpLogCodec.withChecksum(committed);
-		pending.remove(p.proposeId);
-		remoteInflightExpected.remove(p.proposeId);
-		rememberCommittedPropose(p.proposeId);
 		// Local DDL already applied in SqlDdlExecutor before publishDdl; re-enter via
 		// applyReplicatedDdl → execute on the same session mailbox deadlocks the join.
-		// Peers still apply DDL through onCommit → finishCommitApply → fireApply.
+		// Peers still apply DDL through onCommit → applyContiguousAndConfirm → fireApply.
 		if (withCs.type() != ReplicationOpType.DDL) {
-			// Local propose: map/watermark before join complete — fail-closed under kill/chaos.
 			try {
 				fireApply(withCs, false);
 			} catch (RuntimeException applyEx) {
-				// Tip already advanced; do not broadcast or ack client success (Elle false :ok).
-				// Leave holdback intact so a later contiguous path can still drain.
+				noteApplyFailed(new OrchidCommitMessage(nodeId, p.proposeId, p.digest, p.prevOpSeq, opSeq, withCs), applyEx);
+				// Tip not advanced — fail join only; no installCatchUp arm (nothing dishonest to cover).
 				p.future.completeExceptionally(applyEx);
 				p.releaseFlight();
+				p.commitGate.set(false);
 				return;
 			}
+		}
+		lock.lock();
+		try {
+			if (lastCommittedSeq != tipBefore || p.prevOpSeq != tipBefore) {
+				p.future.completeExceptionally(new OrchidNotSyncedException(
+						"ORCHID tip moved during local apply expected=" + tipBefore + " got=" + lastCommittedSeq));
+				p.releaseFlight();
+				p.commitGate.set(false);
+				return;
+			}
+			lastCommittedSeq = opSeq;
+			proposeChainPrev = Math.max(proposeChainPrev, opSeq);
+		} finally {
+			lock.unlock();
+		}
+		pending.remove(p.proposeId);
+		remoteInflightExpected.remove(p.proposeId);
+		rememberCommittedPropose(p.proposeId);
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_COMMIT_TIP,
+					"opSeq=%d tipBefore=%d tipAfter=%d domain=%s shard=%d type=%s node=%s",
+					opSeq,
+					tipBefore,
+					lastCommittedSeq,
+					withCs.domainType(),
+					withCs.shard(),
+					withCs.type(),
+					nodeId);
 		}
 		p.future.complete(opSeq);
 		transport.broadcastCommit(new OrchidCommitMessage(nodeId, p.proposeId, p.digest, p.prevOpSeq, opSeq, withCs));
@@ -1579,22 +1698,16 @@ public class OrchidNode {
 		final List<OrchidCommitMessage> holdbackDrain = new ArrayList<>(4);
 		lock.lock();
 		try {
-			drainCommitHoldback(holdbackDrain);
+			final OrchidCommitMessage nextHeld = commitHoldback.get(lastCommittedSeq + 1L);
+			if (nextHeld != null && nextHeld.prevOpSeq() == lastCommittedSeq) {
+				holdbackDrain.add(nextHeld);
+				peekCommitHoldback(holdbackDrain);
+			}
 		} finally {
 			lock.unlock();
 		}
-		for (OrchidCommitMessage held : holdbackDrain) {
-			finishCommitApply(held);
-		}
-		confirmPersistedAfterDrain(holdbackDrain);
-		if (VisibilityDiag.enabled() && !holdbackDrain.isEmpty()) {
-			VisibilityDiag.debugf("orchid.commitDrain",
-					"batch=%d tipFrom=%d tipTo=%d firstType=%s node=%s",
-					holdbackDrain.size() + 1,
-					tipBefore,
-					lastCommittedSeq,
-					withCs.type(),
-					nodeId);
+		if (!holdbackDrain.isEmpty()) {
+			applyContiguousAndConfirm(holdbackDrain, tipBefore);
 		}
 	}
 

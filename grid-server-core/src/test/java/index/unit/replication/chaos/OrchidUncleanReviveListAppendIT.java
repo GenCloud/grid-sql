@@ -308,7 +308,15 @@ public class OrchidUncleanReviveListAppendIT {
 				+ " b.live=" + b.getOrchidNode().liveLocalPeerCount()
 				+ " c.live=" + c.getOrchidNode().liveLocalPeerCount()
 				+ " b.R=" + b.getOrchidNode().orderParameterR()
-				+ " c.R=" + c.getOrchidNode().orderParameterR());
+				+ " c.R=" + c.getOrchidNode().orderParameterR()
+				+ " b.tip=" + b.getOrchidNode().getLastCommittedSeq()
+				+ " c.tip=" + c.getOrchidNode().getLastCommittedSeq()
+				+ " b.maxSeen=" + b.getOrchidNode().maxSeenPeerCommittedSeq()
+				+ " c.maxSeen=" + c.getOrchidNode().maxSeenPeerCommittedSeq()
+				+ " b.catchUp=" + b.getOrchidNode().testingInstallCatchUpRequired()
+				+ " c.catchUp=" + c.getOrchidNode().testingInstallCatchUpRequired()
+				+ " b.awaitTip=" + b.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " c.awaitTip=" + c.getOrchidNode().awaitsPeerTipAdvertisement());
 	}
 
 

@@ -130,6 +130,12 @@ public class ReplicationCoordinator {
 	private final NettyReplicationTransport nettyTransport;
 	private final AdaptiveDiskFirstController adaptiveDiskFirstController;
 	private final Map<String, ReplicaApplier> appliers = new ConcurrentHashMap<>();
+	/**
+	 * Single ORCHID apply dispatch bound once — missing {@link #registerDomain} must fail-closed
+	 * (GHA 37346665476: per-domain listeners silently no-op → tip-ok empty register).
+	 */
+	private final AtomicBoolean orchidApplyDispatchBound = new AtomicBoolean(false);
+	private static final String APPLY_UNHANDLED_PREFIX = "ORCHID apply unhandled domain=";
 	private final Set<String> pendingSchemaBarriers = ConcurrentHashMap.newKeySet();
 	private final ReplicationFlowControl flowControl;
 	/**
@@ -509,17 +515,7 @@ public class ReplicationCoordinator {
 		}
         final ReplicaApplier applier = providerReplicaApplier(domainType, processorByShard, applyRemoteToLocalMap);
         appliers.put(domainType, applier);
-
-		orchidNode.addApplyListener((op, journalRemote) -> {
-			if (op != null && domainType.equals(op.domainType())) {
-				if (homologousRepair != null) {
-					homologousRepair.observe(op);
-				}
-				// fromConsensus=true: local propose OpLog stays in MutationRecorder (journalRemote=false).
-				// Peer commit: journalRemote=true → StreamOpLogAppender outside shardLocks; tip batched in OrchidNode.
-				applier.apply(op, true, false, journalRemote);
-			}
-		});
+		ensureOrchidApplyDispatchBound();
 
 		final MutationRecorder recorder = new MutationRecorder(
 				nodeState,
@@ -565,6 +561,46 @@ public class ReplicationCoordinator {
 		}
 		pipelineSchemaBarrier(domainType);
 		return recorder;
+	}
+
+	/**
+	 * Bind one apply listener that looks up {@link #appliers} by domain.
+	 * Fail-closed when a committed data/DDL op has no registered applier.
+	 */
+	private void ensureOrchidApplyDispatchBound() {
+		if (!orchidApplyDispatchBound.compareAndSet(false, true)) {
+			return;
+		}
+		orchidNode.addApplyListener(this::dispatchOrchidApply);
+	}
+
+	private void dispatchOrchidApply(ReplicationOp op, Boolean journalRemote) {
+		if (op == null) {
+			return;
+		}
+		final String domainType = op.domainType();
+		final ReplicaApplier applier = appliers.get(domainType);
+		if (applier == null) {
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_APPLY_UNHANDLED,
+						"domain=%s opSeq=%d shard=%d type=%s tip=%d node=%s",
+						domainType,
+						op.opSeq(),
+						op.shard(),
+						op.type(),
+						orchidNode.getLastCommittedSeq(),
+						nodeState.getNodeId());
+			}
+			throw new IllegalStateException(APPLY_UNHANDLED_PREFIX + domainType
+					+ " opSeq=" + op.opSeq()
+					+ " type=" + op.type());
+		}
+		if (homologousRepair != null) {
+			homologousRepair.observe(op);
+		}
+		// fromConsensus=true: local propose OpLog stays in MutationRecorder (journalRemote=false).
+		// Peer commit: journalRemote=true → StreamOpLogAppender outside shardLocks; tip batched in OrchidNode.
+		applier.apply(op, true, false, Boolean.TRUE.equals(journalRemote));
 	}
 
     private ReplicaApplier providerReplicaApplier(String domainType, Function<Integer, GridEntriesProcessor> processorByShard, boolean applyRemoteToLocalMap) {

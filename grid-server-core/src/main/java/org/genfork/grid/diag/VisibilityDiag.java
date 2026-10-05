@@ -83,6 +83,23 @@ public final class VisibilityDiag {
 	 */
 	public static final String WHERE_HYDRATE_ADVANCE_APPLIED = "hydrate.advanceApplied";
 
+	/**
+	 * Contiguous live commit tip step after successful {@code fireApply}
+	 * ({@code onCommitSerial} / holdback / seal). Grep when tip rises without {@link #WHERE_ORCHID_TIP_ADVANCE}.
+	 */
+	public static final String WHERE_ORCHID_COMMIT_TIP = "orchid.commitTip";
+
+	/**
+	 * {@code fireApply} threw on peer/local commit path — tip must not stay dishonest.
+	 */
+	public static final String WHERE_ORCHID_APPLY_FAILED = "orchid.applyFailed";
+
+	/**
+	 * Data/DDL/TX op reached apply dispatch with no {@code registerDomain} applier
+	 * (GHA 37346665476 cell I: tip advanced while {@code jepsen_register} never installed).
+	 */
+	public static final String WHERE_ORCHID_APPLY_UNHANDLED = "orchid.applyUnhandled";
+
 	private VisibilityDiag() {
 	}
 
