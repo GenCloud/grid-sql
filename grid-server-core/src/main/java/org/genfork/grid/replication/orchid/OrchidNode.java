@@ -16,6 +16,7 @@
 package org.genfork.grid.replication.orchid;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
@@ -206,6 +207,11 @@ public class OrchidNode {
 		if (!running.compareAndSet(false, true)) {
 			return;
 		}
+		if (VisibilityDiag.enabled() && lastCommittedSeq > 0L) {
+			VisibilityDiag.debugf("orchid.tipBoot",
+					"localTip=%d proposeChainPrev=%d node=%s",
+					lastCommittedSeq, proposeChainPrev, nodeId);
+		}
 		tickThread = Thread.ofPlatform().name("orchid-tick-" + nodeId).daemon(true).start(this::tickLoop);
 		final double freePerTick = omega * (tickMs / 1000.0);
 		if (freePerTick > 0.35) {
@@ -361,6 +367,16 @@ public class OrchidNode {
 		voterEligible.remove(peerId);
 		scheduleSealBufferedThenClearProposer(peerId);
 		log.debug("Orchid forgot peer={}", peerId);
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_FORGET_PEER,
+					"peer=%s localTip=%d maxSeenPeerTip=%d inflight=%d holdback=%d node=%s",
+					peerId,
+					lastCommittedSeq,
+					maxSeenPeerCommittedSeq(),
+					remoteInflightExpected.size(),
+					commitHoldback.size(),
+					nodeId);
+		}
 	}
 
 	/**
@@ -910,13 +926,33 @@ public class OrchidNode {
 	 */
 	private int sealBufferedProposesFromProposerSerial(String proposerId) {
 		int sealed = 0;
+		final long tipBefore = lastCommittedSeq;
 		for (; ; ) {
 			final RemoteInflight next = findContiguousBufferedInflight();
 			if (next == null || next.op() == null) {
+				if (VisibilityDiag.enabled() && sealed > 0) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_SEAL_BUFFERED,
+							"proposerFilter=%s sealed=%d tipFrom=%d tipTo=%d node=%s",
+							proposerId == null ? "*" : proposerId,
+							sealed,
+							tipBefore,
+							lastCommittedSeq,
+							nodeId);
+				}
 				return sealed;
 			}
 			if (proposerId != null && !proposerId.equals(next.proposerId())) {
 				// Tip held by another proposer — do not mint their commit because a third peer flapped.
+				if (VisibilityDiag.enabled() && sealed > 0) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_SEAL_BUFFERED,
+							"proposerFilter=%s sealed=%d tipFrom=%d tipTo=%d stoppedOtherProposer=%s node=%s",
+							proposerId,
+							sealed,
+							tipBefore,
+							lastCommittedSeq,
+							next.proposerId(),
+							nodeId);
+				}
 				return sealed;
 			}
 			final long opSeq = next.expectedOpSeq();
@@ -935,6 +971,17 @@ public class OrchidNode {
 			lock.lock();
 			try {
 				if (synthetic.opSeq() != lastCommittedSeq + 1L || synthetic.prevOpSeq() != lastCommittedSeq) {
+					if (VisibilityDiag.enabled() && sealed > 0) {
+						VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_SEAL_BUFFERED,
+								"proposerFilter=%s sealed=%d tipFrom=%d tipTo=%d stoppedGap opSeq=%d localTip=%d node=%s",
+								proposerId == null ? "*" : proposerId,
+								sealed,
+								tipBefore,
+								lastCommittedSeq,
+								synthetic.opSeq(),
+								lastCommittedSeq,
+								nodeId);
+					}
 					return sealed;
 				}
 				lastCommittedSeq = synthetic.opSeq();
@@ -986,6 +1033,7 @@ public class OrchidNode {
 	 */
 	private void onCommitSerial(OrchidCommitMessage msg) {
 		final List<OrchidCommitMessage> toApply = new ArrayList<>(4);
+		final long tipBefore = lastCommittedSeq;
 		lock.lock();
 		try {
 			if (msg.opSeq() <= lastCommittedSeq) {
@@ -1009,6 +1057,16 @@ public class OrchidNode {
 			finishCommitApply(commit);
 		}
 		confirmPersistedAfterDrain(toApply);
+		if (VisibilityDiag.enabled() && toApply.size() > 1) {
+			final OrchidCommitMessage first = toApply.get(0);
+			VisibilityDiag.debugf("orchid.commitDrain",
+					"batch=%d tipFrom=%d tipTo=%d firstType=%s node=%s",
+					toApply.size(),
+					tipBefore,
+					lastCommittedSeq,
+					first.op() == null ? "null" : first.op().type(),
+					nodeId);
+		}
 	}
 
 	/**
@@ -1081,6 +1139,18 @@ public class OrchidNode {
 		final PendingPropose local = pending.remove(msg.proposeId());
 		// Peer commit path: journalRemote=true so ReplicaApplier writes reshipable OpLog bytes.
 		fireApply(msg.op(), true);
+		if (VisibilityDiag.enabled()) {
+			final ReplicationOp op = msg.op();
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_COMMIT_TIP,
+					"opSeq=%d tipBefore=%d tipAfter=%d domain=%s shard=%d type=%s node=%s",
+					msg.opSeq(),
+					msg.opSeq() - 1L,
+					lastCommittedSeq,
+					op == null ? "null" : op.domainType(),
+					op == null ? -1 : op.shard(),
+					op == null ? "null" : op.type(),
+					nodeId);
+		}
 		if (local != null) {
 			local.future.complete(msg.opSeq());
 			local.releaseFlight();
@@ -1376,6 +1446,7 @@ public class OrchidNode {
 			return;
 		}
 		final long opSeq;
+		final long tipBefore;
 		lock.lock();
 		try {
 			if (p.future.isDone()) {
@@ -1385,6 +1456,7 @@ public class OrchidNode {
 				p.commitGate.set(false);
 				return;
 			}
+			tipBefore = lastCommittedSeq;
 			opSeq = lastCommittedSeq + 1;
 			lastCommittedSeq = opSeq;
 		} finally {
@@ -1397,6 +1469,17 @@ public class OrchidNode {
 		pending.remove(p.proposeId);
 		remoteInflightExpected.remove(p.proposeId);
 		rememberCommittedPropose(p.proposeId);
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_COMMIT_TIP,
+					"opSeq=%d tipBefore=%d tipAfter=%d domain=%s shard=%d type=%s node=%s",
+					opSeq,
+					tipBefore,
+					lastCommittedSeq,
+					withCs.domainType(),
+					withCs.shard(),
+					withCs.type(),
+					nodeId);
+		}
 		// Local DDL already applied in SqlDdlExecutor before publishDdl; re-enter via
 		// applyReplicatedDdl → execute on the same session mailbox deadlocks the join.
 		// Peers still apply DDL through onCommit → finishCommitApply → fireApply.
@@ -1649,16 +1732,29 @@ public class OrchidNode {
 		if (seq <= 0L) {
 			return;
 		}
+		final long fromTip;
+		boolean jumped = false;
 		lock.lock();
 		try {
+			fromTip = lastCommittedSeq;
 			if (seq > lastCommittedSeq) {
 				lastCommittedSeq = seq;
 				proposeChainPrev = Math.max(proposeChainPrev, seq);
+				jumped = true;
 			}
 		} finally {
 			lock.unlock();
 		}
 		persistCommitted(seq);
+		if (VisibilityDiag.enabled() && jumped) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_TIP_ADVANCE,
+					"reason=%s from=%d to=%d delta=%d node=%s",
+					"unspecified",
+					fromTip,
+					seq,
+					seq - fromTip,
+					nodeId);
+		}
 	}
 
 	private void fireApply(ReplicationOp op, boolean journalRemote) {
@@ -1668,6 +1764,16 @@ public class OrchidNode {
 				listener.accept(op, journalRemote);
 			} catch (RuntimeException ex) {
 				log.warn("Orchid apply listener failed: {}", ex.toString());
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_APPLY_FAILED,
+							"opSeq=%d domain=%s shard=%d tip=%d reason=%s node=%s",
+							op == null ? -1L : op.opSeq(),
+							op == null ? "null" : op.domainType(),
+							op == null ? -1 : op.shard(),
+							lastCommittedSeq,
+							ex.getClass().getSimpleName(),
+							nodeId);
+				}
 				if (firstFailure == null) {
 					firstFailure = ex;
 				}

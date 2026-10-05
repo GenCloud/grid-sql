@@ -43,6 +43,7 @@ import org.genfork.grid.store.TableStore;
 import java.util.*;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import org.genfork.grid.diag.VisibilityDiag;
 
 /**
  * SELECT (+ multi INNER / LEFT / RIGHT / FULL OUTER JOIN, aggregates, window, WHERE/ORDER/LIMIT)
@@ -292,7 +293,20 @@ public final class SqlQueryExecutor {
 					: null;
 			final byte[] value = dirty == null ? store.getCommittedBytes(key) : dirty.valueBytesOrNull();
 			if (value != null) {
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf("query.pkRead",
+							"HIT table=%s inTx=%s path=%s %s %s",
+							table, session.inTransaction(),
+							dirty == null ? "committed" : "dirty-" + dirty.op(),
+							VisibilityDiag.keyTag(key), VisibilityDiag.valTag(value));
+				}
 				rows.add(store.projectBytes(value, projection));
+			} else if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_QUERY_EMPTY_READ,
+						"MISS table=%s inTx=%s dirty=%s %s (Elle-nil if empty)",
+						table, session.inTransaction(),
+						dirty == null ? "none" : dirty.op(),
+						VisibilityDiag.keyTag(key));
 			}
 		}
 		return SqlResult.resultSet(metas, rows);
@@ -451,7 +465,17 @@ public final class SqlQueryExecutor {
 			final SqlTxBuffer.DirtyEntry dirty = tx.get(table, key);
 			if (dirty != null) {
 				if (dirty.op() == SqlTxBuffer.Op.DELETE) {
+					if (VisibilityDiag.enabled()) {
+						VisibilityDiag.debugf("query.inTx",
+								"txId=%d table=%s path=tombstone %s", tx.txId(), table,
+								VisibilityDiag.keyTag(key));
+					}
 					return SqlResult.resultSet(metas, List.of());
+				}
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf("query.inTx",
+							"txId=%d table=%s path=dirty %s %s", tx.txId(), table,
+							VisibilityDiag.keyTag(key), VisibilityDiag.valTag(dirty.valueBytesOrNull()));
 				}
 				final Object[] row = store.projectBytes(dirty.valueBytesOrNull(), projection);
 				return SqlResult.resultSet(metas, Collections.singletonList(row));
@@ -461,13 +485,22 @@ public final class SqlQueryExecutor {
 				try {
 					if (SqlTxSnapshotOps.collectRemoteTombstones(table, tables.remoteDirtyPeerTombstoneKeyExecutors())
 							.contains(new KeyWrapper(key))) {
+						if (VisibilityDiag.enabled()) {
+							VisibilityDiag.debugf("query.inTx",
+									"txId=%d table=%s path=remote-tombstone %s", tx.txId(), table,
+									VisibilityDiag.keyTag(key));
+						}
 						return SqlResult.resultSet(metas, List.of());
 					}
 				} finally {
 					DistTxSnapshot.clear();
 				}
 			}
-
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf("query.inTx",
+						"txId=%d table=%s path=fallthrough-committed %s", tx.txId(), table,
+						VisibilityDiag.keyTag(key));
+			}
 			return selectCommitted(store, s, metas, projection);
 		}
 
@@ -1127,10 +1160,22 @@ public final class SqlQueryExecutor {
 	) {
 		final List<Object[]> rows;
 		if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
+			final byte[] pkKey = store.keyBytesForPk(s.pkValueOrNull());
 			final Object[] full = store.getByPk(s.pkValueOrNull());
 			if (full == null) {
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_QUERY_EMPTY_READ,
+							"MISS tablePk %s pk=%s (Elle-nil if empty)",
+							VisibilityDiag.keyTag(pkKey),
+							VisibilityDiag.preview(s.pkValueOrNull(), 40));
+				}
 				rows = List.of();
 			} else if (projection.size() == 1 && "*".equals(projection.getFirst())) {
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf("query.committed",
+							"HIT tablePk %s pk=%s", VisibilityDiag.keyTag(pkKey),
+							VisibilityDiag.preview(s.pkValueOrNull(), 40));
+				}
 				rows = Collections.singletonList(full);
 			} else {
 				final Object[] projected = new Object[projection.size()];

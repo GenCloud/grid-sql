@@ -86,3 +86,9 @@ management:
 
 server:
   port: 7778
+
+logging:
+  level:
+    root: INFO
+    org.genfork.grid: DEBUG
+    org.genfork.grid.diag: DEBUG

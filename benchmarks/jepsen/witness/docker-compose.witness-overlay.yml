@@ -32,6 +32,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,w1
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
     volumes:
       - w1-data:/app/data
     command:

@@ -42,6 +42,7 @@ import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.genfork.grid.diag.VisibilityDiag;
 
 /**
  * Sealed hydrate, working-set budgets, periodic dump, and snapshot install helpers.
@@ -117,6 +118,11 @@ public final class SealedHydrateService {
 			if (e.getValue() > 0) {
 				nodeState.resetApplied(domainType, e.getKey());
 				nodeState.advanceApplied(domainType, e.getKey(), e.getValue());
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf(VisibilityDiag.WHERE_HYDRATE_ADVANCE_APPLIED,
+							"mode=full domain=%s shard=%d appliedWm=%d node=%s",
+							domainType, e.getKey(), e.getValue(), nodeState.getNodeId());
+				}
 			}
 		}
 		final int hydrated = snapshotService.hydrateDomain(domainType, applier, homologousRepair);
@@ -159,6 +165,11 @@ public final class SealedHydrateService {
 		if (wm > 0) {
 			nodeState.resetApplied(domainType, shard);
 			nodeState.advanceApplied(domainType, shard, wm);
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_HYDRATE_ADVANCE_APPLIED,
+						"mode=lazy domain=%s shard=%d appliedWm=%d node=%s",
+						domainType, shard, wm, nodeState.getNodeId());
+			}
 		}
 		rejectHugeOpLogDeltaWithoutSbpt(domainType, shard, wm);
 		final int n = snapshotService.hydrateOpLogFrom(domainType, shard, wm, applier, homologousRepair);

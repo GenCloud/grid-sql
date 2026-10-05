@@ -54,14 +54,25 @@ public final class JepsenSqlClient implements AutoCloseable {
 	private final boolean joinShards;
 
 	public JepsenSqlClient(String gridUrl) {
+		this(gridUrl, joinShardsFromEnv());
+	}
+
+	/**
+	 * @param joinShards when true, append/read use parent/child JOIN tables (Jepsen join workload)
+	 */
+	public JepsenSqlClient(String gridUrl, boolean joinShards) {
 		this.gridUrl = gridUrl;
 		if (gridUrl != null && gridUrl.contains("readEndpoints")) {
 			throw new IllegalArgumentException(
 					"JepsenSqlClient requires PRIMARY-only URL (no readEndpoints)");
 		}
 		this.session = SyncSession.exclusiveFromUrl(gridUrl, OP_TIMEOUT);
+		this.joinShards = joinShards;
+	}
+
+	private static boolean joinShardsFromEnv() {
 		final String joinFlag = System.getenv(ENV_JOIN_SHARDS);
-		this.joinShards = joinFlag != null
+		return joinFlag != null
 				&& ("1".equals(joinFlag.trim()) || Boolean.parseBoolean(joinFlag.trim()));
 	}
 
@@ -146,55 +157,60 @@ public final class JepsenSqlClient implements AutoCloseable {
 		final SyncConnection conn = session.connection();
 		if (joinShards) {
 			ensureParent(conn, key);
-			return upsertAppend(conn,
-					"UPDATE " + TABLE_CHILD + " SET number = number || ' ' || '"
-							+ escapeSql(token) + "' WHERE id = " + key,
-					"INSERT INTO " + TABLE_CHILD
-							+ " (id, parent_id, number, status) VALUES ("
-							+ key + ", " + (key + PARENT_ID_OFFSET) + ", '"
-							+ escapeSql(token) + "', 'jepsen-append')");
+			return requireAffected(conn.executeUpdate(appendUpsertSql(TABLE_CHILD, key, token, true)),
+					"append-affected-zero", key);
 		}
-		return upsertAppend(conn,
-				"UPDATE " + TABLE + " SET number = number || ' ' || '"
-						+ escapeSql(token) + "' WHERE id = " + key,
-				"INSERT INTO " + TABLE + " (id, number, status) VALUES ("
-						+ key + ", '" + escapeSql(token) + "', 'jepsen-append')");
+		return requireAffected(conn.executeUpdate(appendUpsertSql(TABLE, key, token, false)),
+				"append-affected-zero", key);
 	}
 
 	private Map<String, Object> doAppend(SyncTxContext tx, int key, String token) {
 		if (joinShards) {
 			ensureParent(tx, key);
-			return upsertAppend(tx,
-					"UPDATE " + TABLE_CHILD + " SET number = number || ' ' || '"
-							+ escapeSql(token) + "' WHERE id = " + key,
-					"INSERT INTO " + TABLE_CHILD
-							+ " (id, parent_id, number, status) VALUES ("
-							+ key + ", " + (key + PARENT_ID_OFFSET) + ", '"
-							+ escapeSql(token) + "', 'jepsen-append')");
+			return requireAffected(tx.executeUpdate(appendUpsertSql(TABLE_CHILD, key, token, true)),
+					"append-affected-zero", key);
 		}
-		return upsertAppend(tx,
-				"UPDATE " + TABLE + " SET number = number || ' ' || '"
-						+ escapeSql(token) + "' WHERE id = " + key,
-				"INSERT INTO " + TABLE + " (id, number, status) VALUES ("
-						+ key + ", '" + escapeSql(token) + "', 'jepsen-append')");
+		return requireAffected(tx.executeUpdate(appendUpsertSql(TABLE, key, token, false)),
+				"append-affected-zero", key);
+	}
+
+	/**
+	 * Atomic append: plain {@code UPDATE}+{@code INSERT} wiped prior tokens when UPDATE
+	 * returned 0 (map miss / seed race) — unclean-p0 history kept only last INSERT token.
+	 * {@code ON CONFLICT DO UPDATE} concatenates instead of replacing the row.
+	 */
+	private static String appendUpsertSql(String table, int key, String token, boolean child) {
+		final String esc = escapeSql(token);
+		if (child) {
+			return "INSERT INTO " + table
+					+ " (id, parent_id, number, status) VALUES ("
+					+ key + ", " + (key + PARENT_ID_OFFSET) + ", '" + esc + "', 'jepsen-append') "
+					+ "ON CONFLICT (id) DO UPDATE SET number = number || ' ' || '" + esc
+					+ "', status = 'jepsen-append'";
+		}
+		return "INSERT INTO " + table + " (id, number, status) VALUES ("
+				+ key + ", '" + esc + "', 'jepsen-append') "
+				+ "ON CONFLICT (id) DO UPDATE SET number = number || ' ' || '" + esc
+				+ "', status = 'jepsen-append'";
 	}
 
 	private void ensureParent(SyncConnection conn, int key) {
-		final int parentId = key + PARENT_ID_OFFSET;
-		if (conn.executeUpdate(
-				"UPDATE " + TABLE_PARENT + " SET name = 'p" + key + "' WHERE id = " + parentId) == 0) {
-			conn.executeUpdate("INSERT INTO " + TABLE_PARENT + " (id, name) VALUES ("
-					+ parentId + ", 'p" + key + "')");
-		}
+		conn.executeUpdate(parentUpsertSql(key));
 	}
 
 	private void ensureParent(SyncTxContext tx, int key) {
+		tx.executeUpdate(parentUpsertSql(key));
+	}
+
+	/**
+	 * Atomic parent ensure: plain UPDATE0+INSERT raced under joinShards and could leave
+	 * child rows without a stable parent mid-failover (PR13-M join path).
+	 */
+	private static String parentUpsertSql(int key) {
 		final int parentId = key + PARENT_ID_OFFSET;
-		if (tx.executeUpdate(
-				"UPDATE " + TABLE_PARENT + " SET name = 'p" + key + "' WHERE id = " + parentId) == 0) {
-			tx.executeUpdate("INSERT INTO " + TABLE_PARENT + " (id, name) VALUES ("
-					+ parentId + ", 'p" + key + "')");
-		}
+		return "INSERT INTO " + TABLE_PARENT + " (id, name) VALUES ("
+				+ parentId + ", 'p" + key + "') "
+				+ "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name";
 	}
 
 	private static Map<String, Object> readResult(List<Object[]> rows) {
@@ -233,26 +249,24 @@ public final class JepsenSqlClient implements AutoCloseable {
 
 	private Map<String, Object> doWrite(int key, String value) {
 		final SyncConnection conn = session.connection();
-		final long updated = conn.executeUpdate(
-				"UPDATE " + TABLE + " SET number = '" + escapeSql(value)
-						+ "', status = 'jepsen-write' WHERE id = " + key);
-		if (updated == 0) {
-			conn.executeUpdate("INSERT INTO " + TABLE + " (id, number, status) VALUES ("
-					+ key + ", '" + escapeSql(value) + "', 'jepsen-write')");
-		}
-		return ok(null);
+		// Atomic replace: UPDATE0+INSERT wiped concurrent register values (same class as
+		// unclean-p0 append before ON CONFLICT). Knossos needs last-write-wins without fork.
+		// Fail-closed on affected=0: never forge :ok when the upsert did not touch a row
+		// (unclean-p0 / GHA-I ok-append→ok-read-nil class).
+		return requireAffected(conn.executeUpdate(
+				"INSERT INTO " + TABLE + " (id, number, status) VALUES ("
+						+ key + ", '" + escapeSql(value) + "', 'jepsen-write') "
+						+ "ON CONFLICT (id) DO UPDATE SET number = EXCLUDED.number, "
+						+ "status = 'jepsen-write'"),
+				"write-affected-zero", key);
 	}
 
-	private static Map<String, Object> upsertAppend(SyncConnection conn, String updateSql, String insertSql) {
-		if (conn.executeUpdate(updateSql) == 0) {
-			conn.executeUpdate(insertSql);
-		}
-		return ok(null);
-	}
-
-	private static Map<String, Object> upsertAppend(SyncTxContext tx, String updateSql, String insertSql) {
-		if (tx.executeUpdate(updateSql) == 0) {
-			tx.executeUpdate(insertSql);
+	/**
+	 * Elle/Knossos must not see :ok when DML affected zero rows (forged ack → seed nil read).
+	 */
+	private static Map<String, Object> requireAffected(long affected, String error, int key) {
+		if (affected <= 0L) {
+			return fail(error, Integer.valueOf(key));
 		}
 		return ok(null);
 	}

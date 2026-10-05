@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import org.genfork.grid.diag.VisibilityDiag;
 
 /**
  * Per-session dirty buffer for an open SQL transaction.
@@ -124,11 +125,22 @@ public final class SqlTxBuffer {
 		}
 		map.put(key, entry);
 		participations.add(part);
+		if (VisibilityDiag.enabled()) {
+		    VisibilityDiag.debugf("tx.dirty.put",
+		            "txId=%d table=%s op=%s shard=%d dirtyNow=%d %s %s",
+		            txId, table, entry.op(), entry.shard(), map.size(),
+		            VisibilityDiag.keyTag(entry.keyBytes()),
+		            VisibilityDiag.valTag(entry.valueBytesOrNull()));
+		}
 	}
 
 	public DirtyEntry get(String table, byte[] keyBytes) {
 		final Map<KeyWrapper, DirtyEntry> m = byTable.get(table);
 		if (m == null) {
+		if (VisibilityDiag.enabled()) {
+		    VisibilityDiag.debugf("tx.dirty.get",
+		            "txId=%d table=%s hit=none %s", txId, table, VisibilityDiag.keyTag(keyBytes));
+		}
 			return null;
 		}
 		return m.get(new KeyWrapper(keyBytes));

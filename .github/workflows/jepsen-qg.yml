@@ -262,6 +262,16 @@ jobs:
             -RegisterHistory "$REGISTER_HISTORY" \
             -AppendHistory "$APPEND_HISTORY"
 
+      - name: Dump cluster logs on failure
+        if: failure()
+        run: |
+          set +e
+          chmod +x benchmarks/jepsen/scripts/dump-jepsen-cluster-logs.sh || true
+          # Containers may still be up if cell script failed before purge trap; dump best-effort.
+          bash benchmarks/jepsen/scripts/dump-jepsen-cluster-logs.sh \
+            "benchmarks/jepsen/cluster-logs/${{ matrix.id }}-${{ matrix.config }}" || true
+          ls -la benchmarks/jepsen/cluster-logs || true
+
       - name: Upload RESULTS + histories
         if: always()
         uses: actions/upload-artifact@v4
@@ -271,6 +281,8 @@ jobs:
             benchmarks/jepsen/COVERAGE.md
             benchmarks/jepsen/RESULTS.md
             benchmarks/jepsen/ARTIFACTS.txt
+            benchmarks/jepsen/CLUSTER_LOGS_DIR.txt
+            benchmarks/jepsen/cluster-logs/**
             benchmarks/jepsen/clojure/store/**/results.edn
             benchmarks/jepsen/clojure/store/**/history.edn
             benchmarks/jepsen/multidc/RESULTS.md

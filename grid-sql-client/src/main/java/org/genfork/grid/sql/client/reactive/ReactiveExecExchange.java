@@ -135,7 +135,7 @@ public final class ReactiveExecExchange implements PendingExchange {
 			return true;
 		}
 
-		if (tag != null && TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
+		if (TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
 			emitOutcome(new TransportOutcome.Dml(0L, TransportOutcome.CANCEL_TAG));
 			return true;
 		}

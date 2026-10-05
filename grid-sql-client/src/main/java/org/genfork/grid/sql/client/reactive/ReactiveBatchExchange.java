@@ -71,10 +71,6 @@ public final class ReactiveBatchExchange implements PendingExchange {
 		this.cancelSender = cancelSender;
 	}
 
-	public int expectedStatements() {
-		return expectedStatements;
-	}
-
 	/**
 	 * Ordered statement results; cancel triggers batch CANCEL.
 	 */
@@ -139,7 +135,7 @@ public final class ReactiveBatchExchange implements PendingExchange {
 			return true;
 		}
 
-		if (tag != null && TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
+		if (TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
 			final BatchStatementSlot slot = current;
 			if (slot != null) {
 				slot.portal().complete();

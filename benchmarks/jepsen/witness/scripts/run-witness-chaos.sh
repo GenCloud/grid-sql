@@ -200,7 +200,12 @@ echo "Installing grid-sql-client..."
 ensure_cluster
 echo "=== Witness workload: register ==="
 REG_OUTCOME=FAIL
-if run_workload register; then REG_OUTCOME="PASS (:valid? true)"; else REG_OUTCOME=FAIL; fi
+if run_workload register; then REG_OUTCOME="PASS (:valid? true)"; else REG_OUTCOME=FAIL
+  if [[ -f "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+    echo "=== FAIL register: dumping cluster logs before recreate ==="
+    bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+  fi
+fi
 
 ensure_cluster
 echo "=== Witness workload: append ==="
@@ -213,4 +218,8 @@ if [[ "$REG_OUTCOME" == PASS* && "$APP_OUTCOME" == PASS* ]]; then
   exit 0
 fi
 stamp_witness FAIL "$NOTES" "$REG_OUTCOME" "$APP_OUTCOME"
+if [[ -f "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+  echo "=== FAIL: dumping cluster docker logs before purge ==="
+  bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+fi
 exit 1

@@ -117,6 +117,13 @@ EOF
 }
 
 release_ports() {
+  local _ec=$?
+  if [[ "$_ec" -ne 0 ]]; then
+    echo "=== FAIL (exit=$_ec): dumping cluster docker logs before purge ==="
+    if [[ -f "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+      bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+    fi
+  fi
   unset COMPOSE_FILE || true
   unset JEPSEN_SWARM || true
   if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
@@ -141,4 +148,7 @@ if [[ "$code" -eq 0 ]]; then
   exit 0
 fi
 stamp_outcome FAIL "swarm-append=FAIL"
+if [[ -f "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
+  bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+fi
 exit 1

@@ -44,6 +44,7 @@ import org.genfork.grid.sql.client.RemoteConnection;
 import org.genfork.grid.sql.client.ServerMeta;
 import org.genfork.grid.sql.client.sync.SyncConnection;
 import org.genfork.grid.sql.client.sync.SyncConnectionFactory;
+import org.genfork.grid.sql.client.sync.SyncResult;
 import org.genfork.grid.sql.client.sync.SyncStatement;
 import org.genfork.grid.sql.client.sync.SyncTxContext;
 
@@ -656,11 +657,11 @@ public final class GridConnection implements Connection {
 		return openTx.statement(sql, effectiveTimeout(queryTimeout));
 	}
 
-	List<org.genfork.grid.sql.client.sync.SyncResult> syncBatch(List<String> sqls) throws SQLException {
+	List<SyncResult> syncBatch(List<String> sqls) throws SQLException {
 		return syncBatch(sqls, null);
 	}
 
-	List<org.genfork.grid.sql.client.sync.SyncResult> syncBatch(List<String> sqls, Duration queryTimeout)
+	List<SyncResult> syncBatch(List<String> sqls, Duration queryTimeout)
 			throws SQLException {
 		ensureOpen();
 		ensureSpiLive();
