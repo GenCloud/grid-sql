@@ -53,6 +53,12 @@ public final class VisibilityDiag {
 	public static final String WHERE_ORCHID_TIP_ADVANCE = "orchid.tipAdvance";
 
 	/**
+	 * Tip jumped via {@code advanceCommittedTip} — writerEligible fenced until map install
+	 * catch-up covers tip (GHA 37311157765 cell I tip-ok empty-map).
+	 */
+	public static final String WHERE_ORCHID_INSTALL_CATCH_UP = "orchid.installCatchUp";
+
+	/**
 	 * Contiguous buffered proposes sealed into tip after proposer loss (unclean / forgetPeer).
 	 */
 	public static final String WHERE_ORCHID_SEAL_BUFFERED = "orchid.sealBuffered";

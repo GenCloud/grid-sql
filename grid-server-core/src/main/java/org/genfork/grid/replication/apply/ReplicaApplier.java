@@ -220,6 +220,16 @@ public class ReplicaApplier {
 
 					return;
 				}
+				final OrchidNode catchUpOrchid = nodeState.getOrchidNode();
+				final boolean installCatchUp = catchUpOrchid != null && catchUpOrchid.isInstallCatchUpRequired();
+				// Tip-ok empty-map fence: dishonest applied wm must not skip catch-up installs
+				// (GHA 37311157765 cell I / watermark skip after synthetic tip).
+				if (!forceInstall && installCatchUp
+						&& (op.type() == ReplicationOpType.UPSERT || op.type() == ReplicationOpType.DELETE)) {
+					forceReinstall(op);
+					catchUpOrchid.noteInstallCatchUpProgress(op.opSeq());
+					return;
+				}
 				if (!forceInstall) {
                     if (VisibilityDiag.enabled()) {
                         VisibilityDiag.debugf("applier.watermark",
@@ -239,6 +249,9 @@ public class ReplicaApplier {
 					return;
 				}
 				forceReinstall(op);
+				if (catchUpOrchid != null) {
+					catchUpOrchid.noteInstallCatchUpProgress(op.opSeq());
+				}
 				return;
 			}
 			// Global orchid seq: other shards consume intervening numbers; do not require applied+1.
@@ -459,6 +472,10 @@ public class ReplicaApplier {
 
 			nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());
 			completeWaiters(op.domainType(), op.shard(), op.opSeq());
+			final OrchidNode installedOrchid = nodeState.getOrchidNode();
+			if (installedOrchid != null) {
+				installedOrchid.noteInstallCatchUpProgress(op.opSeq());
+			}
 			if (ackSender != null) {
 				ackSender.sendAck(op);
 			}
@@ -659,6 +676,11 @@ public class ReplicaApplier {
 		}
 		nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());
 		completeWaiters(op.domainType(), op.shard(), op.opSeq());
+		// Markers / DDL cover tip without map UPSERT — clear tip-ok empty-map fence when seq covers tip.
+		final OrchidNode orchid = nodeState.getOrchidNode();
+		if (orchid != null) {
+			orchid.noteInstallCatchUpProgress(op.opSeq());
+		}
 		if (ackSender != null) {
 			ackSender.sendAck(op);
 		}
@@ -771,6 +793,10 @@ public class ReplicaApplier {
             }
 
 			installToMap(op.shard(), op.type(), op.key(), value);
+		}
+		final OrchidNode orchid = nodeState.getOrchidNode();
+		if (orchid != null) {
+			orchid.noteInstallCatchUpProgress(op.opSeq());
 		}
 		if (ackSender != null) {
 			ackSender.sendAck(op);

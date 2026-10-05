@@ -144,7 +144,11 @@ public final class RegionClaimService {
 			final long remoteDcTip = orchidNode.maxSeenLiveRemoteDcPeerCommittedSeq();
 			if (hasActiveRemoteDcLink() && remoteDcTip > 0L && localTip >= remoteDcTip) {
 				regionClaimAwaitRemoteDc.set(false);
-				regionTipCatchUpPending.set(false);
+				if (orchidNode.isInstallCatchUpRequired()) {
+					regionTipCatchUpPending.set(true);
+				} else {
+					regionTipCatchUpPending.set(false);
+				}
 				log.info("Region claim remote-DC tip catch-up complete localTip={} remoteDcTip={}",
 						localTip, remoteDcTip);
 				return;
@@ -156,6 +160,12 @@ public final class RegionClaimService {
 		// Do NOT fence when merely ahead of a live follower — that serializes HA writes to
 		// apply lag and breaks concurrent Load (phase-ranked spam). Quorum/NACK still
 		// back-pressures propose without denying writerEligible.
+		// Tip-ok empty-map (GHA cell I): tip jump without map install catch-up stays fenced
+		// even when localTip >= peerTip.
+		if (orchidNode.isInstallCatchUpRequired()) {
+			regionTipCatchUpPending.set(true);
+			return;
+		}
 		if (peerTip > localTip) {
 			regionTipCatchUpPending.set(true);
 			return;
@@ -329,6 +339,10 @@ public final class RegionClaimService {
 			} else if (peerTip > localTip) {
 				regionTipCatchUpPending.set(true);
 				log.info("Region claim tip catch-up pending localTip={} peerTip={}",
+						localTip, peerTip);
+			} else if (orchidNode.isInstallCatchUpRequired()) {
+				regionTipCatchUpPending.set(true);
+				log.info("Region claim install catch-up pending localTip={} peerTip={}",
 						localTip, peerTip);
 			} else {
 				regionTipCatchUpPending.set(false);

@@ -159,6 +159,20 @@ public class OrchidNode {
 	private volatile double phase;
 	private volatile long lastCommittedSeq;
 	/**
+	 * Armed when {@link #advanceCommittedTip} jumps tip without a live contiguous commit apply.
+	 * Cleared only after map install / marker persist covers the armed tip (not newer live tip).
+	 * RegionClaim fences writerEligible while set (GHA 37311157765 cell I tip-ok empty-map).
+	 */
+	private final AtomicBoolean installCatchUpRequired = new AtomicBoolean(false);
+	/**
+	 * Tip value at arm time; catch-up clear requires install progress through this seq.
+	 */
+	private final AtomicLong installCatchUpArmedTip = new AtomicLong(0L);
+	/**
+	 * Max opSeq installed (UPSERT/DELETE/marker) at or below {@link #installCatchUpArmedTip} while armed.
+	 */
+	private final AtomicLong installCatchUpMaxInstalled = new AtomicLong(0L);
+	/**
 	 * High-water of peer-advertised tips; survives {@link #forgetPeer} so ASYNC Hold
 	 * cannot clear tip-catch-up after Active DC disconnect (Elle G2 / silent RPO read).
 	 */
@@ -1509,13 +1523,18 @@ public class OrchidNode {
 
 	/**
 	 * Commit one propose at tip: apply locally, complete join, broadcast.
-	 * Does not recurse into successor drain.
+	 * Does not recurse into successor local drain ({@link #requestCommitDrain} loop).
+	 * <p>
+	 * After a successful local tip step, drain peer {@link #commitHoldback} — same contiguous
+	 * rule as {@link #onCommitSerial}. GHA 37323133691 cell D: local tip stepped to 17 while
+	 * holdback held 18–20 → permanent tip-behind / writer-eligible-timeout.
 	 */
 	private void commitOne(PendingPropose p) {
 		if (!p.commitGate.compareAndSet(false, true)) {
 			return;
 		}
 		final long opSeq;
+		final long tipBefore;
 		lock.lock();
 		try {
 			if (p.future.isDone()) {
@@ -1525,6 +1544,7 @@ public class OrchidNode {
 				p.commitGate.set(false);
 				return;
 			}
+			tipBefore = lastCommittedSeq;
 			opSeq = lastCommittedSeq + 1;
 			lastCommittedSeq = opSeq;
 		} finally {
@@ -1546,6 +1566,7 @@ public class OrchidNode {
 				fireApply(withCs, false);
 			} catch (RuntimeException applyEx) {
 				// Tip already advanced; do not broadcast or ack client success (Elle false :ok).
+				// Leave holdback intact so a later contiguous path can still drain.
 				p.future.completeExceptionally(applyEx);
 				p.releaseFlight();
 				return;
@@ -1554,6 +1575,27 @@ public class OrchidNode {
 		p.future.complete(opSeq);
 		transport.broadcastCommit(new OrchidCommitMessage(nodeId, p.proposeId, p.digest, p.prevOpSeq, opSeq, withCs));
 		p.releaseFlight();
+		// Peer commits may already sit in holdback (pipeline reorder / peer seal).
+		final List<OrchidCommitMessage> holdbackDrain = new ArrayList<>(4);
+		lock.lock();
+		try {
+			drainCommitHoldback(holdbackDrain);
+		} finally {
+			lock.unlock();
+		}
+		for (OrchidCommitMessage held : holdbackDrain) {
+			finishCommitApply(held);
+		}
+		confirmPersistedAfterDrain(holdbackDrain);
+		if (VisibilityDiag.enabled() && !holdbackDrain.isEmpty()) {
+			VisibilityDiag.debugf("orchid.commitDrain",
+					"batch=%d tipFrom=%d tipTo=%d firstType=%s node=%s",
+					holdbackDrain.size() + 1,
+					tipBefore,
+					lastCommittedSeq,
+					withCs.type(),
+					nodeId);
+		}
 	}
 
 	/**
@@ -1784,6 +1826,9 @@ public class OrchidNode {
 	 * Advance consensus tip after catch-up / segment install (not a live commit broadcast).
 	 * Without this, a late joiner keeps {@code lastCommittedSeq=0} and NACKs every propose
 	 * while map/OpLog already hold higher seqs via {@link #confirmPersisted} alone.
+	 * <p>
+	 * Tip jump arms {@link #isInstallCatchUpRequired()} until map install / marker persist
+	 * covers tip (or live commit apply clears). Prevents tip-ok empty-map writerEligible.
 	 */
 	public void advanceCommittedTip(long seq) {
 		advanceCommittedTip(seq, "unspecified");
@@ -1810,6 +1855,9 @@ public class OrchidNode {
 			lock.unlock();
 		}
 		persistCommitted(seq);
+		if (jumped) {
+			armInstallCatchUpRequired(reason == null ? "unspecified" : reason, fromTip, seq);
+		}
 		if (VisibilityDiag.enabled() && jumped) {
 			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_TIP_ADVANCE,
 					"reason=%s from=%d to=%d delta=%d node=%s",
@@ -1817,6 +1865,70 @@ public class OrchidNode {
 					fromTip,
 					seq,
 					seq - fromTip,
+					nodeId);
+		}
+	}
+
+	/**
+	 * {@code true} when tip was advanced without proven working-set install catch-up.
+	 * RegionClaim keeps writerEligible false while armed (cell I tip-ok empty-map).
+	 */
+	public boolean isInstallCatchUpRequired() {
+		return installCatchUpRequired.get();
+	}
+
+	/**
+	 * Clear fence after map install or marker persist when catch-up covers the armed tip.
+	 * Newer live ops ({@code opSeq > armedTip}) must not clear — otherwise tip-ok empty-map
+	 * can become writerEligible while the dishonest prefix is still missing.
+	 */
+	public void noteInstallCatchUpProgress(long opSeq) {
+		if (opSeq <= 0L || !installCatchUpRequired.get()) {
+			return;
+		}
+		final long armedTip = installCatchUpArmedTip.get();
+		if (armedTip <= 0L || opSeq > armedTip) {
+			return;
+		}
+		final long covered = installCatchUpMaxInstalled.updateAndGet(cur -> Math.max(cur, opSeq));
+		if (covered >= armedTip) {
+			clearInstallCatchUpRequired("installCovered");
+		}
+	}
+
+	/**
+	 * Test hook: whether install catch-up fence is armed.
+	 */
+	@VisibleForTesting
+	public boolean testingInstallCatchUpRequired() {
+		return installCatchUpRequired.get();
+	}
+
+	private void armInstallCatchUpRequired(String reason, long fromTip, long toTip) {
+		installCatchUpArmedTip.set(toTip);
+		installCatchUpMaxInstalled.set(0L);
+		installCatchUpRequired.set(true);
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_INSTALL_CATCH_UP,
+					"event=arm reason=%s from=%d to=%d node=%s",
+					reason,
+					fromTip,
+					toTip,
+					nodeId);
+		}
+	}
+
+	private void clearInstallCatchUpRequired(String reason) {
+		if (!installCatchUpRequired.compareAndSet(true, false)) {
+			return;
+		}
+		installCatchUpArmedTip.set(0L);
+		installCatchUpMaxInstalled.set(0L);
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_INSTALL_CATCH_UP,
+					"event=clear reason=%s tip=%d node=%s",
+					reason,
+					lastCommittedSeq,
 					nodeId);
 		}
 	}

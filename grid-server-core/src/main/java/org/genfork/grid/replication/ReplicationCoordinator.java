@@ -828,9 +828,10 @@ public class ReplicationCoordinator {
 				final long minApplied = nodeState.minAppliedWatermark();
 				final long maxApplied = nodeState.maxAppliedWatermark();
 				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_WRITER_ELIGIBLE,
-						"eligible=%s awaitsPeerTip=%s localTip=%d peerTip=%d minApplied=%d maxApplied=%d appliedStreams=%d tipAheadOfMinApplied=%d node=%s",
+						"eligible=%s awaitsPeerTip=%s installCatchUp=%s localTip=%d peerTip=%d minApplied=%d maxApplied=%d appliedStreams=%d tipAheadOfMinApplied=%d node=%s",
 						eligible,
 						awaits,
+						orchidNode != null && orchidNode.isInstallCatchUpRequired(),
 						localTip,
 						peerTip,
 						minApplied,
