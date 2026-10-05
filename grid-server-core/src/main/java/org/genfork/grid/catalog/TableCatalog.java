@@ -34,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.genfork.grid.fs.GridFs;
@@ -1182,6 +1183,19 @@ public final class TableCatalog {
 
 	public void bindStore(String tableName, Object store) {
 		stores.put(key(tableName), Objects.requireNonNull(store));
+	}
+
+	/**
+	 * Single-flight store open: factory runs at most once per catalog key.
+	 * Prevents applier {@code registerDomain} vs catalog bind desync under concurrent
+	 * {@code createTable}/{@code ensureStore} (GHA 37356096713 install-then-MISS).
+	 */
+	@SuppressWarnings("unchecked")
+	public <T> T computeStoreIfAbsent(String tableName, Supplier<T> factory) {
+		Objects.requireNonNull(factory, "factory");
+		final String k = key(tableName);
+		final Object bound = stores.computeIfAbsent(k, ignored -> Objects.requireNonNull(factory.get(), "store"));
+		return (T) bound;
 	}
 
 	/** Snapshot of registered table names (for harness cleanup). */

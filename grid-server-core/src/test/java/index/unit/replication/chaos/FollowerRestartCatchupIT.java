@@ -161,7 +161,10 @@ public class FollowerRestartCatchupIT {
 		final long deadline = System.currentTimeMillis() + timeoutMs;
 		while (System.currentTimeMillis() < deadline) {
 			if (a.getOrchidNode().isSynced() && b.getOrchidNode().isSynced() && c.getOrchidNode().isSynced()
-					&& a.getOrchidNode().isPhaseRankedProposer()) {
+					&& a.getOrchidNode().isPhaseRankedProposer()
+					&& !a.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !b.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !c.getOrchidNode().awaitsPeerTipAdvertisement()) {
 				return;
 			}
 			LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(50));

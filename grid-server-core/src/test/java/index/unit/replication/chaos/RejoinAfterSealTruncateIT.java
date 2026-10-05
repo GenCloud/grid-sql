@@ -36,6 +36,7 @@ import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Follower rejoin after writer seal + OpLog truncate: HELLO catch-up / repair must restore
@@ -89,7 +90,7 @@ public class RejoinAfterSealTruncateIT {
 			a.start();
 			b.start();
 			c.start();
-			waitThreeSynced(a, b, c, SYNC_TIMEOUT_MS);
+			waitReadyForAdmit(a, b, c, SYNC_TIMEOUT_MS);
 			assertTrue(a.getOrchidNode().isPhaseRankedProposer());
 
 			final byte[] keyEarly = new byte[]{1, 1};
@@ -188,17 +189,38 @@ public class RejoinAfterSealTruncateIT {
 		));
 	}
 
-	private static void waitThreeSynced(ReplicationCoordinator a, ReplicationCoordinator b,
-	                                    ReplicationCoordinator c, long timeoutMs) {
+	/**
+	 * Fail-closed boot wait before Orchid admit (GHA 37356096701).
+	 * <p>
+	 * {@code isSynced} alone is not admit-ready: HELLO clears {@code tipAdvertised} and
+	 * {@code onPhase} is mailbox-async. Mirror {@code ThreeNodeClusterLatencyIT.waitReadyForAdmit}.
+	 */
+	private static void waitReadyForAdmit(ReplicationCoordinator a, ReplicationCoordinator b,
+	                                      ReplicationCoordinator c, long timeoutMs) {
 		final long deadline = System.currentTimeMillis() + timeoutMs;
 		while (System.currentTimeMillis() < deadline) {
-			if (a.getOrchidNode().isSynced() && b.getOrchidNode().isSynced() && c.getOrchidNode().isSynced()
-					&& a.getOrchidNode().isPhaseRankedProposer()) {
+			if (a.getOrchidNode().isSynced()
+					&& b.getOrchidNode().isSynced()
+					&& c.getOrchidNode().isSynced()
+					&& a.getOrchidNode().isPhaseRankedProposer()
+					&& !a.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !b.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !c.getOrchidNode().awaitsPeerTipAdvertisement()) {
 				return;
 			}
 			LockSupport.parkNanos(PARK_NANOS);
 		}
-		assertTrue(a.getOrchidNode().isPhaseRankedProposer());
+		fail("cluster not ready for admit"
+				+ " a.synced=" + a.getOrchidNode().isSynced()
+				+ " b.synced=" + b.getOrchidNode().isSynced()
+				+ " c.synced=" + c.getOrchidNode().isSynced()
+				+ " a.proposer=" + a.getOrchidNode().isPhaseRankedProposer()
+				+ " a.awaitTip=" + a.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " b.awaitTip=" + b.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " c.awaitTip=" + c.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " a.R=" + a.getOrchidNode().orderParameterR()
+				+ " b.R=" + b.getOrchidNode().orderParameterR()
+				+ " c.R=" + c.getOrchidNode().orderParameterR());
 	}
 
 	private static void waitKey(GridEntriesProcessor proc, byte[] key, byte[] value, long timeoutMs) {

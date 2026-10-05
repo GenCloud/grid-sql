@@ -191,22 +191,21 @@ public final class SqlTableResolver {
 	}
 
 	public void ensureStore(TableSchema schema) {
-		if (catalog.getStore(schema.catalogKey()) != null) {
-			return;
-		}
 		openStore(schema.catalogKey(), schema);
 	}
 
 	private void openStore(String tableName, TableSchema schema) {
 		try {
-			final TableStore store = new TableStore(schema, defaultShards, replicationCoordinator);
-			store.setOverlay(overlayStore, autoPinTtlMs);
-			catalog.loadAnalyzeStats(tableName);
-			final TableAnalyzeStats analyzed = catalog.getAnalyzeStats(tableName);
-			if (analyzed != null) {
-				store.setAnalyzeStats(analyzed);
-			}
-			catalog.bindStore(tableName, store);
+			catalog.computeStoreIfAbsent(tableName, () -> {
+				final TableStore store = new TableStore(schema, defaultShards, replicationCoordinator);
+				store.setOverlay(overlayStore, autoPinTtlMs);
+				catalog.loadAnalyzeStats(tableName);
+				final TableAnalyzeStats analyzed = catalog.getAnalyzeStats(tableName);
+				if (analyzed != null) {
+					store.setAnalyzeStats(analyzed);
+				}
+				return store;
+			});
 		} catch (RuntimeException ex) {
 			throw new IllegalStateException("Failed to open store for " + tableName + ": " + ex.getMessage(), ex);
 		}

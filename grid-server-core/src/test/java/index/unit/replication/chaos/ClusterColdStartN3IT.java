@@ -178,7 +178,10 @@ public class ClusterColdStartN3IT {
 		while (System.currentTimeMillis() < deadline) {
 			if (a.getOrchidNode().isSynced() && b.getOrchidNode().isSynced() && c.getOrchidNode().isSynced()
 					&& expectedProposer.equals(a.getOrchidNode().getPhaseRankedProposerId())
-					&& a.getOrchidNode().isPhaseRankedProposer()) {
+					&& a.getOrchidNode().isPhaseRankedProposer()
+					&& !a.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !b.getOrchidNode().awaitsPeerTipAdvertisement()
+					&& !c.getOrchidNode().awaitsPeerTipAdvertisement()) {
 				return;
 			}
 			LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(50));
@@ -186,7 +189,10 @@ public class ClusterColdStartN3IT {
 		assertTrue(a.getOrchidNode().isPhaseRankedProposer(),
 				() -> "expected proposer " + expectedProposer
 						+ " got " + a.getOrchidNode().getPhaseRankedProposerId()
-						+ " a.R=" + a.getOrchidNode().orderParameterR());
+						+ " a.R=" + a.getOrchidNode().orderParameterR()
+						+ " a.awaitTip=" + a.getOrchidNode().awaitsPeerTipAdvertisement()
+						+ " b.awaitTip=" + b.getOrchidNode().awaitsPeerTipAdvertisement()
+						+ " c.awaitTip=" + c.getOrchidNode().awaitsPeerTipAdvertisement());
 	}
 
 	private static void waitApplied(GridEntriesProcessor proc, byte[] key, byte[] value, long timeoutMs) {
