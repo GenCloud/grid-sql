@@ -286,6 +286,9 @@ public class GridEntriesProcessor {
 		final byte[] inMap = gridScalableMap.get(key);
 		if (inMap != null) {
 			touchWorkingSet(key);
+			VisibilityDiag.debugf("map.getCommitted",
+					"HIT shard=%d source=ram %s %s", shardNum, VisibilityDiag.keyTag(key),
+					VisibilityDiag.valTag(inMap));
 			return inMap;
 		}
 		final byte[] fromSealed = sealedGet(key);
@@ -302,10 +305,16 @@ public class GridEntriesProcessor {
 		ReplicationMetrics.recordSealedMiss();
 		final WorkingSetBudget budget = workingSetBudget;
 		if (budget != null && budget.preferSealedOnly()) {
+			VisibilityDiag.debugf("map.getCommitted",
+					"HIT shard=%d source=sealed-only %s %s", shardNum, VisibilityDiag.keyTag(key),
+					VisibilityDiag.valTag(fromSealed));
 			// Adaptive HIGH: disk-first read — serve sealed bytes without warming RAM.
 			return fromSealed;
 		}
 		loadIntoWorkingSet(key, fromSealed);
+		VisibilityDiag.debugf("map.getCommitted",
+				"HIT shard=%d source=sealed %s %s", shardNum, VisibilityDiag.keyTag(key),
+				VisibilityDiag.valTag(fromSealed));
 		return fromSealed;
 	}
 

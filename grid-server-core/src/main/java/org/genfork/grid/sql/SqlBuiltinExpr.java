@@ -52,6 +52,18 @@ public final class SqlBuiltinExpr {
 		}
 	}
 
+	/**
+	 * RMW assign in {@code ON CONFLICT DO UPDATE SET col = col || …} / numeric add.
+	 * <p>
+	 * {@code modifyKind} matches {@link org.genfork.grid.replication.codec.ModifyPayload}
+	 * ({@code KIND_STRING_CONCAT} / {@code KIND_NUMERIC_ADD}).
+	 */
+	public record RmwExpr(byte modifyKind, String modifyArg) {
+		public RmwExpr {
+			Objects.requireNonNull(modifyArg, "modifyArg");
+		}
+	}
+
 	/** {@code COALESCE(a, b, …)} — args are literals, {@link ColumnRef}, nested markers. */
 	public record CoalesceExpr(List<Object> args) {
 		public CoalesceExpr {

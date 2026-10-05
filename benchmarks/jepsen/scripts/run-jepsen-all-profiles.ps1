@@ -32,18 +32,33 @@ function Find-GitBash {
 }
 
 function Clear-JepsenProfileEnv {
-  # Prevent join/swarm/unclean flags from bleeding across sequential profiles.
+  # Prevent flags / parallel-cell ids from bleeding across sequential profiles.
+  # Evidence 2026-10-05 matrix: leaked JEPSEN_INSTANCE=G + PORT_OFFSET=600 from a prior
+  # calm-G shell made 1dc-join thrash jamoa-multidc-G instead of 1dc n1-n3.
   foreach ($name in @(
       "JEPSEN_JOIN_SHARDS",
       "JEPSEN_SWARM",
       "JEPSEN_UNCLEAN_REVIVE",
       "JEPSEN_UNCLEAN_DOWN_SEC",
       "JEPSEN_MULTIDC",
+      "JEPSEN_WITNESS",
+      "JEPSEN_INSTANCE",
+      "JEPSEN_PORT_OFFSET",
+      "JEPSEN_RESULTS_FILE",
       "MULTIDC_WORKLOADS",
       "MULTIDC_NEMESIS",
       "MULTIDC_FULL",
       "MULTIDC_SKIP_REBUILD",
-      "MULTIDC_MODE"
+      "MULTIDC_MODE",
+      "COMPOSE_PROJECT_NAME",
+      "STAMP",
+      "MODE",
+      "OUTCOME",
+      "NOTES",
+      "COMMAND",
+      "FULL",
+      "COMPOSE_STATUS",
+      "CHAOS"
     )) {
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
   }
@@ -76,6 +91,10 @@ function Run-Profile([string]$Name, [string]$Script) {
 }
 
 $failures = New-Object System.Collections.Generic.List[string]
+
+# Drop any leaked parallel-cell / prior-hunt env before the first profile.
+Clear-JepsenProfileEnv
+$env:JEPSEN_TIME_LIMIT = "$TimeLimit"
 
 Run-Profile "1dc-chaos" "run-jepsen.ps1"
 Run-Profile "1dc-nochao" "run-jepsen-nochao.ps1"

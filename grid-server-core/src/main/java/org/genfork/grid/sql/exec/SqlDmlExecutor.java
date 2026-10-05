@@ -18,6 +18,7 @@ package org.genfork.grid.sql.exec;
 import org.genfork.grid.catalog.*;
 import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.mem.index.GridCompositeIndex;
+import org.genfork.grid.replication.apply.FieldModifyApplicator;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.sql.*;
@@ -25,6 +26,7 @@ import org.genfork.grid.sql.SqlBuiltinExpr.ClockExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
 import org.genfork.grid.sql.SqlBuiltinExpr.ExcludedRef;
+import org.genfork.grid.sql.SqlBuiltinExpr.RmwExpr;
 import org.genfork.grid.sql.ast.DmlAst.*;
 import org.genfork.grid.sql.tx.KeyWrapper;
 import org.genfork.grid.sql.tx.SqlTxBuffer;
@@ -517,8 +519,8 @@ public final class SqlDmlExecutor {
 						"table=%s %s staged %s", table, VisibilityDiag.keyTag(key),
 						VisibilityDiag.valTag(encoded.valueBytes()));
 			} else {
-				VisibilityDiag.debugf("dml.update.rmw",
-						"table=%s %s base=null => affected=0 (caller may INSERT)",
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
+						"table=%s path=rmw %s base=null => affected=0 (caller may INSERT)",
 						table, VisibilityDiag.keyTag(key));
 			}
 		} else if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
@@ -547,6 +549,10 @@ public final class SqlDmlExecutor {
 				? SqlDmlLockOps.baseBytes(session, table, store, key)
 				: SqlDmlLockOps.existingBytes(session, table, store, key);
 		if (base == null) {
+			// Smoking gun class: UPDATE0 after prior ok append → client INSERT fork (GHA I / D).
+			VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
+					"table=%s stageInTx=%s %s => affected=0 (caller may INSERT)",
+					table, stageInTx, VisibilityDiag.keyTag(key));
 			return 0L;
 		}
 		final TableStore.EncodedRow encoded = store.encodeSetLiterals(key, base, sets);
@@ -752,8 +758,17 @@ public final class SqlDmlExecutor {
 		final Map<String, Object> out = new LinkedHashMap<>();
 		for (Map.Entry<String, Object> e : sets.entrySet()) {
 			final ColumnDef col = schema.requireColumn(e.getKey());
+			final Object raw = e.getValue();
+			if (raw instanceof RmwExpr rmw) {
+				final Object prev = existingValues == null
+						? null
+						: existingValues[col.ordinal()];
+				out.put(e.getKey(), FieldModifyApplicator.applyValue(
+						col.javaType(), rmw.modifyKind(), rmw.modifyArg(), prev));
+				continue;
+			}
 			out.put(e.getKey(), SqlBuiltinEvalUtil.resolve(
-					e.getValue(),
+					raw,
 					name -> {
 						if (existingValues == null) {
 							return null;

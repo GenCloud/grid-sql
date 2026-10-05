@@ -18,6 +18,7 @@ package org.genfork.grid.replication.orchid;
 import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.codec.OpLogCodec;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.orchid.OrchidTransport.OrchidCommitMessage;
@@ -295,6 +296,8 @@ public class OrchidNode {
 		// Tip not yet known from this peer — writerEligible / admit stay false until phase tip
 		// (unclean heal: lex-smaller lagging node was eligible with stale maxSeen → Elle G-single).
 		view.tipAdvertised = false;
+		VisibilityDiag.debugf("orchid.tipAdvertised",
+				"event=HELLO_CLEAR peer=%s awaitsTip=%s", peerId, awaitsPeerTipAdvertisement());
 		if (isPhaseCoupledPeer(peerId) || isLocalPeer(peerId)) {
 			broadcastOwnPhase(0L, 0L);
 		}
@@ -713,6 +716,9 @@ public class OrchidNode {
 		view.digest = msg.digest();
 		view.seen = true;
 		view.tipAdvertised = true;
+		VisibilityDiag.debugf("orchid.tipAdvertised",
+				"event=PHASE_SET peer=%s lastCommittedSeq=%d awaitsTip=%s",
+				msg.nodeId(), msg.lastCommittedSeq(), awaitsPeerTipAdvertisement());
 		noteObservedPeerCommittedSeq(msg.lastCommittedSeq());
 		if (msg.proposeId() > 0L) {
 			final PendingPropose pendingPropose = pending.get(msg.proposeId());

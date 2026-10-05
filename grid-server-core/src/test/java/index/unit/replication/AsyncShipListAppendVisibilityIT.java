@@ -32,6 +32,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * ASYNC_SHIP Active writer: ack'd concat append must be visible on the same node.
@@ -95,7 +96,9 @@ class AsyncShipListAppendVisibilityIT {
 		a2.start();
 		b1.start();
 		waitSynced(a1, SYNC_MS);
-		assertTrue(a1.isWriterEligible() || a2.isWriterEligible(), "dc-a must have a writer");
+		waitSynced(a2, SYNC_MS);
+		// tipAdvertised HELLO_CLEAR must clear via phase tip before writerEligible (not just isSynced).
+		waitWriterEligible(a1, a2, SYNC_MS);
 
 		final ReplicationCoordinator writer = a1.isWriterEligible() ? a1 : a2;
 		engine = SqlBenchHelper.createEngine(8, writer);
@@ -142,6 +145,29 @@ class AsyncShipListAppendVisibilityIT {
 			Thread.sleep(20L);
 		}
 		assertTrue(c.getOrchidNode().isSynced(), "orchid synced");
+	}
+
+	private static void waitWriterEligible(
+			ReplicationCoordinator a,
+			ReplicationCoordinator b,
+			long timeoutMs
+	) throws Exception {
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			if (a.isWriterEligible() || b.isWriterEligible()) {
+				return;
+			}
+			Thread.sleep(20L);
+		}
+		fail("dc-a must have a writer within " + timeoutMs + "ms"
+				+ " a.synced=" + a.getOrchidNode().isSynced()
+				+ " b.synced=" + b.getOrchidNode().isSynced()
+				+ " a.elig=" + a.isWriterEligible()
+				+ " b.elig=" + b.isWriterEligible()
+				+ " a.awaitTip=" + a.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " b.awaitTip=" + b.getOrchidNode().awaitsPeerTipAdvertisement()
+				+ " a.phaseRanked=" + a.getOrchidNode().isPhaseRankedProposer()
+				+ " b.phaseRanked=" + b.getOrchidNode().isPhaseRankedProposer());
 	}
 
 	private static int freePort() throws Exception {

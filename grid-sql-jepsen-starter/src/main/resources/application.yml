@@ -32,4 +32,4 @@ logging:
   level:
     root: INFO
     org.genfork.grid: DEBUG
-    grid.diag.visibility: DEBUG
+    org.genfork.grid.diag: DEBUG

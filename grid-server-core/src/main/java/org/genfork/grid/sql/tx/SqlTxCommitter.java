@@ -30,6 +30,7 @@ import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.store.TableStore;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -98,9 +99,28 @@ public final class SqlTxCommitter {
 				}
 				streams.append(sk.table()).append('#').append(sk.shard());
 			}
+			final StringBuilder keys = new StringBuilder();
+			int keyN = 0;
+			for (Map.Entry<String, Map<KeyWrapper, SqlTxBuffer.DirtyEntry>> te : buf.tables()) {
+				for (SqlTxBuffer.DirtyEntry de : te.getValue().values()) {
+					if (keyN >= 16) {
+						keys.append(",...");
+						break;
+					}
+					if (keyN > 0) {
+						keys.append(',');
+					}
+					keys.append(te.getKey()).append('@')
+							.append(Integer.toHexString(Arrays.hashCode(de.keyBytes())));
+					keyN++;
+				}
+				if (keyN >= 16) {
+					break;
+				}
+			}
 			VisibilityDiag.debugf("tx.commit",
-					"txId=%d repl=%s singleStream=%s streams=[%s] dirtyTables=%d",
-					buf.txId(), repl, singleStream, streams, buf.tables().size());
+					"txId=%d repl=%s singleStream=%s streams=[%s] dirtyTables=%d dirtyKeys=[%s]",
+					buf.txId(), repl, singleStream, streams, buf.tables().size(), keys);
 		}
 		try {
 			if (repl) {

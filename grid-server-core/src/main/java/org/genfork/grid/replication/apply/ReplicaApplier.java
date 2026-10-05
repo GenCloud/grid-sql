@@ -484,11 +484,17 @@ public class ReplicaApplier {
 			if (gate != null && gate.isMultiApplyOpen(txId)) {
 				openTxIdByStream.remove(lockKey);
 				txStaging.remove(lockKey);
-				if (gate.noteApplyCommit(txId, stream)) {
+				final boolean complete = gate.noteApplyCommit(txId, stream);
+				VisibilityDiag.debugf("applier.watermark.closeTx",
+						"multi stream=%s txId=%d complete=%s opSeq=%d",
+						lockKey, txId, complete, op.opSeq());
+				if (complete) {
 					flushEnvelopeStagingByOwningDomain(gate.takeApplyStagingByStream(txId));
 				}
 				return true;
 			}
+			VisibilityDiag.debugf("applier.watermark.closeTx",
+					"single stream=%s txId=%d opSeq=%d", lockKey, txId, op.opSeq());
 			flushStaging(lockKey, op.shard());
 			txStaging.remove(lockKey);
 			openTxIdByStream.remove(lockKey);
@@ -620,8 +626,10 @@ public class ReplicaApplier {
 			Map<TxEnvelopeCodec.StreamRef, List<TxEnvelopeCoordinator.StagedMutation>> byStream
 	) {
 		if (byStream == null || byStream.isEmpty()) {
+			VisibilityDiag.debug("applier.flushEnvelope", "empty");
 			return;
 		}
+		VisibilityDiag.debugf("applier.flushEnvelope", "streams=%d", byStream.size());
 		final Function<String, ReplicaApplier> resolver = applierByDomain;
 		if (resolver == null) {
 			throw new IllegalStateException(ERR_APPLIER_BY_DOMAIN_UNSET);
@@ -633,6 +641,8 @@ public class ReplicaApplier {
 			if (ref == null || staging == null || staging.isEmpty()) {
 				continue;
 			}
+			VisibilityDiag.debugf("applier.flushEnvelope",
+					"domain=%s shard=%d count=%d", ref.domain(), ref.shard(), staging.size());
 			final ReplicaApplier owner = resolver.apply(ref.domain());
 			if (owner == null) {
 				throw new IllegalStateException(ERR_APPLIER_MISSING_PREFIX + ref.domain());
@@ -643,7 +653,11 @@ public class ReplicaApplier {
 
 	/** Map+index install for envelope staging owned by this domain applier. */
 	private void installOwnedEnvelopeStaging(List<TxEnvelopeCoordinator.StagedMutation> staging) {
+		VisibilityDiag.debugf("applier.flushEnvelope.item", "install count=%d", staging.size());
 		for (TxEnvelopeCoordinator.StagedMutation m : staging) {
+			VisibilityDiag.debugf("applier.flushEnvelope.item",
+					"type=%s shard=%d %s %s", m.type(), m.shard(),
+					VisibilityDiag.keyTag(m.key()), VisibilityDiag.valTag(m.value()));
 			installToMap(m.shard(), m.type(), m.key(), m.value());
 		}
 	}
@@ -660,6 +674,10 @@ public class ReplicaApplier {
 		}
 		if (op.type() == ReplicationOpType.UPSERT
 				|| op.type() == ReplicationOpType.DELETE) {
+			VisibilityDiag.debugf("applier.forceReinstall",
+					"stream=%s#%d type=%s opSeq=%d %s %s",
+					op.domainType(), op.shard(), op.type(), op.opSeq(),
+					VisibilityDiag.keyTag(op.key()), VisibilityDiag.valTag(value));
 			installToMap(op.shard(), op.type(), op.key(), value);
 		}
 		if (ackSender != null) {

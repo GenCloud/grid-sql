@@ -11,4 +11,4 @@ export JEPSEN_JOIN_SHARDS=1
 pkill -9 -f 'jamoa-jepsen.core' 2>/dev/null || true
 sleep 1
 lein run -m jamoa-jepsen.core test --workload join --time-limit 60
-echo LEIN_EXIT=0
+echo LEIN_EXIT=$?

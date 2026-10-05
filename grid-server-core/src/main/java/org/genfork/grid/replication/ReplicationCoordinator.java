@@ -16,6 +16,7 @@
 package org.genfork.grid.replication;
 
 import org.genfork.grid.context.config.GridConfigurationProperties;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationProps;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
 import org.genfork.grid.mem.stage.GridEntriesProcessor;
@@ -72,6 +73,7 @@ import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -165,6 +167,7 @@ public class ReplicationCoordinator {
 	 * Idempotent stop for Spring destroy + JVM SIGTERM shutdown hook.
 	 */
 	private final AtomicBoolean stopped = new AtomicBoolean(false);
+	private final AtomicReference<Boolean> lastWriterEligibleDiag = new AtomicReference<>();
 	private volatile Thread oplogShutdownHook;
 	private final TxMarkerService txMarkerService;
 	private final RegionClaimService regionClaimService;
@@ -814,7 +817,18 @@ public class ReplicationCoordinator {
 	 * Synced and phase-ranked proposer — may accept writes (requires write-admission + region Active).
 	 */
 	public boolean isWriterEligible() {
-		return regionClaimService != null && regionClaimService.isWriterEligible();
+		final boolean eligible = regionClaimService != null && regionClaimService.isWriterEligible();
+		// Transition-only: polling waitWriter / claim loops must not flood DEBUG.
+		if (VisibilityDiag.enabled()) {
+			final Boolean prev = lastWriterEligibleDiag.getAndSet(eligible);
+			if (prev == null || prev.booleanValue() != eligible) {
+				final boolean awaits = orchidNode != null && orchidNode.awaitsPeerTipAdvertisement();
+				VisibilityDiag.debugf("orchid.writerEligible",
+						"eligible=%s awaitsPeerTip=%s node=%s",
+						eligible, awaits, nodeState.getNodeId());
+			}
+		}
+		return eligible;
 	}
 
 	public boolean regionAllowsWrites() {

@@ -23,8 +23,10 @@ import java.util.Arrays;
 /**
  * Server-only SLF4J DEBUG diagnostics for TX / apply / map visibility triage.
  * <p>
- * Enable: {@code logging.level.grid.diag.visibility=DEBUG}
- * (or {@code logging.level.org.genfork.grid.diag.VisibilityDiag=DEBUG}).
+ * Logger is the class name under {@code org.genfork.grid} so Jepsen
+ * {@code LOGGING_LEVEL_ORG_GENFORK_GRID=DEBUG} / {@code logging.level.org.genfork.grid: DEBUG}
+ * actually enables it. Evidence unclean-p0: named logger {@code grid.diag.visibility}
+ * produced 0 lines while {@code org.genfork.grid} DEBUG flooded — outside that hierarchy.
  * Hot paths call {@link #enabled()} first — no formatting when DEBUG is off.
  *
  * @author: GenCloud
@@ -32,7 +34,17 @@ import java.util.Arrays;
  * @since: 1.0
  */
 public final class VisibilityDiag {
-	private static final Logger LOG = LoggerFactory.getLogger("grid.diag.visibility");
+	private static final Logger LOG = LoggerFactory.getLogger(VisibilityDiag.class);
+
+	/**
+	 * UPDATE concat/set hit no base row → rowsAffected=0; Jepsen client may INSERT (fork-class).
+	 */
+	public static final String WHERE_UPDATE_AFFECTED_ZERO = "dml.update.affectedZero";
+
+	/**
+	 * PK SELECT returned no committed/dirty value (Elle maps empty row to nil).
+	 */
+	public static final String WHERE_QUERY_EMPTY_READ = "query.emptyRead";
 
 	private VisibilityDiag() {
 	}

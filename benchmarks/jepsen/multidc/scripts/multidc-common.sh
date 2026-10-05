@@ -47,7 +47,12 @@ case "$MODE" in
     exit 2
     ;;
 esac
-if [[ "$MULTIDC_NEMESIS" == "1" ]]; then
+# CHAOS_NOTE must match the Clojure generator (core.clj nemesis-schedule), not a label dump.
+# Evidence: unclean RESULTS claimed dc-link+kill-dc-a while JEPSEN_UNCLEAN_REVIVE=1 only fires
+# sleep12 → :kill-proposer → sleep28 (nemesis-unclean-revive.sh).
+if [[ "${JEPSEN_UNCLEAN_REVIVE:-0}" == "1" ]]; then
+  CHAOS_NOTE="unclean-revive"
+elif [[ "$MULTIDC_NEMESIS" == "1" ]]; then
   if [[ "${JEPSEN_SWARM:-}" == "1" ]]; then
     CHAOS_NOTE="swarm-bounce+dc-link+kill-voter"
   else
@@ -56,8 +61,12 @@ if [[ "$MULTIDC_NEMESIS" == "1" ]]; then
 else
   CHAOS_NOTE="no-nemesis"
 fi
-if [[ "${JEPSEN_UNCLEAN_REVIVE:-0}" == "1" ]]; then CHAOS_NOTE="unclean-revive+${CHAOS_NOTE}"; fi
 if [[ "${JEPSEN_JOIN_SHARDS:-}" == "1" ]]; then CHAOS_NOTE="join-shards+${CHAOS_NOTE}"; fi
+# Fail class for SUMMARY / stamp notes: harness (compose) vs elle (lein Analysis).
+FAIL_CLASS=""
+HARNESS_REASON=""
+COMPOSE_UP_MAX_ATTEMPTS="${COMPOSE_UP_MAX_ATTEMPTS:-3}"
+COMPOSE_UP_SETTLE_SEC="${COMPOSE_UP_SETTLE_SEC:-8}"
 
 stamp_multidc() {
   local stamp="$1" outcome="$2" notes="$3" reg="${4:--}" app="${5:--}" latency="${6:-}"
@@ -167,7 +176,61 @@ else
   ( cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -Dmaven.test.skip=true )
 fi
 
+docker_daemon_ready() {
+  if docker info >/dev/null 2>&1; then
+    echo "ensure_cluster: docker info ok"
+    return 0
+  fi
+  echo "ensure_cluster: docker info FAILED" >&2
+  return 1
+}
+
+# Evidence 2026-10-05 matrix/r2: Windows Docker Desktop returns "i/o timeout" on compose up
+# after purge; bash set -e exited with no stamp → stale PASS in RESULTS.md.
+# Bounded retry (not infinite); classify as HARNESS_FAIL when exhausted.
+docker_compose_up_retry() {
+  local attempt=1
+  local up_out=""
+  local up_ec=0
+  while (( attempt <= COMPOSE_UP_MAX_ATTEMPTS )); do
+    if ! docker_daemon_ready; then
+      echo "ensure_cluster: compose up attempt=$attempt settle ${COMPOSE_UP_SETTLE_SEC}s (daemon not ready)"
+      sleep "$COMPOSE_UP_SETTLE_SEC"
+    fi
+    echo "ensure_cluster: compose up attempt=$attempt/$COMPOSE_UP_MAX_ATTEMPTS"
+    set +e
+    up_out="$(docker compose up -d --force-recreate a1 a2 a3 b1 b2 2>&1)"
+    up_ec=$?
+    set -e
+    echo "$up_out"
+    if [[ "$up_ec" -eq 0 ]]; then
+      # Retry recovered — do not carry HARNESS_REASON into a later Elle FAIL stamp.
+      HARNESS_REASON=""
+      FAIL_CLASS=""
+      echo "ensure_cluster: compose up attempt=$attempt exit=0"
+      return 0
+    fi
+    echo "ensure_cluster: compose up attempt=$attempt exit=$up_ec" >&2
+    if echo "$up_out" | grep -Eiq 'i/o timeout|Error response from daemon|Cannot connect to the Docker daemon'; then
+      HARNESS_REASON="docker-io-timeout"
+      FAIL_CLASS="harness"
+      echo "ensure_cluster: CLASS=harness reason=$HARNESS_REASON"
+      if (( attempt < COMPOSE_UP_MAX_ATTEMPTS )); then
+        echo "ensure_cluster: settle ${COMPOSE_UP_SETTLE_SEC}s before retry"
+        sleep "$COMPOSE_UP_SETTLE_SEC"
+      fi
+    else
+      HARNESS_REASON="compose-up-exit-$up_ec"
+      FAIL_CLASS="harness"
+      break
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 ensure_cluster() {
+  echo "ensure_cluster: begin prefix=$MDC_PREFIX unclean=${JEPSEN_UNCLEAN_REVIVE:-0}"
   # Parallel cells: only tear down this COMPOSE_PROJECT_NAME. Singleton: full purge frees binds.
   if [[ -n "${JEPSEN_INSTANCE:-}" ]]; then
     docker compose down -v --remove-orphans || true
@@ -176,7 +239,10 @@ ensure_cluster() {
   else
     docker compose down -v --remove-orphans || true
   fi
-  docker compose up -d --force-recreate a1 a2 a3 b1 b2
+  if ! docker_compose_up_retry; then
+    echo "ERROR: Multi-DC compose up failed after retries (CLASS=${FAIL_CLASS:-harness} reason=${HARNESS_REASON:-compose-up})" >&2
+    return 1
+  fi
   echo "Waiting for health (prefix=$MDC_PREFIX)..."
   deadline=$((SECONDS + 240))
   ok=0
@@ -191,6 +257,8 @@ ensure_cluster() {
   done
   if (( ok != 1 )); then
     echo "ERROR: Multi-DC nodes not healthy before settle" >&2
+    FAIL_CLASS="harness"
+    HARNESS_REASON="${HARNESS_REASON:-nodes-not-healthy}"
     return 1
   fi
   if [[ -x "$JEPSEN_DIR/scripts/wait-writer-eligible.sh" ]]; then
@@ -201,8 +269,28 @@ ensure_cluster() {
       export WRITER_SETTLE_DEADLINE_SEC="${WRITER_SETTLE_DEADLINE_SEC:-240}"
     fi
     # Hard-fail: generators must not start without a phase-ranked writer.
-    bash "$JEPSEN_DIR/scripts/wait-writer-eligible.sh" "$ACTIVE_HTTP_PORTS"
+    if ! bash "$JEPSEN_DIR/scripts/wait-writer-eligible.sh" "$ACTIVE_HTTP_PORTS"; then
+      FAIL_CLASS="harness"
+      HARNESS_REASON="writer-eligible-timeout"
+      return 1
+    fi
   fi
+  # Health/writer path succeeded — clear any transient compose-retry harness flags.
+  HARNESS_REASON=""
+  FAIL_CLASS=""
+  echo "ensure_cluster: end ok"
+  return 0
+}
+
+# Stamp FAIL with CLASS=harness when compose dies before lein (no stale PASS).
+stamp_harness_fail() {
+  local phase="${1:-ensure_cluster}"
+  FAIL_CLASS="harness"
+  HARNESS_REASON="${HARNESS_REASON:-docker-io-timeout}"
+  local notes="HARNESS_FAIL=${HARNESS_REASON} CLASS=harness phase=${phase}; chaos=$CHAOS_NOTE time-limit=$TIME_LIMIT workloads=$MULTIDC_WORKLOADS; register=${REG_OUTCOME:-n/a}; append=${APP_OUTCOME:-n/a}; join=${JOIN_OUTCOME:-n/a}"
+  echo "CLASS=harness HARNESS_FAIL=${HARNESS_REASON} phase=${phase}"
+  stamp_multidc "$STAMP_BASE" "FAIL" "$notes" "${REG_OUTCOME:-n/a}" "${APP_OUTCOME:-n/a}"
+  dump_cluster_logs_if_needed 1 || true
 }
 
 # Git Bash converts /jepsen/... to a host path; keep container paths literal.
@@ -300,6 +388,9 @@ run_workload() {
     return 0
   fi
   if echo "$out" | grep -Eq 'Analysis invalid'; then
+    FAIL_CLASS="elle"
+    HARNESS_REASON=""
+    echo "CLASS=elle reason=Analysis-invalid workload=$workload"
     return 1
   fi
   local code
@@ -312,15 +403,90 @@ run_workload() {
   fi
   # Final pretty-print line only (leading space), not nested :timeline {:valid? true}.
   if echo "$out" | grep -Eq '(^|[[:space:]]) :valid\? false([\}[:space:]]|$)'; then
+    FAIL_CLASS="elle"
+    HARNESS_REASON=""
+    echo "CLASS=elle reason=valid-false workload=$workload"
     return 1
   fi
   if echo "$out" | grep -Eq 'jepsen\.core \{.*:valid\? true\}'; then
     return 0
   fi
+  if [[ -z "$code" ]]; then
+    FAIL_CLASS="harness"
+    HARNESS_REASON="no-lein-exit"
+    echo "CLASS=harness reason=no-lein-exit workload=$workload"
+  fi
   return "${code:-1}"
 }
 
-ensure_cluster
+# First ensure_cluster runs after dump helpers are defined (see below).
+# Copy control-container Jepsen store onto the host so GHA upload-artifact globs
+# (benchmarks/jepsen/clojure/store/**/history.edn) actually receive Elle histories.
+# Evidence: GHA 37235523879 multidc artifacts were ~6KB RESULTS-only — store never left Docker.
+# Must run while control is still up (after each workload), not only in EXIT trap after purge.
+# Convert Git-Bash /d/foo path to a docker.exe-friendly Windows path (D:\foo).
+# MSYS_NO_PATHCONV=1 leaves POSIX paths; docker cp then fails silently/best-effort.
+jepsen_host_path_for_docker() {
+  local p="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$p"
+    return 0
+  fi
+  if [[ "$p" =~ ^/([a-zA-Z])/(.*)$ ]]; then
+    local drive="${BASH_REMATCH[1]}"
+    local rest="${BASH_REMATCH[2]}"
+    # uppercase drive letter without relying on ^^ (bash 4+)
+    drive="$(printf '%s' "$drive" | tr 'a-z' 'A-Z')"
+    printf '%s\n' "${drive}:\\${rest//\//\\}"
+    return 0
+  fi
+  printf '%s\n' "$p"
+}
+
+export_jepsen_store_to_host() {
+  local host_store="$JEPSEN_DIR/clojure/store"
+  local host_tar="$JEPSEN_DIR/clojure/jepsen-store-export.tar"
+  local container_tar="/tmp/jepsen-store-export.tar"
+  local host_tar_win
+  mkdir -p "$host_store"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq "$CONTROL_NAME"; then
+    echo "export_jepsen_store_to_host: control $CONTROL_NAME not running; skip"
+    return 0
+  fi
+  # Evidence (calm G-r2 2026-10-05 + GHA 37235523879):
+  # - store lives only in the control container; EXIT purge wiped it before GHA upload
+  # - docker cp of the store *tree* fails on Windows when Jepsen 'current'/'latest'
+  #   symlinks are present ("A required privilege is not held by the client")
+  # Primary: stream tar over exec (no host path for docker cp; pipefail is on).
+  echo "export_jepsen_store_to_host: tar stream from $CONTROL_NAME (exclude current/latest)"
+  if docker exec "$CONTROL_NAME" bash -lc \
+      'tar cf - --exclude=current --exclude=latest -C /jepsen/jamoa/store .' \
+      | tar -C "$host_store" -xf -; then
+    find "$host_store" -type f -name 'history.edn' 2>/dev/null | wc -l \
+      | awk '{print "export_jepsen_store_to_host: history.edn count="$1}'
+    return 0
+  fi
+  echo "export_jepsen_store_to_host: stream failed; fallback single-file docker cp"
+  if ! docker exec "$CONTROL_NAME" bash -lc \
+      "rm -f '$container_tar' && tar cf '$container_tar' --exclude=current --exclude=latest -C /jepsen/jamoa/store ."; then
+    echo "export_jepsen_store_to_host: in-container tar failed (best-effort)"
+    return 0
+  fi
+  host_tar_win="$(jepsen_host_path_for_docker "$host_tar")"
+  if ! docker cp "$CONTROL_NAME:$container_tar" "$host_tar_win"; then
+    echo "export_jepsen_store_to_host: docker cp tar failed dest=$host_tar_win (best-effort)"
+    return 0
+  fi
+  if ! tar -C "$host_store" -xf "$host_tar"; then
+    echo "export_jepsen_store_to_host: host untar failed (best-effort)"
+    return 0
+  fi
+  rm -f "$host_tar" || true
+  docker exec "$CONTROL_NAME" rm -f "$container_tar" >/dev/null 2>&1 || true
+  find "$host_store" -type f -name 'history.edn' 2>/dev/null | wc -l \
+    | awk '{print "export_jepsen_store_to_host: history.edn count="$1}'
+}
+
 dump_cluster_logs_if_needed() {
   local ec="${1:-}"
   if [[ -z "$ec" ]]; then
@@ -331,14 +497,22 @@ dump_cluster_logs_if_needed() {
   elif [[ "$ec" -eq 0 ]]; then
     return 0
   fi
-  echo "=== FAIL (exit=$ec): dumping cluster docker logs before purge ==="
+  echo "=== FAIL (exit=$ec): export store + dump cluster docker logs before purge ==="
+  echo "CLASS=${FAIL_CLASS:-unknown} HARNESS_REASON=${HARNESS_REASON:-}"
+  export_jepsen_store_to_host || true
   if [[ -x "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" ]]; then
-    bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" || true
+    # Stable path under upload glob benchmarks/jepsen/cluster-logs/**
+    # Dump BEFORE purge so Created/partial containers still appear in docker-ps.
+    local dump_dir="$JEPSEN_DIR/cluster-logs/${STAMP_BASE:-multidc}-${MODE:-run}"
+    FAIL_CLASS="${FAIL_CLASS:-}" HARNESS_REASON="${HARNESS_REASON:-}" \
+      bash "$JEPSEN_DIR/scripts/dump-jepsen-cluster-logs.sh" "$dump_dir" || true
   fi
 }
 
 release_jepsen_ports() {
   local _ec=$?
+  # Always export store before purge (PASS and FAIL) so GHA artifacts carry histories.
+  export_jepsen_store_to_host || true
   dump_cluster_logs_if_needed "$_ec" || true
   echo "Releasing Jepsen host ports (1dc+multidc compose down)..."
   if [[ -x "$JEPSEN_DIR/scripts/jepsen-purge.sh" ]]; then
@@ -356,14 +530,30 @@ APP_OUTCOME="n/a"
 JOIN_OUTCOME="n/a"
 ALL_PASS=1
 FIRST=1
+
+# First compose up (after helpers defined) — stamp HARNESS_FAIL on docker i/o timeout.
+if ! ensure_cluster; then
+  stamp_harness_fail "ensure_cluster-first"
+  exit 1
+fi
+
 for wl in "${WORKLOAD_LIST[@]}"; do
   wl="$(echo "$wl" | tr -d '[:space:]')"
   [[ -n "$wl" ]] || continue
   if [[ "$FIRST" != "1" ]]; then
-    ensure_cluster
+    # Evidence unclean-r2: second ensure_cluster after register hit docker i/o timeout.
+    if ! ensure_cluster; then
+      ALL_PASS=0
+      case "$wl" in
+        append|join) APP_OUTCOME="FAIL" ;;
+        register) REG_OUTCOME="FAIL" ;;
+      esac
+      stamp_harness_fail "ensure_cluster-before-$wl"
+      exit 1
+    fi
   fi
   FIRST=0
-  echo "=== Multi-DC workload: $wl, nemesis=$MULTIDC_NEMESIS swarm=${JEPSEN_SWARM:-0} join=${JEPSEN_JOIN_SHARDS:-0} ==="
+  echo "=== Multi-DC workload: $wl, nemesis=$MULTIDC_NEMESIS swarm=${JEPSEN_SWARM:-0} join=${JEPSEN_JOIN_SHARDS:-0} unclean=${JEPSEN_UNCLEAN_REVIVE:-0} ==="
   if run_workload "$wl"; then
     outcome=PASS
   else
@@ -372,6 +562,8 @@ for wl in "${WORKLOAD_LIST[@]}"; do
     # Dump before next ensure_cluster / EXIT purge wipes containers.
     dump_cluster_logs_if_needed 1 || true
   fi
+  # Pull histories while control is still alive (before next ensure_cluster restarts it).
+  export_jepsen_store_to_host || true
   case "$wl" in
     register) REG_OUTCOME="$outcome" ;;
     append) APP_OUTCOME="$outcome" ;;
@@ -383,7 +575,12 @@ done
 # Best-effort: scrape no-proposer diag from last workload docker logs / leftover out is not kept;
 # clojure teardown prints jepsen-diag no-proposer-count=N into lein stdout (captured above per wl).
 NOTES="FULL lein chaos=$CHAOS_NOTE time-limit=$TIME_LIMIT workloads=$MULTIDC_WORKLOADS; register=$REG_OUTCOME; append=$APP_OUTCOME; join=$JOIN_OUTCOME"
-echo "=== Multi-DC outcomes register=$REG_OUTCOME append=$APP_OUTCOME join=$JOIN_OUTCOME ==="
+if [[ "${FAIL_CLASS:-}" == "harness" ]]; then
+  NOTES="CLASS=harness HARNESS_FAIL=${HARNESS_REASON:-unknown}; $NOTES"
+elif [[ -n "${FAIL_CLASS:-}" ]]; then
+  NOTES="CLASS=${FAIL_CLASS}; $NOTES"
+fi
+echo "=== Multi-DC outcomes register=$REG_OUTCOME append=$APP_OUTCOME join=$JOIN_OUTCOME CLASS=${FAIL_CLASS:-ok} ==="
 if [[ "$ALL_PASS" == "1" ]]; then
   stamp_multidc "$STAMP_BASE" "PASS" "$NOTES" "$REG_OUTCOME" "$APP_OUTCOME"
   exit 0

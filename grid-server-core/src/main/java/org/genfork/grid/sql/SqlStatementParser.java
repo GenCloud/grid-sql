@@ -1199,9 +1199,11 @@ public final class SqlStatementParser {
 		for (UpdateAssignContext a : actionCtx.updateAssign()) {
 			final String col = a.columnName() != null ? simpleColumn(a.columnName()) : null;
 			if (a.updateRhs() != null) {
-				throw new IllegalArgumentException("ON CONFLICT DO UPDATE supports value SET only in v1");
+				final UpdatePlan.FieldAssign fa = parseRmw(col, a.updateRhs());
+				sets.put(col, new SqlBuiltinExpr.RmwExpr(fa.modifyKind(), fa.modifyArg()));
+			} else {
+				sets.put(col, SqlParseSupport.literal(a.value()));
 			}
-			sets.put(col, SqlParseSupport.literal(a.value()));
 		}
 		return new OnConflict(List.copyOf(targets), ConflictAction.DO_UPDATE, Map.copyOf(sets));
 	}

@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.sql.exec;
 
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.sql.tx.KeyWrapper;
 import org.genfork.grid.sql.tx.SqlTxBuffer;
@@ -54,11 +55,20 @@ public final class SqlDmlLockOps {
 		final SqlTxBuffer.DirtyEntry dirty = session.requireTx().get(table, key);
 		if (dirty != null) {
 			if (dirty.op() == SqlTxBuffer.Op.DELETE) {
+				VisibilityDiag.debugf("dml.base",
+						"table=%s source=dirty-DELETE %s", table, VisibilityDiag.keyTag(key));
 				return null;
 			}
+			VisibilityDiag.debugf("dml.base",
+					"table=%s source=dirty %s %s", table, VisibilityDiag.keyTag(key),
+					VisibilityDiag.valTag(dirty.valueBytesOrNull()));
 			return dirty.valueBytesOrNull();
 		}
-		return store.getCommittedBytes(key);
+		final byte[] committed = store.getCommittedBytes(key);
+		VisibilityDiag.debugf("dml.base",
+				"table=%s source=%s %s", table, committed == null ? "null" : "committed",
+				VisibilityDiag.keyTag(key));
+		return committed;
 	}
 
 	/**
@@ -78,5 +88,9 @@ public final class SqlDmlLockOps {
 		final SqlTxBuffer tx = session.requireTx();
 		ensureRowLocked(session, table, enc.keyBytes());
 		tx.put(table, new SqlTxBuffer.DirtyEntry(op, enc.keyBytes(), enc.valueBytes(), enc.shard()));
+		VisibilityDiag.debugf("dml.stage",
+				"txId=%d table=%s op=%s shard=%d %s %s",
+				tx.txId(), table, op, enc.shard(),
+				VisibilityDiag.keyTag(enc.keyBytes()), VisibilityDiag.valTag(enc.valueBytes()));
 	}
 }

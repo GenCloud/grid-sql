@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.sql.tx;
 
+import org.genfork.grid.diag.VisibilityDiag;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -124,14 +125,25 @@ public final class SqlTxBuffer {
 		}
 		map.put(key, entry);
 		participations.add(part);
+		VisibilityDiag.debugf("tx.dirty.put",
+				"txId=%d table=%s op=%s shard=%d dirtyNow=%d %s %s",
+				txId, table, entry.op(), entry.shard(), map.size(),
+				VisibilityDiag.keyTag(entry.keyBytes()),
+				VisibilityDiag.valTag(entry.valueBytesOrNull()));
 	}
 
 	public DirtyEntry get(String table, byte[] keyBytes) {
 		final Map<KeyWrapper, DirtyEntry> m = byTable.get(table);
 		if (m == null) {
+			VisibilityDiag.debugf("tx.dirty.get",
+					"txId=%d table=%s hit=none %s", txId, table, VisibilityDiag.keyTag(keyBytes));
 			return null;
 		}
-		return m.get(new KeyWrapper(keyBytes));
+		final DirtyEntry hit = m.get(new KeyWrapper(keyBytes));
+		VisibilityDiag.debugf("tx.dirty.get",
+				"txId=%d table=%s hit=%s %s",
+				txId, table, hit == null ? "none" : hit.op(), VisibilityDiag.keyTag(keyBytes));
+		return hit;
 	}
 
 	public Map<KeyWrapper, DirtyEntry> entriesForTable(String table) {

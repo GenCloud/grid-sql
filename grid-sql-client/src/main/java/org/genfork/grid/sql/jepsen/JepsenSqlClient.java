@@ -146,37 +146,41 @@ public final class JepsenSqlClient implements AutoCloseable {
 		final SyncConnection conn = session.connection();
 		if (joinShards) {
 			ensureParent(conn, key);
-			return upsertAppend(conn,
-					"UPDATE " + TABLE_CHILD + " SET number = number || ' ' || '"
-							+ escapeSql(token) + "' WHERE id = " + key,
-					"INSERT INTO " + TABLE_CHILD
-							+ " (id, parent_id, number, status) VALUES ("
-							+ key + ", " + (key + PARENT_ID_OFFSET) + ", '"
-							+ escapeSql(token) + "', 'jepsen-append')");
+			conn.executeUpdate(appendUpsertSql(TABLE_CHILD, key, token, true));
+			return ok(null);
 		}
-		return upsertAppend(conn,
-				"UPDATE " + TABLE + " SET number = number || ' ' || '"
-						+ escapeSql(token) + "' WHERE id = " + key,
-				"INSERT INTO " + TABLE + " (id, number, status) VALUES ("
-						+ key + ", '" + escapeSql(token) + "', 'jepsen-append')");
+		conn.executeUpdate(appendUpsertSql(TABLE, key, token, false));
+		return ok(null);
 	}
 
 	private Map<String, Object> doAppend(SyncTxContext tx, int key, String token) {
 		if (joinShards) {
 			ensureParent(tx, key);
-			return upsertAppend(tx,
-					"UPDATE " + TABLE_CHILD + " SET number = number || ' ' || '"
-							+ escapeSql(token) + "' WHERE id = " + key,
-					"INSERT INTO " + TABLE_CHILD
-							+ " (id, parent_id, number, status) VALUES ("
-							+ key + ", " + (key + PARENT_ID_OFFSET) + ", '"
-							+ escapeSql(token) + "', 'jepsen-append')");
+			tx.executeUpdate(appendUpsertSql(TABLE_CHILD, key, token, true));
+			return ok(null);
 		}
-		return upsertAppend(tx,
-				"UPDATE " + TABLE + " SET number = number || ' ' || '"
-						+ escapeSql(token) + "' WHERE id = " + key,
-				"INSERT INTO " + TABLE + " (id, number, status) VALUES ("
-						+ key + ", '" + escapeSql(token) + "', 'jepsen-append')");
+		tx.executeUpdate(appendUpsertSql(TABLE, key, token, false));
+		return ok(null);
+	}
+
+	/**
+	 * Atomic append: plain {@code UPDATE}+{@code INSERT} wiped prior tokens when UPDATE
+	 * returned 0 (map miss / seed race) — unclean-p0 history kept only last INSERT token.
+	 * {@code ON CONFLICT DO UPDATE} concatenates instead of replacing the row.
+	 */
+	private static String appendUpsertSql(String table, int key, String token, boolean child) {
+		final String esc = escapeSql(token);
+		if (child) {
+			return "INSERT INTO " + table
+					+ " (id, parent_id, number, status) VALUES ("
+					+ key + ", " + (key + PARENT_ID_OFFSET) + ", '" + esc + "', 'jepsen-append') "
+					+ "ON CONFLICT (id) DO UPDATE SET number = number || ' ' || '" + esc
+					+ "', status = 'jepsen-append'";
+		}
+		return "INSERT INTO " + table + " (id, number, status) VALUES ("
+				+ key + ", '" + esc + "', 'jepsen-append') "
+				+ "ON CONFLICT (id) DO UPDATE SET number = number || ' ' || '" + esc
+				+ "', status = 'jepsen-append'";
 	}
 
 	private void ensureParent(SyncConnection conn, int key) {
@@ -239,20 +243,6 @@ public final class JepsenSqlClient implements AutoCloseable {
 		if (updated == 0) {
 			conn.executeUpdate("INSERT INTO " + TABLE + " (id, number, status) VALUES ("
 					+ key + ", '" + escapeSql(value) + "', 'jepsen-write')");
-		}
-		return ok(null);
-	}
-
-	private static Map<String, Object> upsertAppend(SyncConnection conn, String updateSql, String insertSql) {
-		if (conn.executeUpdate(updateSql) == 0) {
-			conn.executeUpdate(insertSql);
-		}
-		return ok(null);
-	}
-
-	private static Map<String, Object> upsertAppend(SyncTxContext tx, String updateSql, String insertSql) {
-		if (tx.executeUpdate(updateSql) == 0) {
-			tx.executeUpdate(insertSql);
 		}
 		return ok(null);
 	}
