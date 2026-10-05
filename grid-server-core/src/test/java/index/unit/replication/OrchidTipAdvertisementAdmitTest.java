@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -123,6 +124,26 @@ class OrchidTipAdvertisementAdmitTest {
 		assertTrue(primary.awaitsPeerTipAdvertisement(),
 				"HELLO while still seen must re-clear tipAdvertised (unclean/reconnect fence)");
 		assertAdmitFailsWith(primary, MSG_TIP_AWAIT);
+	}
+
+	/**
+	 * PR13-M / 1630: region-claim await clear must ignore same-DC Hold tips and only count
+	 * live tip-advertised remote-DC peers.
+	 */
+	@Test
+	void maxSeenLiveRemoteDcTipIgnoresLocalPeerTips() {
+		final String remote = "tip-remote";
+		final OrchidNode hold = start(PRIMARY, List.of(PEER));
+		hold.onPeerAvailable(PEER);
+		hold.testingNotePeerCommittedSeq(PEER, 881L);
+		assertEquals(881L, hold.maxSeenPeerCommittedSeq());
+		assertEquals(0L, hold.maxSeenLiveRemoteDcPeerCommittedSeq(),
+				"local peer tip must not count as remote-DC tip");
+
+		hold.onPeerAvailable(remote);
+		hold.testingNotePeerCommittedSeq(remote, 900L);
+		assertEquals(900L, hold.maxSeenLiveRemoteDcPeerCommittedSeq(),
+				"remote peer tip must count once tipAdvertised");
 	}
 
 	private static void assertAdmitFailsWith(OrchidNode orchid, String messageFragment) {

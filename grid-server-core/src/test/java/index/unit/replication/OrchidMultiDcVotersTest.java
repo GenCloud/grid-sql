@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -39,6 +40,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Hierarchical multi-DC: local R + remote digest voters (unit, in-process transport).
  */
 public class OrchidMultiDcVotersTest {
+
+	private static final long TIP_AWAIT_MS = 5_000L;
+	private static final long TIP_POLL_MS = 20L;
 
 	private final Map<String, OrchidNode> nodes = new ConcurrentHashMap<>();
 	private final MeshTransport mesh = new MeshTransport(nodes);
@@ -185,6 +189,10 @@ public class OrchidMultiDcVotersTest {
 		final OrchidNode survivor = start("sdc-b", java.util.List.of("sdc-a"), OrchidMultiDcConfig.NONE);
 		proposer.onPeerAvailable("sdc-b");
 		survivor.onPeerAvailable("sdc-a");
+		// onPhase is mailbox-async: admit must wait for tipAdvertised after HELLO clear.
+		assertTrue(awaitTip(() -> !proposer.awaitsPeerTipAdvertisement()
+						&& !survivor.awaitsPeerTipAdvertisement()),
+				"mesh tip advertisement after HELLO before admit");
 
 		final AtomicInteger applied = new AtomicInteger();
 		survivor.addApplyListener(op -> applied.incrementAndGet());
@@ -219,6 +227,10 @@ public class OrchidMultiDcVotersTest {
 		survivor.onPeerAvailable("flap-c");
 		follower.onPeerAvailable("flap-a");
 		follower.onPeerAvailable("flap-b");
+		assertTrue(awaitTip(() -> !proposer.awaitsPeerTipAdvertisement()
+						&& !survivor.awaitsPeerTipAdvertisement()
+						&& !follower.awaitsPeerTipAdvertisement()),
+				"mesh tip advertisement after HELLO before admit");
 
 		final AtomicInteger applied = new AtomicInteger();
 		survivor.addApplyListener(op -> applied.incrementAndGet());
@@ -273,6 +285,22 @@ public class OrchidMultiDcVotersTest {
 		nodes.put(id, node);
 		node.start();
 		return node;
+	}
+
+	private static boolean awaitTip(BooleanSupplier condition) {
+		final long deadline = System.currentTimeMillis() + TIP_AWAIT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			try {
+				Thread.sleep(TIP_POLL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return condition.getAsBoolean();
 	}
 
 	/** In-process mesh with optional per-destination delay (simulates WAN RTT). */

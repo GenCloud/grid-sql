@@ -336,40 +336,11 @@
           :else first-try)))))
 
 (defn- invoke-register!
-  "Register/Knossos path: sticky first, then assigned-node fallback on connect miss.
-  Safe for single-key CAS (Elle G-nonadjacent is append-only)."
+  "Register/Knossos: sticky-only — same as append/Elle.
+  PR13 D/E: assigned-node fallback during kill-dc-a returned :ok stale reads
+  (write 93 then read 43) and broke Knossos linearizability."
   [clients assigned-node f value]
-  (let [primary (discover-proposer clients)
-        target (or primary assigned-node)
-        first-try (invoke-sql! clients target f value)]
-    (cond
-      (= :ok (:type first-try))
-      (do (when primary (remember-proposer! primary)) first-try)
-
-      (connect-miss? first-try)
-      (do
-        (clear-proposer!)
-        (close-client! clients target)
-        (let [second (or (discover-proposer clients)
-                         (when (not= assigned-node target) assigned-node))
-              second-try (when (and second (not= second target))
-                           (invoke-sql! clients second f value))]
-          (cond
-            (nil? second-try) first-try
-            (= :ok (:type second-try))
-            (do (remember-proposer! second) second-try)
-            ;; Prefer definitive :fail over lingering :info connect for Knossos.
-            (connect-fail? second-try) second-try
-            :else first-try)))
-
-      (orchid-not-synced? first-try)
-      (do
-        (close-client! clients target)
-        (when-not (writer-eligible? clients target)
-          (clear-proposer!))
-        (assoc first-try :type :fail))
-
-      :else first-try)))
+  (invoke-with-sticky! clients assigned-node f value))
 
 (defrecord SqlClient [node clients]
   client/Client
@@ -381,7 +352,7 @@
   (invoke! [this _test op]
     (let [assigned (or node "n1")
           f (:f op)
-          ;; :txn/:append → sticky-only (Elle). :read/:write → register fallback (Knossos).
+          ;; All ops sticky-only (Elle append + Knossos register). No assigned-node fallback.
           result (if (or (= :txn f) (= :append f))
                    (invoke-with-sticky! clients assigned f (:value op))
                    (invoke-register! clients assigned f (:value op)))]

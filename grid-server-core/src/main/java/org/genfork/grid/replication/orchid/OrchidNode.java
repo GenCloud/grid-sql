@@ -848,6 +848,30 @@ public class OrchidNode {
 	}
 
 	/**
+	 * Highest tip among live tip-advertised peers outside the local peer set (cross-DC).
+	 * <p>
+	 * Region-claim await clear must use this — not {@link #maxSeenPeerCommittedSeq()}, which
+	 * includes same-DC Hold tips and durable high-water. PR13-M / 1630: Hold cleared await when
+	 * Active link flickered up while only Hold peer tips matched local tip → sticky {@code :ok}
+	 * nil / lost-prefix on ASYNC lag.
+	 */
+	public long maxSeenLiveRemoteDcPeerCommittedSeq() {
+		long max = 0L;
+		for (PeerView peer : peers.values()) {
+			if (peer == null || !peer.seen || !peer.tipAdvertised) {
+				continue;
+			}
+			if (isLocalPeer(peer.id)) {
+				continue;
+			}
+			if (peer.lastCommittedSeq > max) {
+				max = peer.lastCommittedSeq;
+			}
+		}
+		return max;
+	}
+
+	/**
 	 * True when a live local (or phase-coupled) peer is channel-{@code seen} but has not yet
 	 * sent a phase tip after {@link #onPeerAvailable}. Writer admission must fail-closed meanwhile.
 	 */

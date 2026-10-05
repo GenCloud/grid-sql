@@ -436,16 +436,28 @@ public class ReplicaApplier {
 	}
 
 	/**
-	 * Discard any open TX staging (incomplete unit after hydrate or crash mid-commit).
-	 * Map never sees partial TX rows.
+	 * Clear per-stream local TX staging only (no envelope coordinator wipe).
 	 * <p>
-	 * Clears <em>all</em> streams — PITR / snapshot only. Commit abort must use
-	 * {@link #discardOpenTxStaging(String, int)} so a failed unit on shard A cannot wipe
-	 * in-flight staging on shard B (Elle lost-append / G-single under concurrent workers).
+	 * Hydrate / OpLog replay must use this — {@link #discardOpenTxStaging()} also calls
+	 * {@link TxEnvelopeCoordinator#discardAllApply()} which drops waiting multi-stream
+	 * envelopes (GHA M: child half staged, hydrate wipe, late parent never flushEnvelope →
+	 * Elle G-single nil read).
 	 */
-	public void discardOpenTxStaging() {
+	public void discardLocalOpenTxStaging() {
 		txStaging.clear();
 		openTxIdByStream.clear();
+	}
+
+	/**
+	 * Discard any open TX staging including multi-stream apply envelopes.
+	 * Map never sees partial TX rows.
+	 * <p>
+	 * PITR / crash recovery only. Hydrate must use {@link #discardLocalOpenTxStaging()}.
+	 * Commit abort must use {@link #discardOpenTxStaging(String, int)} so a failed unit on
+	 * shard A cannot wipe in-flight staging on shard B.
+	 */
+	public void discardOpenTxStaging() {
+		discardLocalOpenTxStaging();
 		final TxEnvelopeCoordinator gate = envelopeCoordinator;
 		if (gate != null) {
 			gate.discardAllApply();

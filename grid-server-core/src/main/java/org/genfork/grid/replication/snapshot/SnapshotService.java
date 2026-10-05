@@ -77,7 +77,8 @@ public class SnapshotService {
 
 	/**
 	 * Replay OpLog from watermark+1 for all shards of the domain (sealed SoT already loaded by caller).
-	 * Incomplete TX units left open after replay are discarded (no partial map rows).
+	 * Clears local single-stream TX staging after replay; does not wipe multi-stream apply envelopes
+	 * still waiting on other streams (Cross-DC / ASYNC_SHIP split apply).
 	 */
 	public int hydrateDomain(String domainType, ReplicaApplier applier, HomologousRepair repair) {
 		if (domainType == null || applier == null) {
@@ -93,7 +94,7 @@ public class SnapshotService {
 			final long wm = nodeState.appliedWatermark(domainType, shard);
 			total += hydrateShardFromWatermark(domainType, shard, wm, applier, repair);
 		}
-		applier.discardOpenTxStaging();
+		applier.discardLocalOpenTxStaging();
 		return total;
 	}
 
@@ -129,7 +130,7 @@ public class SnapshotService {
 		}
 		final long wm = nodeState.appliedWatermark(domainType, shard);
 		final int n = hydrateShardFromWatermark(domainType, shard, wm, applier, repair);
-		applier.discardOpenTxStaging();
+		applier.discardLocalOpenTxStaging();
 		return n;
 	}
 

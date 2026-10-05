@@ -304,6 +304,47 @@ class AsyncShipJepsenTcpSeedVisibilityIT {
 	}
 
 	/**
+	 * PR13 D/E register class: doWrite must atomically replace (ON CONFLICT), not UPDATE0+INSERT
+	 * wipe under map miss / concurrent writers.
+	 */
+	@Test
+	void onConflictRegisterWrite_onSeed_retainsLastValue() throws Exception {
+		bootWriterSqlAndSeed();
+		final Map<String, Object> w0 = client.invoke("write", "43");
+		assertTrue("ok".equals(w0.get("type")), () -> "write 43 failed: " + w0);
+		final Map<String, Object> w1 = client.invoke("write", "93");
+		assertTrue("ok".equals(w1.get("type")), () -> "write 93 failed: " + w1);
+		final Map<String, Object> read = client.invoke("read", null);
+		assertTrue("ok".equals(read.get("type")), () -> "read failed: " + read);
+		assertTrue("93".equals(String.valueOf(read.get("value"))),
+				() -> "expected last write 93 got " + read);
+	}
+
+	/**
+	 * PR13-M join: parent upsert + child ON CONFLICT append then reread must retain tokens
+	 * (never :ok nil after acked appends on joinShards path).
+	 */
+	@Test
+	void joinShards_appendThenReread_retainsTokens() throws Exception {
+		bootWriterSqlAndSeedJoin();
+		final int key = 2;
+		final Map<String, Object> a0 = client.invoke("txn",
+				List.of(List.of(":append", Integer.valueOf(key), "t22")));
+		assertTrue("ok".equals(a0.get("type")), () -> "append t22 failed: " + a0);
+		final Map<String, Object> a1 = client.invoke("txn",
+				List.of(List.of(":append", Integer.valueOf(key), "t35")));
+		assertTrue("ok".equals(a1.get("type")), () -> "append t35 failed: " + a1);
+		final Map<String, Object> read = client.invoke("txn",
+				List.of(List.of(":r", Integer.valueOf(key))));
+		assertTrue("ok".equals(read.get("type")), () -> "read failed: " + read);
+		final Object tokens = txnReadTokens(read.get("value"));
+		assertTrue(tokens != null, () -> "PR13-M class: Elle-nil after join appends txn=" + read);
+		final String body = String.valueOf(tokens);
+		assertTrue(body.contains("t22"), () -> "missing t22 body=" + body);
+		assertTrue(body.contains("t35"), () -> "missing t35 body=" + body);
+	}
+
+	/**
 	 * Characterization: UPDATE0 + plain INSERT after RAM miss wipes prior token (no sealed).
 	 * Documents unclean-p0 lost-prefix class; ON CONFLICT client avoids this when conflict visible.
 	 */
@@ -332,6 +373,38 @@ class AsyncShipJepsenTcpSeedVisibilityIT {
 	}
 
 	private void bootWriterSqlAndSeed() throws Exception {
+		bootClusterAndSqlServer();
+		engine.execute("CREATE TABLE " + TABLE
+				+ " (id INT PRIMARY KEY, number VARCHAR, status VARCHAR)");
+		for (int id = SEED_LO; id <= SEED_HI; id++) {
+			engine.execute("INSERT INTO " + TABLE
+					+ " (id, number, status) VALUES (" + id + ", '', 'seed')");
+		}
+		final String url = "grid://" + SQL_USER + ":" + SQL_PASS + "@127.0.0.1:" + sqlPort
+				+ "/public?maxConnections=1&maxTxContexts=64";
+		client = new JepsenSqlClient(url);
+	}
+
+	private void bootWriterSqlAndSeedJoin() throws Exception {
+		bootClusterAndSqlServer();
+		engine.execute("CREATE TABLE " + JepsenSqlClient.TABLE_PARENT
+				+ " (id INT PRIMARY KEY, name VARCHAR)");
+		engine.execute("CREATE TABLE " + JepsenSqlClient.TABLE_CHILD
+				+ " (id INT PRIMARY KEY, parent_id INT, number VARCHAR, status VARCHAR)");
+		for (int id = SEED_LO; id <= SEED_HI; id++) {
+			final int parentId = id + JepsenSqlClient.PARENT_ID_OFFSET;
+			engine.execute("INSERT INTO " + JepsenSqlClient.TABLE_PARENT
+					+ " (id, name) VALUES (" + parentId + ", 'p" + id + "')");
+			engine.execute("INSERT INTO " + JepsenSqlClient.TABLE_CHILD
+					+ " (id, parent_id, number, status) VALUES ("
+					+ id + ", " + parentId + ", '', 'seed')");
+		}
+		final String url = "grid://" + SQL_USER + ":" + SQL_PASS + "@127.0.0.1:" + sqlPort
+				+ "/public?maxConnections=1&maxTxContexts=64";
+		client = new JepsenSqlClient(url, true);
+	}
+
+	private void bootClusterAndSqlServer() throws Exception {
 		final int p1 = freePort();
 		final int p2 = freePort();
 		final int p3 = freePort();
@@ -360,15 +433,6 @@ class AsyncShipJepsenTcpSeedVisibilityIT {
 		sqlServer = new SqlServer("127.0.0.1", sqlPort, engine, SQL_USER, SQL_PASS, 64);
 		sqlServer.start();
 		TimeUnit.MILLISECONDS.sleep(150L);
-		engine.execute("CREATE TABLE " + TABLE
-				+ " (id INT PRIMARY KEY, number VARCHAR, status VARCHAR)");
-		for (int id = SEED_LO; id <= SEED_HI; id++) {
-			engine.execute("INSERT INTO " + TABLE
-					+ " (id, number, status) VALUES (" + id + ", '', 'seed')");
-		}
-		final String url = "grid://" + SQL_USER + ":" + SQL_PASS + "@127.0.0.1:" + sqlPort
-				+ "/public?maxConnections=1&maxTxContexts=64";
-		client = new JepsenSqlClient(url);
 	}
 
 	/**

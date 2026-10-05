@@ -126,7 +126,33 @@ Full matrix (**A–M**): see [COVERAGE.md](COVERAGE.md). GHA: `.github/workflows
 
 **Triggers:** `workflow_dispatch` (input `time_limit`, default 60), nightly `schedule`, `push` to `main`/`master`. On **PR** only when label `jepsen` is present (or run via Actions → workflow_dispatch).
 
-**Artifacts:** each matrix cell uploads `RESULTS.md`, `ARTIFACTS.txt` (nochao), and `clojure/store/**/{history,results}.edn` when present. Shared image `jamoa-grid-jepsen:local` is built once and loaded per cell (`JEPSEN_REBUILD=0` / `MULTIDC_SKIP_REBUILD=1`).
+**Artifacts:** each matrix cell uploads `RESULTS.md`, `ARTIFACTS.txt` (nochao), and `clojure/store/**/{history,results}.edn` when present. Shared image `jamoa-grid-jepsen:local` is built once and loaded per cell (`JEPSEN_REBUILD=0` / `MULTIDC_SKIP_REBUILD=1`). On FAIL, `dump-jepsen-cluster-logs.sh` also pulls `grid-visibility.log` when present.
+
+### Triage without staring at CI
+
+Do **not** invent tip/Orchid from a red badge. Pull facture → classify → stress only product-class cells → red IT → fix.
+
+```powershell
+# Latest failed Jepsen QG run: download failed-cell artifacts + CLASSIFY.txt per cell
+powershell -ExecutionPolicy Bypass -File .\benchmarks\jepsen\scripts\triage-jepsen-gha-fail.ps1
+# Or pin a run:
+powershell -ExecutionPolicy Bypass -File .\benchmarks\jepsen\scripts\download-jepsen-gha-fail-artifacts.ps1 -RunId 37281849691
+
+# Local N-loop (GHA-like: rebuild once, then SkipRebuild); fail-fast on Elle/Knossos
+powershell -ExecutionPolicy Bypass -File .\benchmarks\jepsen\scripts\hunt-gha-fail-profiles-failfast.ps1 `
+  -Profiles "multidc-async-join,multidc-sync-chaos" -MaxRuns 8 -TimeLimit 60
+
+# One-shot: download+classify then hunt product-class profiles from SUMMARY
+powershell -ExecutionPolicy Bypass -File .\benchmarks\jepsen\scripts\triage-jepsen-gha-fail.ps1 -Hunt -MaxRuns 6
+```
+
+| CLASS | Queue |
+|-------|--------|
+| `elle` / `knossos` | Product — dig `history.edn` + cluster-logs + `*grid-visibility*` → red IT |
+| `harness` | Scripts/compose/docker — fix harness, not Orchid |
+| `skiprebuild` | Stale image skew — rebuild first profile; do not treat as Elle RC |
+
+Outputs land under `grid-server-core/benchmarks/lab/gha-fail-<runId>/` and `*-gha-fail-hunt-summary.md`.
 
 **Latency vs consistency on GHA:** matrix cells hard-gate Knossos/Elle (`:valid?`). `qg-gate.sh` Ref B **p50+p95** remains the living floor on a **calm host** (do not raise Ref B to green CI). On `GITHUB_ACTIONS`, qg-gate runs in **CI_ADVISORY** mode: p95 FAIL prints `OVERALL=CI_ADVISORY_P95_FAIL` and exits 0; **p50 hard FAIL still fails the job**. Orchestration is **bash-only** (no pwsh in CI).
 

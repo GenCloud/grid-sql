@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
@@ -51,6 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OrchidPeerLagNackTest {
 
 	private static final long AWAIT_MS = 8_000L;
+	private static final long TIP_POLL_MS = 20L;
 	private static final long AHEAD_PROPOSE_ID = 77L;
 	private static final long AHEAD_PREV_OP_SEQ = 21L;
 	private static final int MAX_IN_FLIGHT = 8;
@@ -92,6 +94,10 @@ class OrchidPeerLagNackTest {
 		a1.onPeerAvailable("b1");
 		a2.onPeerAvailable("a1");
 		b1.onPeerAvailable("a1");
+		// onPhase is mailbox-async: admit must wait for tipAdvertised after HELLO clear.
+		assertTrue(awaitTip(() -> !a1.awaitsPeerTipAdvertisement()
+						&& !a2.awaitsPeerTipAdvertisement()),
+				"mesh tip advertisement after HELLO before admit");
 		// Learner never receives commits (ASYNC tip stays 0) but still gets proposes.
 		mesh.dropCommitsTo("b1");
 
@@ -123,6 +129,22 @@ class OrchidPeerLagNackTest {
 		nodes.put(id, node);
 		node.start();
 		return node;
+	}
+
+	private static boolean awaitTip(BooleanSupplier condition) {
+		final long deadline = System.currentTimeMillis() + AWAIT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			try {
+				Thread.sleep(TIP_POLL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return condition.getAsBoolean();
 	}
 
 	private static final class SelectiveMesh implements OrchidTransport {

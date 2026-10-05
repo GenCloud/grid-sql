@@ -138,12 +138,15 @@ public final class RegionClaimService {
 		final long peerTip = orchidNode.maxSeenPeerCommittedSeq();
 		final long localTip = orchidNode.getLastCommittedSeq();
 		if (regionClaimAwaitRemoteDc.get()) {
-			// Claimed while Active DC was gone — do not clear on Hold-only mutual tips.
-			if (hasActiveRemoteDcLink() && peerTip > 0L && localTip >= peerTip) {
+			// Claimed while Active DC was gone — clear only on a live remote-DC tip advertisement
+			// (not same-DC Hold tips / global maxSeen). PR13-M: Active revive link + Hold tip match
+			// cleared await → sticky Hold :ok nil / G-single.
+			final long remoteDcTip = orchidNode.maxSeenLiveRemoteDcPeerCommittedSeq();
+			if (hasActiveRemoteDcLink() && remoteDcTip > 0L && localTip >= remoteDcTip) {
 				regionClaimAwaitRemoteDc.set(false);
 				regionTipCatchUpPending.set(false);
-				log.info("Region claim remote-DC tip catch-up complete localTip={} peerTip={}",
-						localTip, peerTip);
+				log.info("Region claim remote-DC tip catch-up complete localTip={} remoteDcTip={}",
+						localTip, remoteDcTip);
 				return;
 			}
 			regionTipCatchUpPending.set(true);
@@ -316,8 +319,9 @@ public final class RegionClaimService {
 			final long localTip = orchidNode.getLastCommittedSeq();
 			if (crossDcEnabled) {
 				// Always arm after Hold→Active claim: clear only via live remote-DC tip catch-up
-				// (hasActiveRemoteDcLink && peerTip > 0 && localTip >= peerTip). Link flicker must
-				// not leave await unset (2011-r1 / H-claim-link).
+				// (hasActiveRemoteDcLink && remoteDcTip > 0 && localTip >= remoteDcTip).
+				// Same-DC Hold tips must not clear (PR13-M / 1630). Link flicker must not leave
+				// await unset (2011-r1 / H-claim-link).
 				regionClaimAwaitRemoteDc.set(true);
 				regionTipCatchUpPending.set(true);
 				log.info("Region claim await remote-DC tip localTip={} peerTip={}",

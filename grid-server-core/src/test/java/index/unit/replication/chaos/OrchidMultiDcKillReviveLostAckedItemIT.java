@@ -78,6 +78,123 @@ public class OrchidMultiDcKillReviveLostAckedItemIT {
 	@TempDir(cleanup = CleanupMode.NEVER)
 	Path tempDir;
 
+	/**
+	 * PR13-M: after claim + Active revive, Hold must not clear await on same-DC Hold tips when
+	 * the Active link flickers up before a remote-DC tip is advertised. Sticky Hold :ok nil
+	 * forged G-single against pre-kill acked tokens.
+	 */
+	@Test
+	@Timeout(120)
+	void holdMustStayNonEligibleUntilRemoteDcTipAfterActiveRevive() throws Exception {
+		final int portA1 = freePort();
+		final int portA2 = freePort();
+		final int portB1 = freePort();
+		final int portB2 = freePort();
+
+		final Path dataA1 = tempDir.resolve("revive-a1");
+		final Path dataA2 = tempDir.resolve("revive-a2");
+		final Path dataB1 = tempDir.resolve("revive-b1");
+		final Path dataB2 = tempDir.resolve("revive-b2");
+
+		final GridConfigurationProperties propsA1 = activeProps(NODE_A1, portA1, dataA1,
+				List.of(ReplTestSupport.peer(NODE_A2, DC_A, portA2),
+						ReplTestSupport.peer(NODE_B1, DC_B, portB1),
+						ReplTestSupport.peer(NODE_B2, DC_B, portB2)));
+		final GridConfigurationProperties propsA2 = activeProps(NODE_A2, portA2, dataA2,
+				List.of(ReplTestSupport.peer(NODE_A1, DC_A, portA1),
+						ReplTestSupport.peer(NODE_B1, DC_B, portB1),
+						ReplTestSupport.peer(NODE_B2, DC_B, portB2)));
+		final GridConfigurationProperties propsB1 = holdProps(NODE_B1, portB1, dataB1,
+				List.of(ReplTestSupport.peer(NODE_A1, DC_A, portA1),
+						ReplTestSupport.peer(NODE_A2, DC_A, portA2),
+						ReplTestSupport.peer(NODE_B2, DC_B, portB2)));
+		final GridConfigurationProperties propsB2 = holdProps(NODE_B2, portB2, dataB2,
+				List.of(ReplTestSupport.peer(NODE_A1, DC_A, portA1),
+						ReplTestSupport.peer(NODE_A2, DC_A, portA2),
+						ReplTestSupport.peer(NODE_B1, DC_B, portB1)));
+		propsB2.getReplication().getRegion().setClaimTimeoutMs(TimeUnit.HOURS.toMillis(1L));
+
+		ReplicationCoordinator a1 = new ReplicationCoordinator(propsA1);
+		ReplicationCoordinator a2 = new ReplicationCoordinator(propsA2);
+		final ReplicationCoordinator b1 = new ReplicationCoordinator(propsB1);
+		final ReplicationCoordinator b2 = new ReplicationCoordinator(propsB2);
+		SqlEngine engineA1 = new SqlEngine(new TableCatalog(tempDir.resolve("revive-a1-cat")), a1, SHARDS);
+		SqlEngine engineA2 = new SqlEngine(new TableCatalog(tempDir.resolve("revive-a2-cat")), a2, SHARDS);
+		final SqlEngine engineB1 = new SqlEngine(new TableCatalog(tempDir.resolve("revive-b1-cat")), b1, SHARDS);
+		final SqlEngine engineB2 = new SqlEngine(new TableCatalog(tempDir.resolve("revive-b2-cat")), b2, SHARDS);
+
+		final List<String> ackedTokens = new ArrayList<>();
+		try {
+			a1.start();
+			a2.start();
+			b1.start();
+			b2.start();
+			waitActiveWriter(a1, a2, SYNC_TIMEOUT_MS);
+
+			final SqlEngine activeEngine = a1.isWriterEligible() ? engineA1 : engineA2;
+			executeUntilSynced(activeEngine,
+					"CREATE TABLE " + TABLE + " (id INT PRIMARY KEY, number VARCHAR, status VARCHAR)",
+					CATALOG_TIMEOUT_MS);
+			waitCatalog(engineA1, engineA2, engineB1, engineB2, TABLE, CATALOG_TIMEOUT_MS);
+			executeUntilSynced(activeEngine,
+					"INSERT INTO " + TABLE + " (id, number, status) VALUES (" + KEY_ID + ", '', 'seed')",
+					CATALOG_TIMEOUT_MS);
+			for (int i = 0; i < ACKED_TOKENS; i++) {
+				jepsenAppendAcked(activeEngine, "t" + i, ackedTokens);
+			}
+			assertTrue(!ackedTokens.isEmpty(), "must ack tokens before kill-dc-a");
+
+			a1.isolatePeer(NODE_A2);
+			a2.isolatePeer(NODE_A1);
+			b1.isolatePeer(NODE_A1);
+			b1.isolatePeer(NODE_A2);
+			b2.isolatePeer(NODE_A1);
+			b2.isolatePeer(NODE_A2);
+			a1.isolatePeer(NODE_B1);
+			a1.isolatePeer(NODE_B2);
+			a2.isolatePeer(NODE_B1);
+			a2.isolatePeer(NODE_B2);
+			SqlBenchHelper.closeAllStores(engineA1);
+			SqlBenchHelper.closeAllStores(engineA2);
+			stopQuietly(a1);
+			stopQuietly(a2);
+
+			waitHoldClaimedActive(b1, CLAIM_TIMEOUT_MS);
+			final String leakDown = observeEligibleWhileActiveDown(b1, b2, FENCE_WINDOW_MS);
+			assertTrue(leakDown == null,
+					() -> "Active-down leak before revive: " + leakDown);
+
+			// Revive Active (same ports/data) — link flickers up; Hold must stay fenced until
+			// a live remote-DC tip is advertised (not same-DC Hold tip match).
+			a1 = new ReplicationCoordinator(propsA1);
+			a2 = new ReplicationCoordinator(propsA2);
+			engineA1 = new SqlEngine(new TableCatalog(tempDir.resolve("revive-a1-cat2")), a1, SHARDS);
+			engineA2 = new SqlEngine(new TableCatalog(tempDir.resolve("revive-a2-cat2")), a2, SHARDS);
+			b1.reconnectPeer(NODE_A1);
+			b1.reconnectPeer(NODE_A2);
+			b2.reconnectPeer(NODE_A1);
+			b2.reconnectPeer(NODE_A2);
+			a1.start();
+			a2.start();
+
+			final String leakRevive = observeEligibleWhileRemoteDcTipMissing(b1, b2, FENCE_WINDOW_MS * 3L);
+			assertTrue(leakRevive == null,
+					() -> "PR13-M class: Hold writerEligible after Active revive before remote-DC tip: "
+							+ leakRevive
+							+ " remoteTipB1=" + b1.getOrchidNode().maxSeenLiveRemoteDcPeerCommittedSeq()
+							+ " tipB1=" + b1.getOrchidNode().getLastCommittedSeq());
+		} finally {
+			SqlBenchHelper.closeAllStores(engineA1);
+			SqlBenchHelper.closeAllStores(engineA2);
+			SqlBenchHelper.closeAllStores(engineB1);
+			SqlBenchHelper.closeAllStores(engineB2);
+			stopQuietly(a1);
+			stopQuietly(a2);
+			stopQuietly(b1);
+			stopQuietly(b2);
+		}
+	}
+
 	@Test
 	@Timeout(90)
 	void holdMustStayNonEligibleWhileActiveDcDownAfterClaim() throws Exception {
@@ -196,6 +313,31 @@ public class OrchidMultiDcKillReviveLostAckedItemIT {
 			}
 			if (b2.isWriterEligible()) {
 				return "b2.eligible tip=" + b2.getOrchidNode().getLastCommittedSeq()
+						+ " maxSeen=" + b2.getOrchidNode().maxSeenPeerCommittedSeq();
+			}
+			LockSupport.parkNanos(PARK_NANOS);
+		}
+		return null;
+	}
+
+	/**
+	 * Leak window after Active revive: eligible while no live remote-DC tip is advertised yet
+	 * (PR13-M clear-on-Hold-tip class).
+	 */
+	private static String observeEligibleWhileRemoteDcTipMissing(
+			ReplicationCoordinator b1,
+			ReplicationCoordinator b2,
+			long windowMs) {
+		final long deadline = System.currentTimeMillis() + windowMs;
+		while (System.currentTimeMillis() < deadline) {
+			final long remoteB1 = b1.getOrchidNode().maxSeenLiveRemoteDcPeerCommittedSeq();
+			final long remoteB2 = b2.getOrchidNode().maxSeenLiveRemoteDcPeerCommittedSeq();
+			if (b1.isWriterEligible() && remoteB1 <= 0L) {
+				return "b1.eligible remoteDcTip=0 tip=" + b1.getOrchidNode().getLastCommittedSeq()
+						+ " maxSeen=" + b1.getOrchidNode().maxSeenPeerCommittedSeq();
+			}
+			if (b2.isWriterEligible() && remoteB2 <= 0L) {
+				return "b2.eligible remoteDcTip=0 tip=" + b2.getOrchidNode().getLastCommittedSeq()
 						+ " maxSeen=" + b2.getOrchidNode().maxSeenPeerCommittedSeq();
 			}
 			LockSupport.parkNanos(PARK_NANOS);

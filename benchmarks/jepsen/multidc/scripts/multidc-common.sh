@@ -388,9 +388,15 @@ run_workload() {
     return 0
   fi
   if echo "$out" | grep -Eq 'Analysis invalid'; then
-    FAIL_CLASS="elle"
+    # Register = Knossos linearizability; append/join = Elle. Never CLASS=unknown/elle for register.
+    if [[ "$workload" == "register" ]]; then
+      FAIL_CLASS="knossos"
+      echo "CLASS=knossos reason=Analysis-invalid workload=$workload"
+    else
+      FAIL_CLASS="elle"
+      echo "CLASS=elle reason=Analysis-invalid workload=$workload"
+    fi
     HARNESS_REASON=""
-    echo "CLASS=elle reason=Analysis-invalid workload=$workload"
     return 1
   fi
   local code
@@ -403,9 +409,14 @@ run_workload() {
   fi
   # Final pretty-print line only (leading space), not nested :timeline {:valid? true}.
   if echo "$out" | grep -Eq '(^|[[:space:]]) :valid\? false([\}[:space:]]|$)'; then
-    FAIL_CLASS="elle"
+    if [[ "$workload" == "register" ]]; then
+      FAIL_CLASS="knossos"
+      echo "CLASS=knossos reason=valid-false workload=$workload"
+    else
+      FAIL_CLASS="elle"
+      echo "CLASS=elle reason=valid-false workload=$workload"
+    fi
     HARNESS_REASON=""
-    echo "CLASS=elle reason=valid-false workload=$workload"
     return 1
   fi
   if echo "$out" | grep -Eq 'jepsen\.core \{.*:valid\? true\}'; then
@@ -415,8 +426,17 @@ run_workload() {
     FAIL_CLASS="harness"
     HARNESS_REASON="no-lein-exit"
     echo "CLASS=harness reason=no-lein-exit workload=$workload"
+    return 1
   fi
-  return "${code:-1}"
+  # Non-zero lein without matched banner: still classify by workload (avoid CLASS=unknown).
+  if [[ "$workload" == "register" ]]; then
+    FAIL_CLASS="${FAIL_CLASS:-knossos}"
+    echo "CLASS=${FAIL_CLASS} reason=lein-exit-$code workload=$workload"
+  else
+    FAIL_CLASS="${FAIL_CLASS:-elle}"
+    echo "CLASS=${FAIL_CLASS} reason=lein-exit-$code workload=$workload"
+  fi
+  return "$code"
 }
 
 # First ensure_cluster runs after dump helpers are defined (see below).
