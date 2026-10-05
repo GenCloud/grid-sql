@@ -6,16 +6,16 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 
 | Field | Value |
 |-------|--------|
-| stamp | `2026-10-05-gates-unclean-a3fix` |
-| date | 2026-10-05T10:45:08+03:00 |
+| stamp | `2026-10-05-solo-witness-chaos-r2` |
+| date | 2026-10-05T15:26:41+03:00 |
 | git | unknown |
 | host | DESKTOP-4IC511D |
 | mode | ASYNC_SHIP (async) |
 | outcome | `PASS` |
 | register | n/a |
 | append | PASS |
-| chaos | unclean-revive |
-| notes | FULL lein chaos=unclean-revive time-limit=60 workloads=append; register=n/a; append=PASS; join=n/a |
+| chaos | join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a |
+| notes | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
 
 Multi-host SQL URL:
 
@@ -87,12 +87,26 @@ See [README.md](README.md). Coverage: [../COVERAGE.md](../COVERAGE.md). Parent 1
 | `2026-10-04-2347-hunt-G-nochao-r6` | SYNC_VOTERS_ACROSS_DC | n/a | PASS (:valid? true) | PASS | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
 | `2026-10-04-2347-hunt-G-nochao-r7` | SYNC_VOTERS_ACROSS_DC | n/a | PASS (:valid? true) | PASS | register=n/a; append=PASS (:valid? true); time-limit=60; workloads=append |
 | `2026-10-04-2347-hunt-G-nochao-r8` | SYNC_VOTERS_ACROSS_DC | - | - | FAIL | BLOCKED/ERROR: compose up failed: 1 |
-| `2026-10-05-jepsen-edge-matrix-multidc-unclean-revive` | ASYNC_SHIP | PASS | PASS | PASS | FULL lein chaos=unclean-revive+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=register,append; register=PASS; append=PASS; join=n/a |
+| `2026-10-05-gates-unclean-p0` | ASYNC_SHIP | PASS | FAIL | FAIL | CLASS=elle; FULL lein chaos=unclean-revive time-limit=60 workloads=register,append; register=PASS; append=FAIL; join=n/a (compose retry recovered; not harness) |
+| `2026-10-05-gates-unclean-a3fix` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=unclean-revive time-limit=60 workloads=append; register=n/a; append=PASS; join=n/a |
+| `2026-10-05-pr13-fix-D` | ASYNC_SHIP | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=60; workloads=register,append |
+| `2026-10-05-pr13-fix-E` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | FAIL | FAIL | register=PASS (:valid? true); append=FAIL; time-limit=60; workloads=register,append |
+| `2026-10-05-pr13-fix-E2` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=60; workloads=register,append |
+| `2026-10-05-pr13-fix-M` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
 | `2026-10-05-jepsen-edge-matrix-multidc-async-chaos` | ASYNC_SHIP | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=60; workloads=register,append |
-| `2026-10-05-jepsen-edge-matrix-multidc-sync-chaos` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=60; workloads=register,append |
+| `2026-10-05-jepsen-edge-matrix-multidc-sync-chaos` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | FAIL | FAIL | register=PASS (:valid? true); append=FAIL; time-limit=60; workloads=register,append |
 | `2026-10-05-jepsen-edge-matrix-multidc-async-nochao` | ASYNC_SHIP | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=60; workloads=register,append |
 | `2026-10-05-jepsen-edge-matrix-multidc-sync-nochao` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=60; workloads=register,append |
 | `2026-10-05-jepsen-edge-matrix-multidc-async-swarm` | ASYNC_SHIP+SWARM | n/a | PASS | PASS | FULL lein chaos=swarm-bounce+dc-link+kill-voter time-limit=60 workloads=append; register=n/a; append=PASS; join=n/a |
-| `2026-10-05-jepsen-edge-matrix-multidc-async-join` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
-| `2026-10-05-gates-unclean-p0` | ASYNC_SHIP | PASS | FAIL | FAIL | CLASS=elle; FULL lein chaos=unclean-revive time-limit=60 workloads=register,append; register=PASS; append=FAIL; join=n/a (compose retry recovered; not harness) |
-| `2026-10-05-gates-unclean-a3fix` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=unclean-revive time-limit=60 workloads=append; register=n/a; append=PASS; join=n/a |
+| `2026-10-05-jepsen-edge-matrix-multidc-async-join` | ASYNC_SHIP | n/a | FAIL | FAIL | CLASS=elle; FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=FAIL; join=FAIL |
+| `2026-10-05-jepsen-edge-matrix-multidc-unclean-revive` | ASYNC_SHIP | PASS | PASS | PASS | FULL lein chaos=unclean-revive time-limit=60 workloads=register,append; register=PASS; append=PASS; join=n/a |
+| `2026-10-05-solo-multidc-sync-chaos` | SYNC_VOTERS_ACROSS_DC | - | - | FAIL | BLOCKED/ERROR: compose up failed: 1 |
+| `2026-10-05-solo-multidc-sync-chaos-r2` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=60; workloads=register,append |
+| `2026-10-05-solo-multidc-async-join` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-05-1433-gha-fail-hunt-multidc-async-join-r1` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-05-1433-gha-fail-hunt-multidc-async-join-r2` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-05-1433-gha-fail-hunt-multidc-async-join-r3` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-05-1433-gha-fail-hunt-multidc-async-join-r4` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-05-1433-gha-fail-hunt-multidc-async-join-r5` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-05-1433-gha-fail-hunt-multidc-async-join-r6` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-05-solo-witness-chaos-r2` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |

@@ -66,3 +66,5 @@ grid-sql-server-starter/data-*
 grid-sql-server-starter/log/
 
 examples/docker/staging/
+
+benchmarks/jepsen/**/*.ps1
