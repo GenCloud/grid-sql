@@ -45,7 +45,7 @@ env:
 jobs:
   validate-matrix:
     name: Validate A–M matrix sync
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -59,7 +59,7 @@ jobs:
   prepare:
     name: Prepare matrix
     needs: validate-matrix
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 5
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -129,7 +129,7 @@ jobs:
   build-image:
     name: Build Jepsen image
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -168,7 +168,7 @@ jobs:
   matrix:
     name: Jepsen ${{ matrix.id }} ${{ matrix.config }}
     needs: [prepare, build-image]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -293,7 +293,7 @@ jobs:
     name: Matrix summary A–M
     needs: [prepare, matrix]
     if: always() && needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 5
     steps:
       - name: Checkout

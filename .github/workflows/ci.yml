@@ -24,7 +24,7 @@ env:
 jobs:
   build-test:
     name: Build and test
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -66,7 +66,7 @@ jobs:
 
   package-starters:
     name: Package product starters
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 30
     needs: build-test
     steps:
