@@ -1,7 +1,9 @@
 # Build + unit/IT gate for Grid SQL (Java 25, --enable-preview).
 # Lab gates (QG / Jepsen / Multi-DC / OSS / JMH / Load) stay host-side; never co-run here.
 # Jepsen QG matrix A-M (1dc-*, multidc-*, swarm/join, witness) -> jepsen-qg.yml -- not this workflow.
-# Default runs-on: ubuntu-latest. Self-hosted via runner labels (dispatch + optional vars).
+# Default runs-on: ubuntu-latest.
+# Self-hosted: PR label "self-hosted" (optional Windows/Linux/macOS/X64/ARM64),
+# or workflow_dispatch runner_labels / vars CI_RUNNER_LABELS, GHA_RUNNER_LABELS.
 # Script flavor follows runner.os (Linux -> bash, Windows -> pwsh / mvn.cmd).
 name: CI
 
@@ -10,6 +12,7 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       runner_labels:
@@ -50,6 +53,7 @@ jobs:
         env:
           DISPATCH_LABELS: ${{ github.event.inputs.runner_labels || '' }}
           VAR_LABELS: ${{ vars.CI_RUNNER_LABELS || vars.GHA_RUNNER_LABELS || '' }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: bash .github/scripts/resolve-gha-runner.sh
 
   build-test:

@@ -1,6 +1,7 @@
 # Jepsen QG lab gate — separate from unit CI (never co-run with Load/JMH/OSS).
 # Full matrix A–M: benchmarks/jepsen/COVERAGE.md
-# Default runs-on: ubuntu-latest. Self-hosted via runner labels (dispatch + optional vars).
+# Default runs-on: ubuntu-latest.
+# Self-hosted: PR label "self-hosted" (plus optional OS/arch labels), or dispatch / JEPSEN_RUNNER_LABELS.
 # Script flavor follows runner.os at runtime (Linux → bash .sh, Windows → pwsh .ps1).
 name: Jepsen QG
 
@@ -38,7 +39,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 concurrency:
   group: jepsen-qg-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.inputs.runner_labels || 'hosted' }}
@@ -83,6 +84,7 @@ jobs:
         env:
           DISPATCH_LABELS: ${{ github.event.inputs.runner_labels || '' }}
           VAR_LABELS: ${{ vars.JEPSEN_RUNNER_LABELS || vars.GHA_RUNNER_LABELS || '' }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: bash .github/scripts/resolve-gha-runner.sh
 
   validate-matrix:
