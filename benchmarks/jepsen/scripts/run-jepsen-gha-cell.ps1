@@ -33,21 +33,21 @@ if ($SkipRebuild) {
   $env:JEPSEN_REBUILD = "0"
 }
 
-# id -> @{ config; kind=ps1|bash; path relative to repo; splat extras }
+# id -> @{ config; kind; path relative to benchmarks/jepsen; splat extras }
 $cells = @{
-  A = @{ config = "1dc-chaos"; kind = "ps1"; rel = "benchmarks/jepsen/scripts/run-jepsen.ps1"; scope = "1dc"; join = 0; swarm = 0; unclean = 0; qg = 0 }
-  B = @{ config = "1dc-unclean-revive"; kind = "ps1"; rel = "benchmarks/jepsen/scripts/run-jepsen-unclean-revive.ps1"; scope = "1dc"; join = 0; swarm = 0; unclean = 1; qg = 0 }
-  C = @{ config = "1dc-nochao"; kind = "ps1"; rel = "benchmarks/jepsen/scripts/run-jepsen-nochao.ps1"; scope = "1dc"; join = 0; swarm = 0; unclean = 0; qg = 1 }
-  D = @{ config = "multidc-async-chaos"; kind = "ps1"; rel = "benchmarks/jepsen/multidc/scripts/run-multidc-async.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $false }
-  E = @{ config = "multidc-sync-chaos"; kind = "ps1"; rel = "benchmarks/jepsen/multidc/scripts/run-multidc-sync-voters.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $false }
-  F = @{ config = "multidc-async-nochao"; kind = "ps1"; rel = "benchmarks/jepsen/multidc/scripts/run-multidc-async.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $true }
-  G = @{ config = "multidc-sync-nochao"; kind = "ps1"; rel = "benchmarks/jepsen/multidc/scripts/run-multidc-sync-voters.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $true }
-  H = @{ config = "witness-chaos"; kind = "ps1"; rel = "benchmarks/jepsen/witness/scripts/run-witness-chaos.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0 }
-  I = @{ config = "multidc-unclean-revive"; kind = "ps1"; rel = "benchmarks/jepsen/multidc/scripts/run-multidc-unclean-revive.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 1; qg = 0 }
-  J = @{ config = "1dc-swarm-chaos"; kind = "ps1"; rel = "benchmarks/jepsen/scripts/run-jepsen-swarm.ps1"; scope = "1dc"; join = 0; swarm = 1; unclean = 0; qg = 0 }
-  K = @{ config = "1dc-join-shards"; kind = "ps1"; rel = "benchmarks/jepsen/scripts/run-jepsen-join.ps1"; scope = "1dc"; join = 1; swarm = 0; unclean = 0; qg = 0 }
-  L = @{ config = "multidc-async-swarm"; kind = "ps1"; rel = "benchmarks/jepsen/multidc/scripts/run-multidc-swarm.ps1"; scope = "multidc"; join = 0; swarm = 1; unclean = 0; qg = 0; full = $true }
-  M = @{ config = "multidc-async-join"; kind = "ps1"; rel = "benchmarks/jepsen/multidc/scripts/run-multidc-join.ps1"; scope = "multidc"; join = 1; swarm = 0; unclean = 0; qg = 0; full = $true }
+  A = @{ config = "1dc-chaos"; kind = "ps1"; rel = "scripts/run-jepsen.ps1"; scope = "1dc"; join = 0; swarm = 0; unclean = 0; qg = 0 }
+  B = @{ config = "1dc-unclean-revive"; kind = "ps1"; rel = "scripts/run-jepsen-unclean-revive.ps1"; scope = "1dc"; join = 0; swarm = 0; unclean = 1; qg = 0 }
+  C = @{ config = "1dc-nochao"; kind = "ps1"; rel = "scripts/run-jepsen-nochao.ps1"; scope = "1dc"; join = 0; swarm = 0; unclean = 0; qg = 1 }
+  D = @{ config = "multidc-async-chaos"; kind = "ps1"; rel = "multidc/scripts/run-multidc-async.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $false }
+  E = @{ config = "multidc-sync-chaos"; kind = "ps1"; rel = "multidc/scripts/run-multidc-sync-voters.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $false }
+  F = @{ config = "multidc-async-nochao"; kind = "ps1"; rel = "multidc/scripts/run-multidc-async.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $true }
+  G = @{ config = "multidc-sync-nochao"; kind = "ps1"; rel = "multidc/scripts/run-multidc-sync-voters.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0; full = $true; noNem = $true }
+  H = @{ config = "witness-chaos"; kind = "ps1"; rel = "witness/scripts/run-witness-chaos.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 0; qg = 0 }
+  I = @{ config = "multidc-unclean-revive"; kind = "ps1"; rel = "multidc/scripts/run-multidc-unclean-revive.ps1"; scope = "multidc"; join = 0; swarm = 0; unclean = 1; qg = 0 }
+  J = @{ config = "1dc-swarm-chaos"; kind = "ps1"; rel = "scripts/run-jepsen-swarm.ps1"; scope = "1dc"; join = 0; swarm = 1; unclean = 0; qg = 0 }
+  K = @{ config = "1dc-join-shards"; kind = "ps1"; rel = "scripts/run-jepsen-join.ps1"; scope = "1dc"; join = 1; swarm = 0; unclean = 0; qg = 0 }
+  L = @{ config = "multidc-async-swarm"; kind = "ps1"; rel = "multidc/scripts/run-multidc-swarm.ps1"; scope = "multidc"; join = 0; swarm = 1; unclean = 0; qg = 0; full = $true }
+  M = @{ config = "multidc-async-join"; kind = "ps1"; rel = "multidc/scripts/run-multidc-join.ps1"; scope = "multidc"; join = 1; swarm = 0; unclean = 0; qg = 0; full = $true }
 }
 
 $cell = $cells[$Id]
@@ -72,23 +72,38 @@ if (Test-Path $purge) {
   & $purge -Scope $cell.scope
 }
 
-$scriptPath = Join-Path $ROOT ($cell.rel -replace '/', [IO.Path]::DirectorySeparatorChar)
+$relWin = $cell.rel -replace '/', [IO.Path]::DirectorySeparatorChar
+$scriptPath = Join-Path $JEPSEN_DIR $relWin
 if (-not (Test-Path -LiteralPath $scriptPath)) {
-  throw "Missing cell script: $scriptPath"
+  $shRel = $relWin -replace '\.ps1$', '.sh'
+  $shPath = Join-Path $JEPSEN_DIR $shRel
+  if (Test-Path -LiteralPath $shPath) {
+    Write-Host "PS1 missing, using bash cell script: $shPath"
+    $scriptPath = $shPath
+    $cell.kind = "bash"
+  } else {
+    throw "Missing cell script: $scriptPath (also no $shPath). ROOT=$ROOT JEPSEN_DIR=$JEPSEN_DIR"
+  }
 }
 
-Write-Host "=== cell $Id config=$Config TL=$TimeLimit JEPSEN_M2=$($env:JEPSEN_M2) script=$scriptPath ==="
-
-$splat = @{ TimeLimit = $TimeLimit }
-$cmd = Get-Command $scriptPath -ErrorAction Stop
-if ($SkipRebuild -and $cmd.Parameters.ContainsKey("SkipRebuild")) { $splat["SkipRebuild"] = $true }
-if ($cell.ContainsKey("full") -and $cell.full -and $cmd.Parameters.ContainsKey("Full")) { $splat["Full"] = $true }
-if ($cell.ContainsKey("noNem") -and $cell.noNem -and $cmd.Parameters.ContainsKey("NoNemesis")) { $splat["NoNemesis"] = $true }
+Write-Host "=== cell $Id config=$Config TL=$TimeLimit JEPSEN_M2=$($env:JEPSEN_M2) ROOT=$ROOT script=$scriptPath ==="
 
 $code = 1
 try {
-  & $scriptPath @splat
-  $code = if ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  $isBash = $scriptPath.ToLowerInvariant().EndsWith(".sh")
+  if ($isBash) {
+    $shArgs = @()
+    $code = Invoke-JepsenBash -ScriptPath $scriptPath -Arguments $shArgs
+    if ($null -eq $code) { $code = 1 }
+  } else {
+    $splat = @{ TimeLimit = $TimeLimit }
+    $cmd = Get-Command $scriptPath -ErrorAction Stop
+    if ($SkipRebuild -and $cmd.Parameters.ContainsKey("SkipRebuild")) { $splat["SkipRebuild"] = $true }
+    if ($cell.ContainsKey("full") -and $cell.full -and $cmd.Parameters.ContainsKey("Full")) { $splat["Full"] = $true }
+    if ($cell.ContainsKey("noNem") -and $cell.noNem -and $cmd.Parameters.ContainsKey("NoNemesis")) { $splat["NoNemesis"] = $true }
+    & $scriptPath @splat
+    $code = if ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  }
 } catch {
   Write-Host "ERROR: cell $Id threw: $_"
   $code = 1

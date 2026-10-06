@@ -4,12 +4,27 @@
 
 function Get-JepsenRepoRoot {
   param([string]$FromScriptRoot = $PSScriptRoot)
-  return (Resolve-Path (Join-Path $FromScriptRoot "../..")).Path
+  $dir = (Resolve-Path $FromScriptRoot).Path
+  while ($dir) {
+    $pom = Join-Path $dir "pom.xml"
+    $jepsen = Join-Path $dir "benchmarks"
+    $jepsen = Join-Path $jepsen "jepsen"
+    if ((Test-Path -LiteralPath $pom) -and (Test-Path -LiteralPath $jepsen)) {
+      return $dir
+    }
+    $parent = Split-Path $dir -Parent
+    if (-not $parent -or $parent -eq $dir) {
+      break
+    }
+    $dir = $parent
+  }
+  throw "Cannot locate repo root (pom.xml + benchmarks/jepsen) from $FromScriptRoot"
 }
 
 function Get-JepsenDir {
   param([string]$FromScriptRoot = $PSScriptRoot)
-  return (Resolve-Path (Join-Path $FromScriptRoot "..")).Path
+  $root = Get-JepsenRepoRoot -FromScriptRoot $FromScriptRoot
+  return (Join-Path $root (Join-Path "benchmarks" "jepsen"))
 }
 
 function Find-GitBash {
