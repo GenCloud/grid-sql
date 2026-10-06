@@ -1,17 +1,21 @@
 # Jepsen QG lab gate — separate from unit CI (never co-run with Load/JMH/OSS).
 # Full matrix A–M: benchmarks/jepsen/COVERAGE.md
-# Default runs-on: ubuntu-latest. workflow_dispatch self_hosted=true → self-hosted.
+# Default runs-on: ubuntu-latest. Self-hosted via runner labels (dispatch + optional vars).
 # Script flavor follows runner.os at runtime (Linux → bash .sh, Windows → pwsh .ps1).
 name: Jepsen QG
 
 on:
   workflow_dispatch:
     inputs:
-      self_hosted:
-        description: Run on local self-hosted runner (false = ubuntu-latest)
+      runner_labels:
+        description: >
+          Self-hosted runner labels, comma-separated (e.g. Windows or linux,x64).
+          Empty uses repo var JEPSEN_RUNNER_LABELS; still empty = ubuntu-latest.
+          github / ubuntu-latest / hosted = force GitHub-hosted.
+          Label self-hosted is added automatically.
         required: false
-        default: false
-        type: boolean
+        default: ""
+        type: string
       time_limit:
         description: JEPSEN_TIME_LIMIT (seconds); join/swarm enforce min 60
         required: false
@@ -37,7 +41,7 @@ on:
     types: [opened, synchronize, reopened, labeled]
 
 concurrency:
-  group: jepsen-qg-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.inputs.self_hosted || 'false' }}
+  group: jepsen-qg-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.inputs.runner_labels || 'hosted' }}
   cancel-in-progress: false
 
 permissions:
@@ -51,16 +55,94 @@ env:
   DOCKER_BUILDKIT: "1"
   MSYS_NO_PATHCONV: "1"
   MSYS2_ARG_CONV_EXCL: "*"
-  # String 'true' only when dispatch + checkbox; otherwise ubuntu-latest.
-  JEPSEN_SELF_HOSTED: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.self_hosted == 'true' && 'true' || 'false' }}
   MAVEN_OPTS: >-
     -Xmx2g
     -Dfile.encoding=UTF-8
 
 jobs:
+  resolve-runner:
+    name: Resolve runner labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       contains(join(github.event.pull_request.labels.*.name, ','), 'jepsen'))
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+      max_parallel: ${{ steps.pick.outputs.max_parallel }}
+      self_hosted: ${{ steps.pick.outputs.self_hosted }}
+    steps:
+      - name: Pick runs-on from labels
+        id: pick
+        env:
+          DISPATCH_LABELS: ${{ github.event.inputs.runner_labels || '' }}
+          VAR_LABELS: ${{ vars.JEPSEN_RUNNER_LABELS || '' }}
+        run: |
+          set -euo pipefail
+          hosted_json='["ubuntu-latest"]'
+          emit_hosted() {
+            echo "runs_on=${hosted_json}" >> "$GITHUB_OUTPUT"
+            echo "max_parallel=4" >> "$GITHUB_OUTPUT"
+            echo "self_hosted=false" >> "$GITHUB_OUTPUT"
+            echo "Runner: ubuntu-latest (GitHub-hosted)"
+          }
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            emit_hosted
+            exit 0
+          fi
+          raw="${DISPATCH_LABELS:-}"
+          raw="${raw#"${raw%%[![:space:]]*}"}"
+          raw="${raw%"${raw##*[![:space:]]}"}"
+          if [[ -z "$raw" ]]; then
+            raw="${VAR_LABELS:-}"
+            raw="${raw#"${raw%%[![:space:]]*}"}"
+            raw="${raw%"${raw##*[![:space:]]}"}"
+          fi
+          lower="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+          if [[ -z "$raw" || "$lower" == "github" || "$lower" == "ubuntu-latest" || "$lower" == "hosted" ]]; then
+            emit_hosted
+            exit 0
+          fi
+          raw="${raw//;/,}"
+          labels=()
+          has_self=0
+          IFS=',' read -ra parts <<< "$raw"
+          for p in "${parts[@]}"; do
+            p="$(echo "$p" | xargs)"
+            [[ -z "$p" ]] && continue
+            if [[ ! "$p" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "ERROR: invalid runner label: $p" >&2
+              exit 1
+            fi
+            if [[ "$p" == "self-hosted" ]]; then
+              has_self=1
+            fi
+            skip=0
+            for existing in "${labels[@]+"${labels[@]}"}"; do
+              if [[ "$existing" == "$p" ]]; then skip=1; break; fi
+            done
+            [[ "$skip" == "1" ]] && continue
+            labels+=("$p")
+          done
+          if [[ "${#labels[@]}" -eq 0 ]]; then
+            emit_hosted
+            exit 0
+          fi
+          json="$(printf '%s\n' "${labels[@]}" | jq -R . | jq -s -c .)"
+          if [[ "$has_self" != "1" ]]; then
+            json="$(echo "$json" | jq -c '["self-hosted"] + .')"
+          fi
+          echo "runs_on=${json}" >> "$GITHUB_OUTPUT"
+          echo "max_parallel=1" >> "$GITHUB_OUTPUT"
+          echo "self_hosted=true" >> "$GITHUB_OUTPUT"
+          echo "Runner labels: ${json}"
+
   validate-matrix:
     name: Validate A–M matrix sync
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -94,8 +176,8 @@ jobs:
 
   prepare:
     name: Prepare matrix
-    needs: validate-matrix
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [validate-matrix, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 5
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -106,7 +188,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set_linux.outputs.matrix || steps.set_win.outputs.matrix }}
       skip_rebuild: ${{ steps.set_linux.outputs.skip_rebuild || steps.set_win.outputs.skip_rebuild }}
-      max_parallel: ${{ steps.set_linux.outputs.max_parallel || steps.set_win.outputs.max_parallel }}
+      max_parallel: ${{ needs.resolve-runner.outputs.max_parallel }}
     steps:
       - name: Build matrix JSON (A–M) — Linux
         id: set_linux
@@ -161,18 +243,11 @@ jobs:
             exit 1
           fi
           matrix="$(printf '%s\n' "${items[@]}" | jq -cs '{include:.}')"
-          # self_hosted dispatch → serialize; otherwise modest parallelism on ubuntu-latest.
-          if [[ "${JEPSEN_SELF_HOSTED:-false}" == "true" ]]; then
-            MAX_PARALLEL=1
-          else
-            MAX_PARALLEL=4
-          fi
           {
             echo "matrix=$matrix"
             echo "skip_rebuild=$SKIP_REBUILD"
-            echo "max_parallel=$MAX_PARALLEL"
           } >> "$GITHUB_OUTPUT"
-          echo "Prepared ${#items[@]} cell(s) runner.os=$RUNNER_OS self_hosted=${JEPSEN_SELF_HOSTED:-false} max_parallel=$MAX_PARALLEL"
+          echo "Prepared ${#items[@]} cell(s) runner.os=$RUNNER_OS"
           echo "$matrix" | jq -r '.include[] | "\(.id) \(.config)"'
 
       - name: Build matrix JSON (A–M) — Windows
@@ -213,17 +288,15 @@ jobs:
           }
           if ($include.Count -eq 0) { throw "profiles filter matched zero cells: $($env:PROFILES)" }
           $matrixJson = (@{ include = $include } | ConvertTo-Json -Compress -Depth 6)
-          $maxParallel = if ($env:JEPSEN_SELF_HOSTED -eq "true") { "1" } else { "4" }
           Add-Content -Path $env:GITHUB_OUTPUT -Value "matrix=$matrixJson" -Encoding utf8
           Add-Content -Path $env:GITHUB_OUTPUT -Value "skip_rebuild=$($env:SKIP_REBUILD)" -Encoding utf8
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "max_parallel=$maxParallel" -Encoding utf8
-          Write-Host "Prepared $($include.Count) cell(s) runner.os=$env:RUNNER_OS self_hosted=$($env:JEPSEN_SELF_HOSTED) max_parallel=$maxParallel"
+          Write-Host "Prepared $($include.Count) cell(s) runner.os=$env:RUNNER_OS"
           $include | ForEach-Object { Write-Host "$($_.id) $($_.config)" }
 
   build-image:
     name: Build Jepsen image
-    needs: prepare
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [prepare, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -296,13 +369,13 @@ jobs:
 
   matrix:
     name: Jepsen ${{ matrix.id }} ${{ matrix.config }}
-    needs: [prepare, build-image]
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [prepare, build-image, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
       # self-hosted shares SQL/HTTP binds → serialize; ubuntu-latest can fan out a bit.
-      max-parallel: ${{ fromJSON(needs.prepare.outputs.max_parallel) }}
+      max-parallel: ${{ fromJSON(needs.resolve-runner.outputs.max_parallel) }}
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout
@@ -485,9 +558,9 @@ jobs:
 
   summary:
     name: Matrix summary A–M
-    needs: [prepare, matrix]
+    needs: [prepare, matrix, resolve-runner]
     if: always() && needs.prepare.result == 'success'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 5
     steps:
       - name: Aggregate job outcomes (Linux)
@@ -500,7 +573,7 @@ jobs:
           {
             echo "## Jepsen QG matrix"
             echo ""
-            echo "Runner: \`$RUNNER_OS\` (self_hosted=${JEPSEN_SELF_HOSTED:-false})"
+            echo "Runner: \`$RUNNER_OS\` labels=\`${{ needs.resolve-runner.outputs.runs_on }}\`"
             echo ""
             echo "| ID | Config | Script |"
             echo "|----|--------|--------|"
@@ -528,7 +601,7 @@ jobs:
           $lines = @(
             "## Jepsen QG matrix",
             "",
-            "Runner: ``$env:RUNNER_OS`` (self_hosted=$($env:JEPSEN_SELF_HOSTED))",
+            "Runner: ``$env:RUNNER_OS`` labels=${{ needs.resolve-runner.outputs.runs_on }}",
             "",
             "| ID | Config | Script |",
             "|----|--------|--------|"
