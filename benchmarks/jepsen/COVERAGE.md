@@ -29,7 +29,10 @@ On **`:ok`** the value is the token list (e.g. `[:r 16 ["t14" ...]]`). Anomalies
 Matrix driver (1-DC A–K + Multi-DC D–G/I + L/M): `scripts/run-jepsen-all-profiles.ps1` (calm host, sequential). Failures → lab summary only (no floor cuts).
 
 Each cell: fresh cluster → register → **fresh cluster** → append → stamp → non-zero exit on FAIL.
-GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) matrix **A–M** (PR label `jepsen`, push main/master, nightly, workflow_dispatch). Bash entrypoints: `run-jepsen.sh`, `run-jepsen-unclean-revive.sh`, `run-jepsen-nochao.sh` + `qg-gate.sh`, `run-jepsen-swarm.sh`, `run-jepsen-join.sh`, `multidc/scripts/run-multidc-*.sh`, witness wrappers.
+GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) matrix **A–M**.
+Default `runs-on: ubuntu-latest`; `workflow_dispatch` flag **`self_hosted=true`** → local `self-hosted` runner.
+Script flavor follows **`runner.os`**: Linux → bash (`.sh`); Windows → pwsh (`run-jepsen-gha-cell.ps1` / `jepsen-env.ps1` / `dump-jepsen-cluster-logs.ps1`).
+Triggers: `workflow_dispatch`, nightly, push main/master, PR label `jepsen`.
 
 ## In-process layer (not Docker Jepsen)
 
