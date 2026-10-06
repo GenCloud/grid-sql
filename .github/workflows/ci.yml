@@ -1,6 +1,8 @@
 # Build + unit/IT gate for Grid SQL (Java 25, --enable-preview).
 # Lab gates (QG / Jepsen / Multi-DC / OSS / JMH / Load) stay host-side; never co-run here.
-# Jepsen QG matrix A–M (1dc-*, multidc-*, swarm/join, witness) → jepsen-qg.yml — not this workflow.
+# Jepsen QG matrix A-M (1dc-*, multidc-*, swarm/join, witness) -> jepsen-qg.yml -- not this workflow.
+# Default runs-on: ubuntu-latest. Self-hosted via runner labels (dispatch + optional vars).
+# Script flavor follows runner.os (Linux -> bash, Windows -> pwsh / mvn.cmd).
 name: CI
 
 on:
@@ -9,9 +11,19 @@ on:
   pull_request:
     branches: [master, main]
   workflow_dispatch:
+    inputs:
+      runner_labels:
+        description: >
+          Self-hosted runner labels, comma-separated (e.g. Windows or linux,x64).
+          Empty uses repo var CI_RUNNER_LABELS, then GHA_RUNNER_LABELS; still empty = ubuntu-latest.
+          github / ubuntu-latest / hosted = force GitHub-hosted.
+          Label self-hosted is added automatically.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.inputs.runner_labels || 'hosted' }}
   cancel-in-progress: true
 
 env:
@@ -22,9 +34,28 @@ env:
     -Dsun.stderr.encoding=UTF-8
 
 jobs:
+  resolve-runner:
+    name: Resolve runner labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+      self_hosted: ${{ steps.pick.outputs.self_hosted }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pick runs-on from labels
+        id: pick
+        env:
+          DISPATCH_LABELS: ${{ github.event.inputs.runner_labels || '' }}
+          VAR_LABELS: ${{ vars.CI_RUNNER_LABELS || vars.GHA_RUNNER_LABELS || '' }}
+        run: bash .github/scripts/resolve-gha-runner.sh
+
   build-test:
     name: Build and test
-    runs-on: ubuntu-latest
+    needs: resolve-runner
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -37,27 +68,76 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Verify Java
+      - name: Verify Java (Linux)
+        if: runner.os == 'Linux'
         run: |
           java -version
           mvn -version
 
-      - name: Compile (reactor, skip tests)
+      - name: Verify Java (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          java -version
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile (Linux)
+        if: runner.os == 'Linux'
         run: mvn -B -ntp package -DskipTests
 
-      - name: Test (Surefire unit + IT; JMH excluded by pom)
+      - name: Compile (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -B -ntp package "-DskipTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
         run: mvn -B -ntp verify
 
-      - name: Validate Jepsen A–M GHA matrix sync
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -B -ntp verify
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate Jepsen A-M GHA matrix sync (Linux)
+        if: runner.os == 'Linux'
         run: |
           chmod +x benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
           bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+
+      - name: Validate Jepsen A-M GHA matrix sync (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bash = $null
+          foreach ($c in @(
+            "$env:ProgramFiles\Git\bin\bash.exe",
+            "$env:ProgramFiles\Git\usr\bin\bash.exe",
+            "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+          )) {
+            if ($c -and (Test-Path -LiteralPath $c)) { $bash = $c; break }
+          }
+          if (-not $bash) {
+            $cmd = Get-Command bash -EA SilentlyContinue
+            if ($cmd) { $bash = $cmd.Source }
+          }
+          if (-not $bash) { throw "Git Bash required for validate-jepsen-gha-matrix.sh on Windows" }
+          & $bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Surefire reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
+          name: surefire-reports-${{ runner.os }}
           path: |
             **/target/surefire-reports/**
             **/target/failsafe-reports/**
@@ -66,9 +146,9 @@ jobs:
 
   package-starters:
     name: Package product starters
-    runs-on: ubuntu-latest
+    needs: [build-test, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 30
-    needs: build-test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,17 +160,26 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Package server + Jepsen starters
+      - name: Package server + Jepsen starters (Linux)
+        if: runner.os == 'Linux'
         run: >
           mvn -B -ntp
           -pl grid-sql-server-starter,grid-sql-jepsen-starter
           -am package
           -DskipTests
 
+      - name: Package server + Jepsen starters (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -B -ntp -pl grid-sql-server-starter,grid-sql-jepsen-starter -am package "-DskipTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload fat jars
         uses: actions/upload-artifact@v4
         with:
-          name: grid-sql-starters
+          name: grid-sql-starters-${{ runner.os }}
           path: |
             grid-sql-server-starter/target/grid-sql-server-starter-*.jar
             grid-sql-jepsen-starter/target/grid-sql-jepsen-starter-*.jar
