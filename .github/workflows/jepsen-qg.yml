@@ -2,7 +2,8 @@
 # Full matrix A–M: benchmarks/jepsen/COVERAGE.md
 # Default runs-on: ubuntu-latest.
 # Self-hosted: PR label "self-hosted" (plus optional OS/arch labels), or dispatch / JEPSEN_RUNNER_LABELS.
-# Script flavor follows runner.os at runtime (Linux → bash .sh, Windows → pwsh .ps1).
+# Script flavor follows runner.os (Linux → bash .sh, Windows → powershell.exe .ps1).
+# Never shell: pwsh — self-hosted Windows often has only Windows PowerShell 5.1.
 name: Jepsen QG
 
 on:
@@ -103,7 +104,7 @@ jobs:
 
       - name: Validate (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $bash = $null
           foreach ($c in @(
@@ -200,7 +201,7 @@ jobs:
       - name: Build matrix JSON (A–M) — Windows
         id: set_win
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         env:
           PROFILES: ${{ github.event.inputs.profiles || 'all' }}
           SKIP_REBUILD: ${{ github.event.inputs.skip_rebuild || '0' }}
@@ -274,7 +275,7 @@ jobs:
 
       - name: Build image (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         env:
           SKIP_REBUILD: ${{ needs.prepare.outputs.skip_rebuild }}
         run: |
@@ -354,7 +355,7 @@ jobs:
 
       - name: Load image (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           . .\benchmarks\jepsen\scripts\jepsen-env.ps1
@@ -380,7 +381,7 @@ jobs:
 
       - name: Install grid-sql-client (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
           & $mvn -B -ntp -pl grid-sql-client -am install "-DskipTests"
@@ -443,9 +444,9 @@ jobs:
             -RegisterHistory "$REGISTER_HISTORY" \
             -AppendHistory "$APPEND_HISTORY"
 
-      - name: Run profile (Windows pwsh)
+      - name: Run profile (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         env:
           CELL_ID: ${{ matrix.id }}
           CELL_CONFIG: ${{ matrix.config }}
@@ -479,7 +480,7 @@ jobs:
 
       - name: Dump cluster logs on failure (Windows)
         if: failure() && runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $out = Join-Path "benchmarks\jepsen\cluster-logs" "${{ matrix.id }}-${{ matrix.config }}"
           & .\benchmarks\jepsen\scripts\dump-jepsen-cluster-logs.ps1 -OutDir $out
@@ -539,7 +540,7 @@ jobs:
 
       - name: Aggregate job outcomes (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         env:
           MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
           MATRIX_RESULT: ${{ needs.matrix.result }}

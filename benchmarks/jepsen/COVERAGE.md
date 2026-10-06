@@ -31,7 +31,7 @@ Matrix driver (1-DC A–K + Multi-DC D–G/I + L/M): `scripts/run-jepsen-all-pro
 Each cell: fresh cluster → register → **fresh cluster** → append → stamp → non-zero exit on FAIL.
 GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) matrix **A–M**.
 Default `runs-on: ubuntu-latest`. Local runner: PR label **`self-hosted`** (optional extra PR labels `Windows` / `Linux` / `macOS` / `X64` / `ARM64`), or `workflow_dispatch` **`runner_labels`**, or repo var **`JEPSEN_RUNNER_LABELS`**. `github` / `ubuntu-latest` / `hosted` force GitHub-hosted. Push/nightly stay on `ubuntu-latest`. Jepsen still requires PR label `jepsen` to run at all.
-Script flavor follows **`runner.os`**: Linux → bash (`.sh`); Windows → pwsh (`run-jepsen-gha-cell.ps1` / `jepsen-env.ps1` / `dump-jepsen-cluster-logs.ps1`).
+Script flavor follows **`runner.os`**: Linux → bash (`.sh`); Windows → Windows PowerShell 5.1 (`powershell.exe`, not `pwsh`) for `run-jepsen-gha-cell.ps1` / `jepsen-env.ps1` / `dump-jepsen-cluster-logs.ps1`.
 Triggers: `workflow_dispatch`, nightly, push main/master, PR label `jepsen`.
 
 ## In-process layer (not Docker Jepsen)

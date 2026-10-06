@@ -4,7 +4,8 @@
 # Default runs-on: ubuntu-latest.
 # Self-hosted: PR label "self-hosted" (optional Windows/Linux/macOS/X64/ARM64),
 # or workflow_dispatch runner_labels / vars CI_RUNNER_LABELS, GHA_RUNNER_LABELS.
-# Script flavor follows runner.os (Linux -> bash, Windows -> pwsh / mvn.cmd).
+# Script flavor follows runner.os (Linux -> bash, Windows -> powershell.exe / mvn.cmd).
+# Never shell: pwsh — self-hosted Windows often has only Windows PowerShell 5.1.
 name: CI
 
 on:
@@ -80,7 +81,7 @@ jobs:
 
       - name: Verify Java (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           java -version
           $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
@@ -93,7 +94,7 @@ jobs:
 
       - name: Compile (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
           & $mvn -B -ntp package "-DskipTests"
@@ -105,7 +106,7 @@ jobs:
 
       - name: Test (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
           & $mvn -B -ntp verify
@@ -119,7 +120,7 @@ jobs:
 
       - name: Validate Jepsen A-M GHA matrix sync (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $bash = $null
           foreach ($c in @(
@@ -174,7 +175,7 @@ jobs:
 
       - name: Package server + Jepsen starters (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
           & $mvn -B -ntp -pl grid-sql-server-starter,grid-sql-jepsen-starter -am package "-DskipTests"
