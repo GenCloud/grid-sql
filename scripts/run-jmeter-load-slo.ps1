@@ -27,9 +27,10 @@ param(
   [string]$JMeterHome = "",
   [ValidateSet("contention", "capacity")]
   [string]$Profile = "capacity",
-  [ValidateSet("CAPACITY", "CHAOS", "STRESS", "READ_ONLY", "WRITE_ONLY")]
+  [ValidateSet("CAPACITY", "CHAOS", "STRESS", "READ_ONLY", "WRITE_ONLY", "BITMAP_FILTER", "AQE_SCAN", "FOR_UPDATE")]
   [string]$MixProfile = "CAPACITY",
   [int]$KeySpace = 0,
+  [int]$SeedRows = 0,
   [int]$OpTimeoutMs = 30000,
   [int]$WriteBatchSize = 1,
   [switch]$DrySmoke,
@@ -248,6 +249,11 @@ $jmeterArgs = @(
   "-JWRITE_BATCH_SIZE=$WriteBatchSize",
   "-JREPORT_DIR=$($ReportDir -replace '\\','/')"
 )
+if ($SeedRows -gt 0) {
+  $jmeterArgs += "-JSEED_ROWS=$SeedRows"
+} elseif ($MixProfile -eq "AQE_SCAN") {
+  $jmeterArgs += "-JSEED_ROWS=12000"
+}
 if ($SetupGridUrl) {
   $jmeterArgs += "-JSETUP_GRID_URL=$SetupGridUrl"
 }

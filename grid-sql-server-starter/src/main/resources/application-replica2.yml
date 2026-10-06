@@ -1,11 +1,11 @@
 grid:
   sql:
     default-shards: 8
-    data-dir: ./data-primary/catalog
+    data-dir: ./data-replica2/catalog
   sql-server:
     enabled: true
     host: 0.0.0.0
-    port: 15432
+    port: 15434
     user: "grid"
     password: "grid"
   codec:
@@ -22,7 +22,7 @@ grid:
     adaptive-disk-first: true
   replication:
     enabled: true
-    node-id: primary-1
+    node-id: replica-2
     cluster-id: example-grid
     ha:
       max-stale-lag: 10000
@@ -51,11 +51,11 @@ grid:
       max-migrates-per-tick: 2
     transport:
       bind-host: 127.0.0.1
-      bind-port: 5615
+      bind-port: 5617
       connect-timeout-ms: 5000
       peers:
+        - { id: primary-1, host: 127.0.0.1, port: 5615, dc: dc-a }
         - { id: replica-1, host: 127.0.0.1, port: 5616, dc: dc-a }
-        - { id: replica-2, host: 127.0.0.1, port: 5617, dc: dc-a }
     cross-dc:
       enabled: true
       local-dc: dc-a
@@ -66,11 +66,10 @@ grid:
       learners: []
     op-log:
       segment-size: 64
-      data-dir: ./data-primary/replication
+      data-dir: ./data-replica2/replication
       fsync: true
     flow:
       max-inflight-ops: 10000
-      domains: []
 
 spring:
   threads:
@@ -80,7 +79,7 @@ spring:
     banner-mode: "off"
   config:
     activate:
-      on-profile: primary
+      on-profile: replica2
 
 management:
   endpoints:
@@ -102,7 +101,7 @@ management:
           include: readinessState,gridReadiness
   metrics:
     tags:
-      application: grid-sql-server-primary
+      application: grid-sql-server-replica2
 
 server:
-  port: 7777
+  port: 7779

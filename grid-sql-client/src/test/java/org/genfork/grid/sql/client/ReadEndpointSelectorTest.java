@@ -111,4 +111,38 @@ public class ReadEndpointSelectorTest {
 		assertFalse(sel.staleAt(1));
 		sel.release(next);
 	}
+
+	@Test
+	void acquireSpreadsAcrossThreeEndpointsWhenInflightHeld() {
+		final HostEndpoint a = new HostEndpoint("127.0.0.1", 15433);
+		final HostEndpoint b = new HostEndpoint("127.0.0.1", 15434);
+		final HostEndpoint c = new HostEndpoint("127.0.0.1", 15435);
+		final ReadEndpointSelector sel = new ReadEndpointSelector(List.of(a, b, c));
+		final HostEndpoint first = sel.acquire();
+		final HostEndpoint second = sel.acquire();
+		final HostEndpoint third = sel.acquire();
+		assertNotEquals(first, second);
+		assertNotEquals(second, third);
+		assertNotEquals(first, third);
+		sel.release(first);
+		sel.release(second);
+		sel.release(third);
+	}
+
+	@Test
+	void equalInflightTieBreakRotatesNotStickySlotZero() {
+		final HostEndpoint a = new HostEndpoint("127.0.0.1", 15433);
+		final HostEndpoint b = new HostEndpoint("127.0.0.1", 15434);
+		final HostEndpoint c = new HostEndpoint("127.0.0.1", 15435);
+		final ReadEndpointSelector sel = new ReadEndpointSelector(List.of(a, b, c));
+		final HostEndpoint first = sel.acquire();
+		sel.release(first);
+		final HostEndpoint second = sel.acquire();
+		sel.release(second);
+		final HostEndpoint third = sel.acquire();
+		sel.release(third);
+		assertNotEquals(first, second, "tie-break must not sticky-pick slot 0");
+		assertNotEquals(second, third);
+		assertNotEquals(first, third);
+	}
 }

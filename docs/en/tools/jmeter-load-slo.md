@@ -29,7 +29,7 @@ powershell -File .\scripts\run-jmeter-load-slo.ps1 -Stamp <run-id> -Clients 128 
 
 | Flag | Meaning |
 |------|---------|
-| `-MixProfile` | Sampler weights: `WRITE_ONLY`, `READ_ONLY`, `CAPACITY`, `CHAOS`, … |
+| `-MixProfile` | Sampler weights: `WRITE_ONLY`, `READ_ONLY`, `CAPACITY`, `CHAOS`, …; opt-in `BITMAP_FILTER` / `AQE_SCAN` / `FOR_UPDATE` (separate floors via `run-optin-*-stamp.ps1`) |
 | `-Profile` | `KEY_SPACE` only: `capacity` (1 000 000) or `contention` (10 000) |
 | `-Clients` | Thread count; the useful range is usually 64–128 |
 | `-DurationSec` | Duration; chaos and stress mixes need longer windows |

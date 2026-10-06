@@ -20,10 +20,17 @@ import java.net.ServerSocket;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.replication.netty.NettyReplicationTransport;
 import org.genfork.grid.replication.transport.ReplicationPeer;
+import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
+import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.sql.SqlSession;
+import org.genfork.grid.sql.tx.DistForUpdatePeerLockLease;
+import org.genfork.grid.sql.tx.DistForUpdatePrepareVotes;
 import org.genfork.grid.sql.tx.NettyDistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
+import org.genfork.grid.sql.tx.SqlTxBuffer;
 import org.genfork.grid.threading.ThreadService;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -70,6 +77,8 @@ public class ForUpdateDistNettyPeerLockBenchmark extends AbstractLatencyBenchmar
 	private NettyReplicationTransport transportA;
 	private NettyReplicationTransport transportB;
 	private NettyDistForUpdatePeerLockAgent agent;
+	private SqlEngine engine;
+	private TxEnvelopeCoordinator envelope;
 	private long nextTxId = TX_ID;
 
 	@Setup(Level.Trial)
@@ -96,6 +105,8 @@ public class ForUpdateDistNettyPeerLockBenchmark extends AbstractLatencyBenchmar
 		transportB.start();
 		awaitReady(transportA, NODE_B);
 		agent = new NettyDistForUpdatePeerLockAgent(transportA, NODE_B);
+		engine = new SqlEngine(new TableCatalog(), null, 4);
+		envelope = new TxEnvelopeCoordinator();
 	}
 
 	@TearDown(Level.Trial)
@@ -114,6 +125,30 @@ public class ForUpdateDistNettyPeerLockBenchmark extends AbstractLatencyBenchmar
 		final boolean locked = agent.lock(txId, TABLE, KEY, false);
 		bh.consume(locked);
 		agent.unlock(txId, TABLE, KEY);
+	}
+
+	/**
+	 * Open-TX Dist prepare + commit-dec round-trip (happy path).
+	 */
+	@Benchmark
+	public void peerPrepareCommitRoundTrip(Blackhole bh) {
+		final SqlSession session = engine.newSession();
+		session.setEnvelopeCoordinator(envelope);
+		engine.execute(session, "BEGIN");
+		final SqlTxBuffer buf = session.requireTx();
+		assertLocked(agent.lock(buf.txId(), TABLE, KEY, false));
+		buf.rememberPeerLock(new DistForUpdatePeerLockLease(agent, buf.txId(), TABLE, KEY));
+		DistForUpdatePrepareVotes.prepareOrThrow(session, buf, transportA);
+		DistForUpdatePrepareVotes.finish(session, buf, transportA, true);
+		agent.unlock(buf.txId(), TABLE, KEY);
+		engine.execute(session, "ROLLBACK");
+		bh.consume(buf.txId());
+	}
+
+	private static void assertLocked(boolean locked) {
+		if (!locked) {
+			throw new IllegalStateException("peer lock not granted");
+		}
 	}
 
 	private static void bindMinimal(NettyReplicationTransport transport) {

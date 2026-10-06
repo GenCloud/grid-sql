@@ -55,6 +55,7 @@ grid:
       connect-timeout-ms: 5000
       peers:
         - { id: primary-1, host: 127.0.0.1, port: 5615, dc: dc-a }
+        - { id: replica-2, host: 127.0.0.1, port: 5617, dc: dc-a }
     cross-dc:
       enabled: true
       local-dc: dc-a

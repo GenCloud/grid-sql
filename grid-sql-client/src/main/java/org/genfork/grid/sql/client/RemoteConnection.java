@@ -57,29 +57,14 @@ public final class RemoteConnection implements Connection {
 	private static final String ERR_NOT_CONNECTED = "SQL channel not connected";
 	private static final String ERR_MAX_TX = "maxTxContexts exhausted";
 
+	private static final int NO_READ_LEASE = -1;
+
 	private final TransportConnection transport;
+	/** READ_REPLICA least-inflight lease index; released on park/destroy. */
+	private final AtomicInteger readLeaseEndpointIndex = new AtomicInteger(NO_READ_LEASE);
 
 	RemoteConnection(TransportConnection transport) {
 		this.transport = transport;
-	}
-
-	/**
-	 * Preferred ctor: builds {@link TransportConnection} for the live channel.
-	 */
-	RemoteConnection(
-			Channel channel,
-			AtomicInteger requestIds,
-			Map<Integer, PendingExchange> pending,
-			Runnable onPark,
-			Runnable onDead,
-			AtomicInteger openContexts,
-			int maxTxContexts,
-			String defaultSchema,
-			ConnectionOptions options,
-			AtomicReference<ServerMeta> serverMeta
-	) {
-		this(channel, requestIds, pending, onPark, onDead, openContexts, maxTxContexts,
-				defaultSchema, options, serverMeta, SessionRole.PRIMARY);
 	}
 
 	RemoteConnection(
@@ -143,6 +128,14 @@ public final class RemoteConnection implements Connection {
 
 	void clearParked() {
 		transport.clearParked();
+	}
+
+	void bindReadLeaseEndpointIndex(int endpointIndex) {
+		readLeaseEndpointIndex.set(endpointIndex);
+	}
+
+	int clearReadLeaseEndpointIndex() {
+		return readLeaseEndpointIndex.getAndSet(NO_READ_LEASE);
 	}
 
 	@Override
@@ -346,13 +339,6 @@ public final class RemoteConnection implements Connection {
 		return Mono.defer(() -> {
 			transport.noteActiveStart();
 			return mono.doFinally(_ -> transport.noteActiveEnd());
-		});
-	}
-
-	private <T> Flux<T> trackFlux(Flux<T> flux) {
-		return Flux.defer(() -> {
-			transport.noteActiveStart();
-			return flux.doFinally(_ -> transport.noteActiveEnd());
 		});
 	}
 
