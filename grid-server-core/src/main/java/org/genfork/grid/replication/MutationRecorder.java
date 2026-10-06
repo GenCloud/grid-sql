@@ -35,10 +35,12 @@ import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import org.genfork.grid.diag.VisibilityDiag;
 
 /**
  * Records map mutations into ORCHID consensus + OpLog (when phase-synced).
@@ -140,6 +142,25 @@ public class MutationRecorder {
 	public void recordTxUnitBlocking(int shard, long txId, byte[] beginValue, List<Entry> entries) {
 		if (entries == null) {
 			entries = List.of();
+		}
+		if (VisibilityDiag.enabled()) {
+			final StringBuilder kh = new StringBuilder();
+			final int lim = Math.min(entries.size(), 16);
+			for (int i = 0; i < lim; i++) {
+				if (i > 0) {
+					kh.append(',');
+				}
+				kh.append(Integer.toHexString(Arrays.hashCode(entries.get(i).getKey())));
+			}
+			if (entries.size() > 16) {
+				kh.append(",...");
+			}
+			VisibilityDiag.debugf("recorder.txUnit",
+					"domain=%s shard=%d txId=%d path=%s entries=%d beginLen=%d keys=[%s]",
+					domainType, shard, txId,
+					entries.size() == 1 && (beginValue == null || beginValue.length == 0)
+							? "data-only" : "markers",
+					entries.size(), beginValue == null ? 0 : beginValue.length, kh);
 		}
 		if (entries.size() == 1 && (beginValue == null || beginValue.length == 0)) {
 			recordCommittedBatchBlocking(shard, entries);

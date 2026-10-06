@@ -1398,10 +1398,7 @@ public final class GridResultSet implements ResultSet {
 		if (type == Instant.class) {
 			return type.cast(SqlTypeCoercion.toTimestamptz(v, ZoneOffset.UTC));
 		}
-		if (type.isInstance(v)) {
-			return type.cast(v);
-		}
-		return type.cast(v);
+        return type.cast(v);
 	}
 
 	@Override

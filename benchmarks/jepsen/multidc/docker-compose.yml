@@ -8,6 +8,8 @@ x-node-common: &node-common
   image: jamoa-grid-jepsen:local
   environment:
     JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+    LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+    LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
   restart: "no"
 
 services:
@@ -18,6 +20,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,a1
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
     volumes:
       - a1-data:/app/data
     command:
@@ -46,6 +50,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,a2
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
     volumes:
       - a2-data:/app/data
     command:
@@ -74,6 +80,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,a3
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
     volumes:
       - a3-data:/app/data
     command:
@@ -102,6 +110,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,b1
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
     volumes:
       - b1-data:/app/data
     command:
@@ -130,6 +140,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: jepsen,b2
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
     volumes:
       - b2-data:/app/data
     command:
@@ -169,6 +181,8 @@ services:
       JEPSEN_MULTI_HOST: "1"
       JAVA_HOME: /opt/java/openjdk
       JAVA_TOOL_OPTIONS: "--enable-preview --add-modules=jdk.incubator.vector"
+      LOGGING_LEVEL_ORG_GENFORK_GRID: DEBUG
+      LOGGING_LEVEL_ORG_GENFORK_GRID_DIAG: DEBUG
       PATH: /opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     networks:
       - dc-a

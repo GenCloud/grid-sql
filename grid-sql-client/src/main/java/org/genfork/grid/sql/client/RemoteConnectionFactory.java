@@ -67,6 +67,10 @@ import org.genfork.grid.sql.client.transport.TransportConnection.PreparedExec;
  * {@link #warmup()} when {@code warmup=true} shares the same min-fill Mono (does not gate obtain).
  * Convenience ctors that take {@code maxConnections} + {@code warmup=true} also set
  * {@code minConnections=maxConnections} so warmup opens N sockets.
+ * <p>
+ * READ_REPLICA factory-global {@link #lastServerMeta()} publishes only accepted (non-stale) peer
+ * meta via {@link FactoryServerMetaPublish}; async min-pool refill is suppressed while a fill
+ * coalescer is already in flight (no dual AUTH race).
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -280,7 +284,12 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		return stickyIndex.get();
 	}
 
-	/** Last ServerMeta observed during AUTH or an ERROR response. */
+	/**
+	 * Factory-global ServerMeta for sticky / diagnostics.
+	 * <p>
+	 * READ_REPLICA: last <em>accepted</em> (non-{@code applyLagStale}) peer meta — stale AUTH
+	 * that rotates away does not overwrite. PRIMARY: last AUTH/ERROR/PROMOTE meta (rediscover).
+	 */
 	public ServerMeta lastServerMeta() {
 		return lastServerMeta.get();
 	}
@@ -434,9 +443,15 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 
 	/**
 	 * After destroy drops below min, schedule async refill off the Netty event loop.
+	 * <p>
+	 * Suppressed while reactive {@link #ensureMinPool()} or sync {@link #ensureMinPoolStage()}
+	 * is already filling — otherwise dual coalescers race AUTH and tear {@code lastServerMeta}.
 	 */
 	private void maybeRefillMinPoolAsync() {
 		if (disposed.get()) {
+			return;
+		}
+		if (warmupMono.get() != null || warmupStage.get() != null) {
 			return;
 		}
 		if (liveCount.get() >= options.minConnections()) {
@@ -444,6 +459,9 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		}
 		POOL_REFILL_EXECUTOR.execute(() -> {
 			if (disposed.get() || liveCount.get() >= options.minConnections()) {
+				return;
+			}
+			if (warmupMono.get() != null || warmupStage.get() != null) {
 				return;
 			}
 			ensureMinPoolStage().whenComplete((ignored, err) -> {
@@ -707,7 +725,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		if (meta == null) {
 			return;
 		}
-		lastServerMeta.set(meta);
+		publishFactoryServerMeta(meta);
 		if (factoryRole.isReadReplica()) {
 			return;
 		}
@@ -724,6 +742,13 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		}
 		preferHintEndpoint(meta);
 		scheduleRediscoverWriter();
+	}
+
+	/** Publish factory-global meta when {@link FactoryServerMetaPublish} allows. */
+	private void publishFactoryServerMeta(ServerMeta meta) {
+		if (FactoryServerMetaPublish.shouldPublish(factoryRole, meta)) {
+			lastServerMeta.set(meta);
+		}
 	}
 
 	/**
@@ -805,10 +830,10 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			int remainingAuthRedirects
 	) {
 		final ServerMeta meta = connection.serverMeta();
-		lastServerMeta.set(meta);
 
 		if (factoryRole.isReadReplica()) {
 			if (meta.applyLagStale()) {
+				// Do not publish stale meta onto factory-global lastServerMeta (rotate away).
 				if (readSelector != null && connectedIndex >= 0 && connectedIndex < endpoints.size()) {
 					readSelector.markStale(endpoints.get(connectedIndex), true);
 				}
@@ -824,9 +849,12 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 				readSelector.markStale(endpoints.get(connectedIndex), false);
 			}
 
+			publishFactoryServerMeta(meta);
 			stickyIndex.set(connectedIndex);
 			return AuthRedirectPlan.accept();
 		}
+
+		publishFactoryServerMeta(meta);
 
 		if (meta.writerEligible()) {
 			pinSticky(connectedIndex, meta);

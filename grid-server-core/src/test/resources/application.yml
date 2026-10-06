@@ -1,1 +1,6 @@
-# Test classpath — no grid slice/domain legacy keys.
+# Test classpath — unit/IT regression always enables product DEBUG (see logback-test.xml).
+logging:
+  level:
+    root: INFO
+    org.genfork.grid: DEBUG
+    org.genfork.grid.diag: DEBUG

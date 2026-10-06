@@ -17,6 +17,7 @@ package org.genfork.grid.replication;
 
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationProps;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
 import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.mem.stage.WorkingSetBudget;
@@ -71,6 +72,7 @@ import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -164,6 +166,10 @@ public class ReplicationCoordinator {
 	 * Idempotent stop for Spring destroy + JVM SIGTERM shutdown hook.
 	 */
 	private final AtomicBoolean stopped = new AtomicBoolean(false);
+	/** Transition-only writerEligible DEBUG (avoid poll flood from wait loops). */
+	private final AtomicReference<Boolean> lastWriterEligibleDiag = new AtomicReference<>();
+	/** One catch-all listener for ops whose domain never registered an applier. */
+	private final AtomicBoolean applyUnhandledDiagBound = new AtomicBoolean(false);
 	private volatile Thread oplogShutdownHook;
 	private final TxMarkerService txMarkerService;
 	private final RegionClaimService regionClaimService;
@@ -387,6 +393,7 @@ public class ReplicationCoordinator {
 			nettyTransport.start();
 		}
 		orchidNode.start();
+		ensureApplyUnhandledDiagBound();
 		if (peerTransportEnabled && crossDcEnabled) {
 			crossDcPublisher.start();
 		}
@@ -528,6 +535,7 @@ public class ReplicationCoordinator {
 		}
 		appliers.put(domainType, applier);
 
+		ensureApplyUnhandledDiagBound();
 		orchidNode.addApplyListener((op, journalRemote) -> {
 			if (op != null && domainType.equals(op.domainType())) {
 				if (homologousRepair != null) {
@@ -807,7 +815,52 @@ public class ReplicationCoordinator {
 	 * Synced and phase-ranked proposer — may accept writes (requires write-admission + region Active).
 	 */
 	public boolean isWriterEligible() {
-		return regionClaimService != null && regionClaimService.isWriterEligible();
+		final boolean eligible = regionClaimService != null && regionClaimService.isWriterEligible();
+		if (VisibilityDiag.enabled()) {
+			final Boolean prev = lastWriterEligibleDiag.getAndSet(Boolean.valueOf(eligible));
+			if (prev == null || prev.booleanValue() != eligible) {
+				final long localTip = orchidNode == null ? 0L : orchidNode.getLastCommittedSeq();
+				final long peerTip = orchidNode == null ? 0L : orchidNode.maxSeenPeerCommittedSeq();
+				final long minApplied = nodeState.minAppliedWatermark();
+				final long maxApplied = nodeState.maxAppliedWatermark();
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_WRITER_ELIGIBLE,
+						"eligible=%s localTip=%d peerTip=%d minApplied=%d maxApplied=%d appliedStreams=%d tipAheadOfMinApplied=%d node=%s",
+						Boolean.valueOf(eligible),
+						Long.valueOf(localTip),
+						Long.valueOf(peerTip),
+						Long.valueOf(minApplied),
+						Long.valueOf(maxApplied),
+						Integer.valueOf(nodeState.appliedStreamCount()),
+						Long.valueOf(Math.max(0L, localTip - minApplied)),
+						nodeState.getNodeId());
+			}
+		}
+		return eligible;
+	}
+
+	/**
+	 * DEBUG-only: log commits for domains with no {@link #registerDomain} applier
+	 * (per-domain listeners silently ignore foreign domains on master).
+	 */
+	private void ensureApplyUnhandledDiagBound() {
+		if (orchidNode == null || !applyUnhandledDiagBound.compareAndSet(false, true)) {
+			return;
+		}
+		orchidNode.addApplyListener((op, journalRemote) -> {
+			if (op == null || appliers.containsKey(op.domainType())) {
+				return;
+			}
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_APPLY_UNHANDLED,
+						"domain=%s opSeq=%d shard=%d type=%s tip=%d node=%s",
+						op.domainType(),
+						Long.valueOf(op.opSeq()),
+						Integer.valueOf(op.shard()),
+						op.type(),
+						Long.valueOf(orchidNode.getLastCommittedSeq()),
+						nodeState.getNodeId());
+			}
+		});
 	}
 
 	public boolean regionAllowsWrites() {

@@ -30,7 +30,6 @@ import org.genfork.grid.sql.SqlRouteClassifier;
 import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.client.ArrayRow;
 import org.genfork.grid.sql.client.Connection;
-import org.genfork.grid.sql.client.ConnectionFactory;
 import org.genfork.grid.sql.client.DefaultRowMetadata;
 import org.genfork.grid.sql.client.RemoteConnection;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
@@ -54,27 +53,24 @@ import org.genfork.grid.sql.client.transport.TransportOutcome;
 public final class SyncConnection implements AutoCloseable {
 	private final RemoteConnection remote;
 	private final TransportConnection transport;
-	private final ConnectionFactory factory;
-	private final RemoteConnectionFactory readFactory;
+    private final RemoteConnectionFactory readFactory;
 	private final ConcurrentMap<String, SqlRouteClassifier.Route> prepareRouteCache;
 	private final Duration timeout;
 	private final Executor syncExecutor;
 
-	public SyncConnection(RemoteConnection remote, ConnectionFactory factory, Duration timeout, Executor syncExecutor) {
-		this(remote, factory, null, timeout, syncExecutor);
+	public SyncConnection(RemoteConnection remote, Duration timeout, Executor syncExecutor) {
+		this(remote, null, timeout, syncExecutor);
 	}
 
 	public SyncConnection(
 			RemoteConnection remote,
-			ConnectionFactory factory,
-			RemoteConnectionFactory readFactory,
+            RemoteConnectionFactory readFactory,
 			Duration timeout,
 			Executor syncExecutor
 	) {
 		this.remote = Objects.requireNonNull(remote, "remote");
 		this.transport = remote.transport();
-		this.factory = factory;
-		this.readFactory = readFactory;
+        this.readFactory = readFactory;
 		this.prepareRouteCache = readFactory == null ? null : SqlClientRouteUtil.newPrepareRouteCache();
 		this.timeout = timeout == null ? SyncAwait.DEFAULT_TIMEOUT : timeout;
 		this.syncExecutor = syncExecutor;
@@ -85,11 +81,10 @@ public final class SyncConnection implements AutoCloseable {
 	 */
 	public SyncConnection(
 			Connection connection,
-			ConnectionFactory factory,
-			Duration timeout,
+            Duration timeout,
 			Executor syncExecutor
 	) {
-		this(requireRemote(connection), factory, null, timeout, syncExecutor);
+		this(requireRemote(connection), null, timeout, syncExecutor);
 	}
 
 	private static RemoteConnection requireRemote(Connection connection) {
@@ -110,10 +105,6 @@ public final class SyncConnection implements AutoCloseable {
 
 	public Duration timeout() {
 		return timeout;
-	}
-
-	Executor syncExecutor() {
-		return syncExecutor;
 	}
 
 	public ServerMeta serverMeta() {

@@ -56,6 +56,7 @@ import org.genfork.grid.sql.tx.KeyWrapper;
 import org.genfork.grid.sql.tx.SqlTxBuffer;
 import org.genfork.grid.store.TableStore;
 import org.genfork.grid.utils.SerialUtil;
+import org.genfork.grid.diag.VisibilityDiag;
 
 /**
  * INSERT / UPDATE / DELETE / MERGE (+ TX staging) and {@code ANALYZE} for {@link org.genfork.grid.sql.SqlEngine}.
@@ -477,6 +478,11 @@ public final class SqlDmlExecutor {
 				try {
 					final byte[] base = store.getCommittedBytes(key);
 					if (base == null) {
+						if (VisibilityDiag.enabled()) {
+							VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
+									"table=%s path=rmw %s base=null => affected=0 (caller may INSERT)",
+									table, VisibilityDiag.keyTag(key));
+						}
 						// SQL UPDATE: missing PK must not invent an empty seed row (G-single-item wipe).
 						final SqlResult result =
 								SqlDmlReturningOps.updateResult(session, table, store, s, returningKeys, 0L);
@@ -541,6 +547,16 @@ public final class SqlDmlExecutor {
 				SqlTriggerFireOps.fireAfterRow(
 						session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
 				affected = 1L;
+				if (VisibilityDiag.enabled()) {
+				    VisibilityDiag.debugf("dml.update.rmw",
+				            "table=%s %s staged %s", table, VisibilityDiag.keyTag(key),
+				            VisibilityDiag.valTag(encoded.valueBytes()));
+				}
+				if (VisibilityDiag.enabled()) {
+				    VisibilityDiag.debugf("dml.insert",
+				            "table=%s tx-stage %s %s", table, VisibilityDiag.keyTag(encoded.keyBytes()),
+				            VisibilityDiag.valTag(encoded.valueBytes()));
+				}
 			}
 		} else if (SqlPkLookupUtil.isScalarPkPointLookup(store.schema(), s.pkColumnOrNull())) {
 			final byte[] key = store.keyBytesForPk(s.pkValueOrNull());
@@ -660,6 +676,11 @@ public final class SqlDmlExecutor {
 				affected = 1L;
 			} else {
 				affected = store.upsert(row);
+				if (VisibilityDiag.enabled()) {
+				    VisibilityDiag.debugf("dml.insert",
+				            "table=%s autocommit affected=%d %s", table, affected,
+				            VisibilityDiag.keyTag(encoded.keyBytes()));
+				}
 			}
 			if (affected > 0L) {
 				SqlTriggerFireOps.fireAfterRow(

@@ -91,6 +91,48 @@ public class ReplicationNodeState {
 		return appliedWatermark.getOrDefault(key(domainType, shard), new AtomicLong(0)).get();
 	}
 
+	/**
+	 * Lowest applied watermark among known streams; {@code 0} when none tracked.
+	 * Diag for tip-ok / empty-map claim (localTip &gt; minApplied).
+	 */
+	public long minAppliedWatermark() {
+		long min = Long.MAX_VALUE;
+		boolean any = false;
+		for (AtomicLong value : appliedWatermark.values()) {
+			if (value == null) {
+				continue;
+			}
+			any = true;
+			final long v = value.get();
+			if (v < min) {
+				min = v;
+			}
+		}
+		return any ? min : 0L;
+	}
+
+	/**
+	 * Highest applied watermark among known streams; {@code 0} when none tracked.
+	 */
+	public long maxAppliedWatermark() {
+		long max = 0L;
+		for (AtomicLong value : appliedWatermark.values()) {
+			if (value == null) {
+				continue;
+			}
+			final long v = value.get();
+			if (v > max) {
+				max = v;
+			}
+		}
+		return max;
+	}
+
+	/** Number of domain#shard streams with an applied watermark entry. */
+	public int appliedStreamCount() {
+		return appliedWatermark.size();
+	}
+
 	public void advanceApplied(String domainType, int shard, long opSeq) {
 		appliedWatermark.computeIfAbsent(key(domainType, shard), k -> new AtomicLong(0))
 				.updateAndGet(cur -> Math.max(cur, opSeq));

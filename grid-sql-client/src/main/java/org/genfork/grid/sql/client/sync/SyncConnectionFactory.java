@@ -390,7 +390,7 @@ public final class SyncConnectionFactory implements AutoCloseable {
 		if (!(connection instanceof RemoteConnection remote)) {
 			throw new IllegalStateException("factory stage must return RemoteConnection");
 		}
-		return new SyncConnection(remote, writerFactory, readFactory, timeout, syncExecutor);
+		return new SyncConnection(remote, readFactory, timeout, syncExecutor);
 	}
 
 	@Override

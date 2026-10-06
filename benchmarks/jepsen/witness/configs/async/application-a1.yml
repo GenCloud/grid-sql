@@ -104,3 +104,11 @@ management:
 
 server:
   port: 7777
+
+logging:
+  file:
+    name: /app/data/grid-visibility.log
+  level:
+    root: INFO
+    org.genfork.grid: DEBUG
+    org.genfork.grid.diag: DEBUG
