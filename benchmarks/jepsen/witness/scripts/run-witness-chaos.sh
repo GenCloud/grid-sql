@@ -49,7 +49,7 @@ Honest PASS/FAIL after Docker+lein Witness overlay (never invent \`:valid? true\
 | stamp | \`$STAMP\` |
 | date | $date_iso |
 | git | $git |
-| host | $(hostname 2>/dev/null || echo unknown) |
+| host | $(if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then echo gha; else hostname 2>/dev/null || echo unknown; fi) |
 | topology | Active+Hold+Hold+Witness (async Multi-DC + w1) |
 | outcome | \`$outcome\` |
 | register | $reg |

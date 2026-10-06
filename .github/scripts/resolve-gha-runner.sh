@@ -45,7 +45,15 @@ emit_from_csv() {
       echo "ERROR: invalid runner label: $p" >&2
       exit 1
     fi
-    if [[ "$p" == "self-hosted" ]]; then
+    lp="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
+    case "$lp" in
+      self-hosted|windows|linux|macos|x64|arm64|arm) ;;
+      *)
+        echo "Ignoring non-allowlisted runner label"
+        continue
+        ;;
+    esac
+    if [[ "$lp" == "self-hosted" ]]; then
       has_self=1
     fi
     skip=0
@@ -68,6 +76,46 @@ emit_from_csv() {
   echo "max_parallel=1" >> "$GITHUB_OUTPUT"
   echo "self_hosted=true" >> "$GITHUB_OUTPUT"
   echo "Runner labels: ${json}"
+}
+
+# Owner-only self-hosted: repository owner, same-repo PR (not fork), dispatch by owner.
+self_hosted_authorized() {
+  local owner="${GITHUB_REPOSITORY_OWNER:-}"
+  local actor="${GITHUB_ACTOR:-}"
+  local trigger="${GITHUB_TRIGGERING_ACTOR:-$actor}"
+  if [[ -z "$owner" || -z "$actor" || "$actor" != "$owner" || "$trigger" != "$owner" ]]; then
+    return 1
+  fi
+  case "${GITHUB_EVENT_NAME}" in
+    workflow_dispatch)
+      return 0
+      ;;
+    pull_request)
+      local repo="${GITHUB_REPOSITORY:-}"
+      local head="${PR_HEAD_REPO:-}"
+      local author="${PR_AUTHOR:-}"
+      local fork="${PR_HEAD_FORK:-false}"
+      if [[ -z "$repo" || "$head" != "$repo" || "$author" != "$owner" ]]; then
+        return 1
+      fi
+      if [[ "$fork" == "true" || "$fork" == "True" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+emit_self_or_hosted() {
+  if ! self_hosted_authorized; then
+    echo "Self-hosted not authorized for this event/actor; using GitHub-hosted"
+    emit_hosted
+    return 0
+  fi
+  emit_from_csv "$1"
 }
 
 # Keep only PR labels that are GHA runner labels (not issue taxonomy).
@@ -107,12 +155,11 @@ case "${GITHUB_EVENT_NAME}" in
     if [[ -z "$raw" ]]; then
       raw="$(trim "${VAR_LABELS:-}")"
     fi
-    emit_from_csv "$raw"
+    emit_self_or_hosted "$raw"
     ;;
   pull_request)
     if csv="$(pr_runner_csv)"; then
-      echo "PR runner labels: $csv"
-      emit_from_csv "$csv"
+      emit_self_or_hosted "$csv"
     else
       emit_hosted
     fi

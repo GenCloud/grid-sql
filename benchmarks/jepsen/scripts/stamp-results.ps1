@@ -14,7 +14,7 @@ $Command = if ($env:COMMAND) { $env:COMMAND } else { "run-jepsen-smoke.ps1" }
 
 try { $Git = (git -C $Repo rev-parse --short HEAD 2>$null) } catch { $Git = "unknown" }
 if (-not $Git) { $Git = "unknown" }
-$HostName = $env:COMPUTERNAME
+$HostName = if ($env:GITHUB_ACTIONS -eq "true") { "gha" } else { "local" }
 $Date = Get-Date -Format "o"
 
 $history = @()
@@ -66,10 +66,10 @@ if ($history.Count -gt 0) {
 }
 $out += $block
 [IO.File]::WriteAllText($Results, $out, [Text.UTF8Encoding]::new($false))
-Write-Host "Wrote $Results stamp=$Stamp outcome=$Outcome"
+Write-Host "Wrote RESULTS.md stamp=$Stamp outcome=$Outcome"
 
 $updateDocs = Join-Path $Repo "scripts\update-perf-results-docs.ps1"
-if (Test-Path $updateDocs) {
+if (($env:GITHUB_ACTIONS -ne "true") -and (Test-Path $updateDocs)) {
   try {
     & $updateDocs
   } catch {

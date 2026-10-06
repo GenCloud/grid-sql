@@ -23,7 +23,7 @@ if ($env:JEPSEN_MDC_CTR_PREFIX) { [void]$prefixes.Add($env:JEPSEN_MDC_CTR_PREFIX
 [void]$prefixes.Add("jamoa-multidc")
 $unique = @($prefixes | Select-Object -Unique)
 
-Write-Host "dump-jepsen-cluster-logs -> $OutDir"
+Write-Host "dump-jepsen-cluster-logs -> $(Get-JepsenSafeLogPath $OutDir)"
 $psLines = @(
   "stamp=$stamp instance=$($env:JEPSEN_INSTANCE)",
   "time=$(Get-Date -Format o)",
@@ -80,7 +80,8 @@ $summary = @(
   "containers_created_only=$createdOnly"
 )
 $summary | Tee-Object -FilePath (Join-Path $OutDir "SUMMARY.txt") | ForEach-Object { Write-Host $_ }
-Write-Host "DUMP_DIR=$OutDir"
-[IO.File]::WriteAllText((Join-Path $JEPSEN_DIR "cluster-logs\LATEST.txt"), $OutDir)
-[IO.File]::WriteAllText((Join-Path $JEPSEN_DIR "CLUSTER_LOGS_DIR.txt"), $OutDir)
+$safeDump = Get-JepsenSafeLogPath $OutDir
+Write-Host "DUMP_DIR=$safeDump"
+[IO.File]::WriteAllText((Join-Path $JEPSEN_DIR "cluster-logs\LATEST.txt"), $safeDump)
+[IO.File]::WriteAllText((Join-Path $JEPSEN_DIR "CLUSTER_LOGS_DIR.txt"), $safeDump)
 exit 0

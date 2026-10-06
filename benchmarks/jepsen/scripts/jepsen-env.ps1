@@ -21,6 +21,26 @@ function Get-JepsenRepoRoot {
   throw "Cannot locate repo root (pom.xml + benchmarks/jepsen) from $FromScriptRoot"
 }
 
+function Get-JepsenPublicHostLabel {
+  if ($env:GITHUB_ACTIONS -eq "true") { return "gha" }
+  return "local"
+}
+
+function Get-JepsenSafeLogPath {
+  param([string]$PathValue)
+  if (-not $PathValue) { return "" }
+  if ($env:GITHUB_ACTIONS -ne "true") { return $PathValue }
+  $ws = [string]$env:GITHUB_WORKSPACE
+  if ($ws -and $PathValue.StartsWith($ws, [StringComparison]::OrdinalIgnoreCase)) {
+    return $PathValue.Substring($ws.Length).TrimStart('\', '/')
+  }
+  $up = [string]$env:USERPROFILE
+  if ($up -and $PathValue.StartsWith($up, [StringComparison]::OrdinalIgnoreCase)) {
+    return "~" + $PathValue.Substring($up.Length)
+  }
+  return "(host-path)"
+}
+
 function Get-JepsenDir {
   param([string]$FromScriptRoot = $PSScriptRoot)
   $root = Get-JepsenRepoRoot -FromScriptRoot $FromScriptRoot

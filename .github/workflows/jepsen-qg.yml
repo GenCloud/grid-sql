@@ -1,7 +1,8 @@
 # Jepsen QG lab gate — separate from unit CI (never co-run with Load/JMH/OSS).
 # Full matrix A–M: benchmarks/jepsen/COVERAGE.md
 # Default runs-on: ubuntu-latest.
-# Self-hosted: PR label "self-hosted" (plus optional OS/arch labels), or dispatch / JEPSEN_RUNNER_LABELS.
+# Self-hosted (owner-only): repository owner + same-repo PR label "self-hosted",
+# or owner dispatch / JEPSEN_RUNNER_LABELS. Forks and non-owner actors stay on ubuntu-latest.
 # Script flavor follows runner.os (Linux → bash .sh, Windows → powershell.exe .ps1).
 # Never shell: pwsh — self-hosted Windows often has only Windows PowerShell 5.1.
 name: Jepsen QG
@@ -48,6 +49,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 env:
   JEPSEN_TIME_LIMIT: ${{ github.event.inputs.time_limit || '60' }}
@@ -79,12 +81,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Pick runs-on from labels
         id: pick
         env:
           DISPATCH_LABELS: ${{ github.event.inputs.runner_labels || '' }}
           VAR_LABELS: ${{ vars.JEPSEN_RUNNER_LABELS || vars.GHA_RUNNER_LABELS || '' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+          PR_HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: bash .github/scripts/resolve-gha-runner.sh
 
@@ -95,6 +102,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Validate (Linux)
         if: runner.os == 'Linux'
@@ -138,6 +147,20 @@ jobs:
       skip_rebuild: ${{ steps.set_linux.outputs.skip_rebuild || steps.set_win.outputs.skip_rebuild }}
       max_parallel: ${{ needs.resolve-runner.outputs.max_parallel }}
     steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
       - name: Build matrix JSON (A–M) — Linux
         id: set_linux
         if: runner.os == 'Linux'
@@ -247,8 +270,28 @@ jobs:
     runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 60
     steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Harden self-hosted logs
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Set up Temurin JDK 25
         uses: actions/setup-java@v4
@@ -256,6 +299,10 @@ jobs:
           distribution: temurin
           java-version: "25"
           cache: maven
+
+      - name: Harden after JDK
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Build image (Linux)
         if: runner.os == 'Linux'
@@ -326,8 +373,28 @@ jobs:
       max-parallel: ${{ fromJSON(needs.resolve-runner.outputs.max_parallel) }}
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Harden self-hosted logs
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Set up Temurin JDK 25
         uses: actions/setup-java@v4
@@ -335,6 +402,10 @@ jobs:
           distribution: temurin
           java-version: "25"
           cache: maven
+
+      - name: Harden after JDK
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Download Jepsen image
         uses: actions/download-artifact@v4
@@ -511,6 +582,20 @@ jobs:
     runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 5
     steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
       - name: Aggregate job outcomes (Linux)
         if: runner.os == 'Linux'
         env:

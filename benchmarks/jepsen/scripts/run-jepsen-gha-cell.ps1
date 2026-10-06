@@ -82,11 +82,11 @@ if (-not (Test-Path -LiteralPath $scriptPath)) {
     $scriptPath = $shPath
     $cell.kind = "bash"
   } else {
-    throw "Missing cell script: $scriptPath (also no $shPath). ROOT=$ROOT JEPSEN_DIR=$JEPSEN_DIR"
+    throw "Missing cell script $(Split-Path $relWin -Leaf)"
   }
 }
 
-Write-Host "=== cell $Id config=$Config TL=$TimeLimit JEPSEN_M2=$($env:JEPSEN_M2) ROOT=$ROOT script=$scriptPath ==="
+Write-Host "=== cell $Id config=$Config TL=$TimeLimit script=$(Split-Path $scriptPath -Leaf) ==="
 
 $code = 1
 try {
@@ -119,7 +119,7 @@ if ($cell.qg -eq 1 -and $code -eq 0) {
       if ($_ -match '^\s*APPEND_HISTORY=(.+)\s*$') { $app = $Matches[1].Trim('"') }
     }
     if ($reg -and $app) {
-      Write-Host "qg-gate register=$reg append=$app"
+      Write-Host "qg-gate histories present"
       $qg = Join-Path $PSScriptRoot "qg-gate.ps1"
       & $qg -RegisterHistory $reg -AppendHistory $app -CiAdvisory
       if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
@@ -137,7 +137,7 @@ if ($code -ne 0 -and -not $SkipDumpOnFail) {
   $dumpDir = Join-Path $JEPSEN_DIR "cluster-logs\$Id-$Config"
   $dumpPs1 = Join-Path $PSScriptRoot "dump-jepsen-cluster-logs.ps1"
   if (Test-Path $dumpPs1) {
-    Write-Host "=== FAIL: dumping cluster logs -> $dumpDir ==="
+    Write-Host "=== FAIL: dumping cluster logs -> cluster-logs/$Id-$Config ==="
     & $dumpPs1 -OutDir $dumpDir
   }
 }

@@ -16,7 +16,7 @@ compose_down() {
     echo "WARN: no compose in $dir"
     return 0
   fi
-  echo "compose down -v --remove-orphans in $dir"
+  echo "compose down -v --remove-orphans"
   ( cd "$dir" && docker compose down -v --remove-orphans ) || true
 }
 
@@ -24,7 +24,7 @@ witness_overlay_down() {
   if [[ ! -f "$WITNESS_OVERLAY" || ! -f "$MULTIDC_DIR/docker-compose.yml" ]]; then
     return 0
   fi
-  echo "compose down (witness overlay) in $MULTIDC_DIR"
+  echo "compose down (witness overlay)"
   ( cd "$MULTIDC_DIR" && docker compose -f docker-compose.yml -f "$WITNESS_OVERLAY" down -v --remove-orphans ) || true
 }
 
