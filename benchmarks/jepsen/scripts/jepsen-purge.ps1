@@ -27,7 +27,7 @@ function Invoke-ComposeDown([string]$Dir) {
   }
   Push-Location $Dir
   try {
-    Write-Host "compose down -v --remove-orphans in $Dir"
+    Write-Host "compose down -v --remove-orphans"
     docker compose down -v --remove-orphans 2>$null
   } finally {
     Pop-Location
@@ -43,7 +43,7 @@ function Invoke-WitnessOverlayDown {
   }
   Push-Location $MULTIDC_DIR
   try {
-    Write-Host "compose down (witness overlay) in $MULTIDC_DIR"
+    Write-Host "compose down (witness overlay)"
     docker compose -f docker-compose.yml -f $WITNESS_OVERLAY down -v --remove-orphans 2>$null
   } finally {
     Pop-Location

@@ -86,7 +86,8 @@ function Stamp-Multidc {
   [void]$sb.AppendLine("| stamp | ``$Stamp`` |")
   [void]$sb.AppendLine("| date | $Date |")
   [void]$sb.AppendLine("| git | $Git |")
-  [void]$sb.AppendLine("| host | $($env:COMPUTERNAME) |")
+  $hostLabel = if ($env:GITHUB_ACTIONS -eq "true") { "gha" } else { "local" }
+  [void]$sb.AppendLine("| host | $hostLabel |")
   [void]$sb.AppendLine("| mode | ``$ModeLabel`` (topology 3+2) |")
   [void]$sb.AppendLine("| outcome | ``$Outcome`` |")
   [void]$sb.AppendLine("| register | $Reg |")

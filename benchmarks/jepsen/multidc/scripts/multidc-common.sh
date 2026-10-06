@@ -86,7 +86,7 @@ Honest PASS/FAIL after Docker+lein (never invent \`:valid? true\`).
 | stamp | \`$stamp\` |
 | date | $date_iso |
 | git | $git |
-| host | $(hostname 2>/dev/null || echo unknown) |
+| host | $(if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then echo gha; else hostname 2>/dev/null || echo unknown; fi) |
 | mode | $MODE_LABEL ($MODE) |
 | outcome | \`$outcome\` |
 | register | $reg |

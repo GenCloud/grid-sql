@@ -29,4 +29,4 @@ $ruRedirect = $ruTitle + "`r`n`r`n" + $ruMoved + "`r`n"
 
 [IO.File]::WriteAllText($enRedirectPath, $enRedirect, $utf8)
 [IO.File]::WriteAllText($ruRedirectPath, $ruRedirect, $utf8)
-Write-Host "Wrote redirects $enRedirectPath / $ruRedirectPath (results/ untouched)"
+Write-Host "Wrote redirects docs/en/perf-results.md / docs/ru/perf-results.md (results/ untouched)"

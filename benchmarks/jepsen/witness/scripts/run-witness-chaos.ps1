@@ -79,7 +79,8 @@ function Stamp-Witness {
   [void]$sb.AppendLine("| stamp | " + $tick + $tick + $Stamp + $tick + $tick + " |")
   [void]$sb.AppendLine("| date | $Date |")
   [void]$sb.AppendLine("| git | $Git |")
-  [void]$sb.AppendLine("| host | $($env:COMPUTERNAME) |")
+  $hostLabel = if ($env:GITHUB_ACTIONS -eq "true") { "gha" } else { "local" }
+  [void]$sb.AppendLine("| host | $hostLabel |")
   [void]$sb.AppendLine("| topology | Active+Hold+Hold+Witness (async Multi-DC + w1) |")
   [void]$sb.AppendLine("| outcome | " + $tick + $tick + $Outcome + $tick + $tick + " |")
   [void]$sb.AppendLine("| register | $Reg |")

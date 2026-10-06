@@ -1,12 +1,24 @@
 # Jepsen QG lab gate — separate from unit CI (never co-run with Load/JMH/OSS).
 # Full matrix A–M: benchmarks/jepsen/COVERAGE.md
-# Triggers: workflow_dispatch, nightly, push main/master; PR only with label jepsen.
-# Always-on validate-matrix job syncs COVERAGE <-> scripts <-> this workflow.
+# Default runs-on: ubuntu-latest.
+# Self-hosted (owner-only): repository owner + same-repo PR label "self-hosted",
+# or owner dispatch / JEPSEN_RUNNER_LABELS. Forks and non-owner actors stay on ubuntu-latest.
+# Script flavor follows runner.os (Linux → bash .sh, Windows → powershell.exe .ps1).
+# Never shell: pwsh — self-hosted Windows often has only Windows PowerShell 5.1.
 name: Jepsen QG
 
 on:
   workflow_dispatch:
     inputs:
+      runner_labels:
+        description: >
+          Self-hosted runner labels, comma-separated (e.g. Windows or linux,x64).
+          Empty uses repo var JEPSEN_RUNNER_LABELS; still empty = ubuntu-latest.
+          github / ubuntu-latest / hosted = force GitHub-hosted.
+          Label self-hosted is added automatically.
+        required: false
+        default: ""
+        type: string
       time_limit:
         description: JEPSEN_TIME_LIMIT (seconds); join/swarm enforce min 60
         required: false
@@ -17,20 +29,27 @@ on:
         required: false
         default: "all"
         type: string
+      skip_rebuild:
+        description: Reuse local jamoa-grid-jepsen:local when present (0/1)
+        required: false
+        default: "0"
+        type: choice
+        options: ["0", "1"]
   schedule:
     - cron: "0 3 * * *"
   push:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 concurrency:
-  group: jepsen-qg-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: jepsen-qg-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.inputs.runner_labels || 'hosted' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: write
 
 env:
   JEPSEN_TIME_LIMIT: ${{ github.event.inputs.time_limit || '60' }}
@@ -38,27 +57,15 @@ env:
   MULTIDC_SKIP_REBUILD: "1"
   MULTIDC_FULL: "1"
   DOCKER_BUILDKIT: "1"
+  MSYS_NO_PATHCONV: "1"
+  MSYS2_ARG_CONV_EXCL: "*"
   MAVEN_OPTS: >-
     -Xmx2g
     -Dfile.encoding=UTF-8
 
 jobs:
-  validate-matrix:
-    name: Validate A–M matrix sync
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Validate COVERAGE / scripts / workflow
-        run: |
-          chmod +x benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
-          bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
-
-  prepare:
-    name: Prepare matrix
-    needs: validate-matrix
+  resolve-runner:
+    name: Resolve runner labels
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: >
@@ -68,15 +75,100 @@ jobs:
       (github.event_name == 'pull_request' &&
        contains(join(github.event.pull_request.labels.*.name, ','), 'jepsen'))
     outputs:
-      matrix: ${{ steps.set.outputs.matrix }}
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+      max_parallel: ${{ steps.pick.outputs.max_parallel }}
+      self_hosted: ${{ steps.pick.outputs.self_hosted }}
     steps:
-      - name: Build matrix JSON (A–M)
-        id: set
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Pick runs-on from labels
+        id: pick
+        env:
+          DISPATCH_LABELS: ${{ github.event.inputs.runner_labels || '' }}
+          VAR_LABELS: ${{ vars.JEPSEN_RUNNER_LABELS || vars.GHA_RUNNER_LABELS || '' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+          PR_HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: bash .github/scripts/resolve-gha-runner.sh
+
+  validate-matrix:
+    name: Validate A–M matrix sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+          bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+
+      - name: Validate (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $bash = $null
+          foreach ($c in @(
+            "$env:ProgramFiles\Git\bin\bash.exe",
+            "$env:ProgramFiles\Git\usr\bin\bash.exe",
+            "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+          )) {
+            if ($c -and (Test-Path -LiteralPath $c)) { $bash = $c; break }
+          }
+          if (-not $bash) {
+            $cmd = Get-Command bash -EA SilentlyContinue
+            if ($cmd) { $bash = $cmd.Source }
+          }
+          if (-not $bash) { throw "Git Bash required for validate-jepsen-gha-matrix.sh on Windows" }
+          & $bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  prepare:
+    name: Prepare matrix
+    needs: [validate-matrix, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
+    timeout-minutes: 5
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       contains(join(github.event.pull_request.labels.*.name, ','), 'jepsen'))
+    outputs:
+      matrix: ${{ steps.set_linux.outputs.matrix || steps.set_win.outputs.matrix }}
+      skip_rebuild: ${{ steps.set_linux.outputs.skip_rebuild || steps.set_win.outputs.skip_rebuild }}
+      max_parallel: ${{ needs.resolve-runner.outputs.max_parallel }}
+    steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
+      - name: Build matrix JSON (A–M) — Linux
+        id: set_linux
+        if: runner.os == 'Linux'
         env:
           PROFILES: ${{ github.event.inputs.profiles || 'all' }}
+          SKIP_REBUILD: ${{ github.event.inputs.skip_rebuild || '0' }}
         run: |
           set -euo pipefail
-          # id|config|script|scope|join|swarm|unclean|qg|min_tl
           ROWS=(
             "A|1dc-chaos|benchmarks/jepsen/scripts/run-jepsen.sh|1dc|0|0|0|0|60"
             "B|1dc-unclean-revive|benchmarks/jepsen/scripts/run-jepsen-unclean-revive.sh|1dc|0|0|1|0|60"
@@ -122,18 +214,84 @@ jobs:
             exit 1
           fi
           matrix="$(printf '%s\n' "${items[@]}" | jq -cs '{include:.}')"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "Prepared ${#items[@]} cell(s):"
+          {
+            echo "matrix=$matrix"
+            echo "skip_rebuild=$SKIP_REBUILD"
+          } >> "$GITHUB_OUTPUT"
+          echo "Prepared ${#items[@]} cell(s) runner.os=$RUNNER_OS"
           echo "$matrix" | jq -r '.include[] | "\(.id) \(.config)"'
+
+      - name: Build matrix JSON (A–M) — Windows
+        id: set_win
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          PROFILES: ${{ github.event.inputs.profiles || 'all' }}
+          SKIP_REBUILD: ${{ github.event.inputs.skip_rebuild || '0' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rows = @(
+            @{id='A';config='1dc-chaos';script='benchmarks/jepsen/scripts/run-jepsen.sh';scope='1dc';join='0';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='B';config='1dc-unclean-revive';script='benchmarks/jepsen/scripts/run-jepsen-unclean-revive.sh';scope='1dc';join='0';swarm='0';unclean='1';qg='0';min_tl=60},
+            @{id='C';config='1dc-nochao';script='benchmarks/jepsen/scripts/run-jepsen-nochao.sh';scope='1dc';join='0';swarm='0';unclean='0';qg='1';min_tl=60},
+            @{id='D';config='multidc-async-chaos';script='benchmarks/jepsen/multidc/scripts/run-multidc-chaos.sh async';scope='multidc';join='0';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='E';config='multidc-sync-chaos';script='benchmarks/jepsen/multidc/scripts/run-multidc-chaos.sh sync-voters';scope='multidc';join='0';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='F';config='multidc-async-nochao';script='benchmarks/jepsen/multidc/scripts/run-multidc-nochao.sh async';scope='multidc';join='0';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='G';config='multidc-sync-nochao';script='benchmarks/jepsen/multidc/scripts/run-multidc-nochao.sh sync-voters';scope='multidc';join='0';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='H';config='witness-chaos';script='benchmarks/jepsen/witness/scripts/run-witness-chaos.sh';scope='multidc';join='0';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='I';config='multidc-unclean-revive';script='benchmarks/jepsen/multidc/scripts/run-multidc-unclean-revive.sh';scope='multidc';join='0';swarm='0';unclean='1';qg='0';min_tl=60},
+            @{id='J';config='1dc-swarm-chaos';script='benchmarks/jepsen/scripts/run-jepsen-swarm.sh';scope='1dc';join='0';swarm='1';unclean='0';qg='0';min_tl=60},
+            @{id='K';config='1dc-join-shards';script='benchmarks/jepsen/scripts/run-jepsen-join.sh';scope='1dc';join='1';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='L';config='multidc-async-swarm';script='benchmarks/jepsen/multidc/scripts/run-multidc-swarm.sh';scope='multidc';join='0';swarm='1';unclean='0';qg='0';min_tl=60},
+            @{id='M';config='multidc-async-join';script='benchmarks/jepsen/multidc/scripts/run-multidc-join.sh';scope='multidc';join='1';swarm='0';unclean='0';qg='0';min_tl=60}
+          )
+          $want = @()
+          if ($env:PROFILES -ne 'all') {
+            $want = @($env:PROFILES.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          }
+          $include = @()
+          foreach ($r in $rows) {
+            if ($want.Count -gt 0 -and ($want -notcontains $r.config) -and ($want -notcontains $r.id)) { continue }
+            $include += [ordered]@{
+              id=$r.id; config=$r.config; script=$r.script; scope=$r.scope
+              join=$r.join; swarm=$r.swarm; unclean=$r.unclean; qg=$r.qg; min_tl=$r.min_tl
+            }
+          }
+          if ($include.Count -eq 0) { throw "profiles filter matched zero cells: $($env:PROFILES)" }
+          $matrixJson = (@{ include = $include } | ConvertTo-Json -Compress -Depth 6)
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "matrix=$matrixJson" -Encoding utf8
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "skip_rebuild=$($env:SKIP_REBUILD)" -Encoding utf8
+          Write-Host "Prepared $($include.Count) cell(s) runner.os=$env:RUNNER_OS"
+          $include | ForEach-Object { Write-Host "$($_.id) $($_.config)" }
 
   build-image:
     name: Build Jepsen image
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    needs: [prepare, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
+    timeout-minutes: 60
     steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Harden self-hosted logs
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Set up Temurin JDK 25
         uses: actions/setup-java@v4
@@ -142,40 +300,101 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Package client + Jepsen starter
-        run: >
-          mvn -B -ntp
-          -pl grid-sql-client,grid-sql-jepsen-starter
-          -am package
-          -DskipTests
+      - name: Harden after JDK
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
-      - name: Build jamoa-grid-jepsen:local
-        run: bash benchmarks/jepsen/scripts/build-jepsen-image.sh
-
-      - name: Save image artifact
+      - name: Build image (Linux)
+        if: runner.os == 'Linux'
+        env:
+          SKIP_REBUILD: ${{ needs.prepare.outputs.skip_rebuild }}
         run: |
+          set -euo pipefail
+          if [[ "${SKIP_REBUILD}" == "1" ]] && docker image inspect jamoa-grid-jepsen:local >/dev/null 2>&1; then
+            echo "Reuse existing jamoa-grid-jepsen:local"
+          else
+            mvn -B -ntp -pl grid-sql-client,grid-sql-jepsen-starter -am package -DskipTests
+            bash benchmarks/jepsen/scripts/build-jepsen-image.sh
+          fi
+          docker image inspect jamoa-grid-jepsen:local >/dev/null
           docker save jamoa-grid-jepsen:local | gzip -1 > jepsen-image.tar.gz
           ls -lh jepsen-image.tar.gz
+
+      - name: Build image (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          SKIP_REBUILD: ${{ needs.prepare.outputs.skip_rebuild }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          . .\benchmarks\jepsen\scripts\jepsen-env.ps1
+          Initialize-JepsenHostEnv
+          Add-Content -Path $env:GITHUB_ENV -Value "JEPSEN_M2=$($env:JEPSEN_M2)" -Encoding utf8
+          docker version
+          $needBuild = $true
+          if ($env:SKIP_REBUILD -eq "1") {
+            docker image inspect jamoa-grid-jepsen:local 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $needBuild = $false; Write-Host "Reuse existing jamoa-grid-jepsen:local" }
+          }
+          if ($needBuild) {
+            & .\benchmarks\jepsen\scripts\build-jepsen-image.ps1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          docker image inspect jamoa-grid-jepsen:local | Out-Null
+          docker save jamoa-grid-jepsen:local -o jepsen-image.tar
+          $gzExe = Join-Path $env:ProgramFiles "Git\usr\bin\gzip.exe"
+          if (Test-Path $gzExe) {
+            & $gzExe -1 -f jepsen-image.tar
+          } elseif (Get-Command gzip -EA SilentlyContinue) {
+            gzip -1 -f jepsen-image.tar
+          } else {
+            Write-Host "gzip not found; artifact will be uncompressed tar"
+          }
+          Get-ChildItem jepsen-image.tar* | Format-Table Name, Length
 
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
           name: jamoa-grid-jepsen-image
-          path: jepsen-image.tar.gz
+          path: |
+            jepsen-image.tar.gz
+            jepsen-image.tar
           retention-days: 3
           if-no-files-found: error
 
   matrix:
     name: Jepsen ${{ matrix.id }} ${{ matrix.config }}
-    needs: [prepare, build-image]
-    runs-on: ubuntu-latest
+    needs: [prepare, build-image, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
+      # self-hosted shares SQL/HTTP binds → serialize; ubuntu-latest can fan out a bit.
+      max-parallel: ${{ fromJSON(needs.resolve-runner.outputs.max_parallel) }}
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Harden self-hosted logs
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Set up Temurin JDK 25
         uses: actions/setup-java@v4
@@ -184,34 +403,64 @@ jobs:
           java-version: "25"
           cache: maven
 
+      - name: Harden after JDK
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
+
       - name: Download Jepsen image
         uses: actions/download-artifact@v4
         with:
           name: jamoa-grid-jepsen-image
-          path: /tmp/jepsen-ci
+          path: jepsen-ci-image
 
-      - name: Load image
+      - name: Load image (Linux)
+        if: runner.os == 'Linux'
         run: |
-          gunzip -c /tmp/jepsen-ci/jepsen-image.tar.gz | docker load
+          set -euo pipefail
+          if [[ -f jepsen-ci-image/jepsen-image.tar.gz ]]; then
+            gunzip -c jepsen-ci-image/jepsen-image.tar.gz | docker load
+          else
+            docker load -i jepsen-ci-image/jepsen-image.tar
+          fi
           docker image inspect jamoa-grid-jepsen:local >/dev/null
 
-      - name: Install grid-sql-client (control classpath)
+      - name: Load image (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          . .\benchmarks\jepsen\scripts\jepsen-env.ps1
+          Initialize-JepsenHostEnv
+          Add-Content -Path $env:GITHUB_ENV -Value "JEPSEN_M2=$($env:JEPSEN_M2)" -Encoding utf8
+          $gz = "jepsen-ci-image\jepsen-image.tar.gz"
+          $tar = "jepsen-ci-image\jepsen-image.tar"
+          if (Test-Path $gz) {
+            $gzExe = Join-Path $env:ProgramFiles "Git\usr\bin\gzip.exe"
+            if (Test-Path $gzExe) { & $gzExe -dc $gz | docker load }
+            elseif (Get-Command gzip -EA SilentlyContinue) { gzip -dc $gz | docker load }
+            else { throw "gzip not found to load $gz" }
+          } elseif (Test-Path $tar) {
+            docker load -i $tar
+          } else {
+            throw "No jepsen-image.tar(.gz) in artifact"
+          }
+          docker image inspect jamoa-grid-jepsen:local | Out-Null
+
+      - name: Install grid-sql-client (Linux)
+        if: runner.os == 'Linux'
         run: mvn -B -ntp -pl grid-sql-client -am install -DskipTests
 
-      - name: Make scripts executable
+      - name: Install grid-sql-client (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
         run: |
-          chmod +x benchmarks/jepsen/scripts/*.sh \
-            benchmarks/jepsen/multidc/scripts/*.sh \
-            benchmarks/jepsen/witness/scripts/*.sh || true
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -B -ntp -pl grid-sql-client -am install "-DskipTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Purge Jepsen volumes
+      - name: Run profile (Linux bash)
+        if: runner.os == 'Linux'
         env:
-          SCOPE: ${{ matrix.scope }}
-        run: bash benchmarks/jepsen/scripts/jepsen-purge.sh "$SCOPE"
-
-      - name: Run profile ${{ matrix.id }} ${{ matrix.config }}
-        env:
-          JEPSEN_M2: /home/runner/.m2
           MULTIDC_FULL: "1"
           MULTIDC_SKIP_REBUILD: "1"
           JEPSEN_JOIN_SHARDS: ${{ matrix.join == '1' && '1' || '' }}
@@ -220,8 +469,14 @@ jobs:
           JEPSEN_UNCLEAN_DOWN_SEC: ${{ matrix.unclean == '1' && '15' || '' }}
           CELL_MIN_TL: ${{ matrix.min_tl }}
           CELL_SCRIPT: ${{ matrix.script }}
+          SCOPE: ${{ matrix.scope }}
         run: |
           set -euo pipefail
+          export JEPSEN_M2="${JEPSEN_M2:-$HOME/.m2}"
+          chmod +x benchmarks/jepsen/scripts/*.sh \
+            benchmarks/jepsen/multidc/scripts/*.sh \
+            benchmarks/jepsen/witness/scripts/*.sh || true
+          bash benchmarks/jepsen/scripts/jepsen-purge.sh "$SCOPE"
           base_tl="${JEPSEN_TIME_LIMIT:-60}"
           min_tl="${CELL_MIN_TL:-60}"
           if [[ "$base_tl" -lt "$min_tl" ]]; then
@@ -229,20 +484,18 @@ jobs:
           else
             export JEPSEN_TIME_LIMIT="$base_tl"
           fi
-          # Clear opposite flags so join/swarm/unclean never bleed.
           if [[ "${JEPSEN_JOIN_SHARDS}" != "1" ]]; then unset JEPSEN_JOIN_SHARDS || true; fi
           if [[ "${JEPSEN_SWARM}" != "1" ]]; then unset JEPSEN_SWARM || true; fi
           if [[ "${JEPSEN_UNCLEAN_REVIVE}" != "1" ]]; then
             unset JEPSEN_UNCLEAN_REVIVE || true
             unset JEPSEN_UNCLEAN_DOWN_SEC || true
           fi
-          echo "=== cell ${{ matrix.id }} config=${{ matrix.config }} TL=$JEPSEN_TIME_LIMIT script=$CELL_SCRIPT ==="
+          echo "=== cell ${{ matrix.id }} config=${{ matrix.config }} runner.os=$RUNNER_OS TL=$JEPSEN_TIME_LIMIT script=$CELL_SCRIPT ==="
           # shellcheck disable=SC2086
           bash $CELL_SCRIPT
 
-      - name: qg-gate (nochao latency)
-        if: matrix.qg == '1'
-        shell: bash
+      - name: qg-gate (Linux nochao)
+        if: runner.os == 'Linux' && matrix.qg == '1'
         run: |
           set -euo pipefail
           ARTIFACTS="benchmarks/jepsen/ARTIFACTS.txt"
@@ -262,21 +515,53 @@ jobs:
             -RegisterHistory "$REGISTER_HISTORY" \
             -AppendHistory "$APPEND_HISTORY"
 
-      - name: Dump cluster logs on failure
-        if: failure()
+      - name: Run profile (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          CELL_ID: ${{ matrix.id }}
+          CELL_CONFIG: ${{ matrix.config }}
+          CELL_MIN_TL: ${{ matrix.min_tl }}
+          SKIP_REBUILD: ${{ needs.prepare.outputs.skip_rebuild }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          . .\benchmarks\jepsen\scripts\jepsen-env.ps1
+          Initialize-JepsenHostEnv
+          $tl = [int]($env:JEPSEN_TIME_LIMIT)
+          $minTl = [int]$env:CELL_MIN_TL
+          $splat = @{
+            Id = $env:CELL_ID
+            Config = $env:CELL_CONFIG
+            TimeLimit = $tl
+            MinTimeLimit = $minTl
+          }
+          if ($env:SKIP_REBUILD -eq "1") { $splat["SkipRebuild"] = $true }
+          Write-Host "=== cell $($env:CELL_ID) config=$($env:CELL_CONFIG) runner.os=$env:RUNNER_OS TL=$tl ==="
+          & .\benchmarks\jepsen\scripts\run-jepsen-gha-cell.ps1 @splat
+          exit $LASTEXITCODE
+
+      - name: Dump cluster logs on failure (Linux)
+        if: failure() && runner.os == 'Linux'
         run: |
           set +e
           chmod +x benchmarks/jepsen/scripts/dump-jepsen-cluster-logs.sh || true
-          # Containers may still be up if cell script failed before purge trap; dump best-effort.
           bash benchmarks/jepsen/scripts/dump-jepsen-cluster-logs.sh \
             "benchmarks/jepsen/cluster-logs/${{ matrix.id }}-${{ matrix.config }}" || true
           ls -la benchmarks/jepsen/cluster-logs || true
+
+      - name: Dump cluster logs on failure (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $out = Join-Path "benchmarks\jepsen\cluster-logs" "${{ matrix.id }}-${{ matrix.config }}"
+          & .\benchmarks\jepsen\scripts\dump-jepsen-cluster-logs.ps1 -OutDir $out
+          Get-ChildItem "benchmarks\jepsen\cluster-logs" -EA SilentlyContinue | Format-Table Name, Length
 
       - name: Upload RESULTS + histories
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jepsen-${{ matrix.id }}-${{ matrix.config }}-artifacts
+          name: jepsen-${{ runner.os }}-${{ matrix.id }}-${{ matrix.config }}-artifacts
           path: |
             benchmarks/jepsen/COVERAGE.md
             benchmarks/jepsen/RESULTS.md
@@ -292,15 +577,27 @@ jobs:
 
   summary:
     name: Matrix summary A–M
-    needs: [prepare, matrix]
+    needs: [prepare, matrix, resolve-runner]
     if: always() && needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 5
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Aggregate job outcomes
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
+      - name: Aggregate job outcomes (Linux)
+        if: runner.os == 'Linux'
         env:
           MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
           MATRIX_RESULT: ${{ needs.matrix.result }}
@@ -308,6 +605,8 @@ jobs:
           set -euo pipefail
           {
             echo "## Jepsen QG matrix"
+            echo ""
+            echo "Runner: \`$RUNNER_OS\` labels=\`${{ needs.resolve-runner.outputs.runs_on }}\`"
             echo ""
             echo "| ID | Config | Script |"
             echo "|----|--------|--------|"
@@ -323,3 +622,33 @@ jobs:
           if [[ "${MATRIX_RESULT}" != "success" ]]; then
             exit 1
           fi
+
+      - name: Aggregate job outcomes (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
+          MATRIX_RESULT: ${{ needs.matrix.result }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lines = @(
+            "## Jepsen QG matrix",
+            "",
+            "Runner: ``$env:RUNNER_OS`` labels=${{ needs.resolve-runner.outputs.runs_on }}",
+            "",
+            "| ID | Config | Script |",
+            "|----|--------|--------|"
+          )
+          $obj = $env:MATRIX_JSON | ConvertFrom-Json
+          foreach ($c in $obj.include) {
+            $lines += "| $($c.id) | ``$($c.config)`` | ``$($c.script)`` |"
+          }
+          $lines += ""
+          $lines += "Matrix job result: **$($env:MATRIX_RESULT)**"
+          if ($env:MATRIX_RESULT -ne "success") {
+            $lines += "One or more Jepsen cells failed — see matrix job logs / artifacts."
+          } else {
+            $lines += "All prepared cells completed successfully."
+          }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n") -Encoding utf8
+          if ($env:MATRIX_RESULT -ne "success") { exit 1 }

@@ -1,6 +1,12 @@
 # Build + unit/IT gate for Grid SQL (Java 25, --enable-preview).
 # Lab gates (QG / Jepsen / Multi-DC / OSS / JMH / Load) stay host-side; never co-run here.
-# Jepsen QG matrix A–M (1dc-*, multidc-*, swarm/join, witness) → jepsen-qg.yml — not this workflow.
+# Jepsen QG matrix A-M (1dc-*, multidc-*, swarm/join, witness) -> jepsen-qg.yml -- not this workflow.
+# Default runs-on: ubuntu-latest.
+# Self-hosted (owner-only): repository owner + same-repo PR label "self-hosted"
+# (optional Windows/Linux/macOS/X64/ARM64), or owner workflow_dispatch runner_labels / vars.
+# Fork PRs and non-owner actors always use ubuntu-latest.
+# Script flavor follows runner.os (Linux -> bash, Windows -> powershell.exe / mvn.cmd).
+# Never shell: pwsh — self-hosted Windows often has only Windows PowerShell 5.1.
 name: CI
 
 on:
@@ -8,11 +14,26 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
+    inputs:
+      runner_labels:
+        description: >
+          Self-hosted runner labels, comma-separated (e.g. Windows or linux,x64).
+          Empty uses repo var CI_RUNNER_LABELS, then GHA_RUNNER_LABELS; still empty = ubuntu-latest.
+          github / ubuntu-latest / hosted = force GitHub-hosted.
+          Label self-hosted is added automatically.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.inputs.runner_labels || 'hosted' }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
 
 env:
   MAVEN_OPTS: >-
@@ -22,13 +43,58 @@ env:
     -Dsun.stderr.encoding=UTF-8
 
 jobs:
-  build-test:
-    name: Build and test
+  resolve-runner:
+    name: Resolve runner labels
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 5
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+      self_hosted: ${{ steps.pick.outputs.self_hosted }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Pick runs-on from labels
+        id: pick
+        env:
+          DISPATCH_LABELS: ${{ github.event.inputs.runner_labels || '' }}
+          VAR_LABELS: ${{ vars.CI_RUNNER_LABELS || vars.GHA_RUNNER_LABELS || '' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+          PR_HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: bash .github/scripts/resolve-gha-runner.sh
+
+  build-test:
+    name: Build and test
+    needs: resolve-runner
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
+    timeout-minutes: 90
+    steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Harden self-hosted logs
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Set up Temurin JDK 25
         uses: actions/setup-java@v4
@@ -37,27 +103,74 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Verify Java
-        run: |
-          java -version
-          mvn -version
+      - name: Harden after JDK
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
-      - name: Compile (reactor, skip tests)
+      - name: Verify Java (Linux)
+        if: runner.os == 'Linux'
+        run: java -version
+
+      - name: Verify Java (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: java -version
+
+      - name: Compile (Linux)
+        if: runner.os == 'Linux'
         run: mvn -B -ntp package -DskipTests
 
-      - name: Test (Surefire unit + IT; JMH excluded by pom)
+      - name: Compile (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -B -ntp package "-DskipTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
         run: mvn -B -ntp verify
 
-      - name: Validate Jepsen A–M GHA matrix sync
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -B -ntp verify
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate Jepsen A-M GHA matrix sync (Linux)
+        if: runner.os == 'Linux'
         run: |
           chmod +x benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
           bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+
+      - name: Validate Jepsen A-M GHA matrix sync (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $bash = $null
+          foreach ($c in @(
+            "$env:ProgramFiles\Git\bin\bash.exe",
+            "$env:ProgramFiles\Git\usr\bin\bash.exe",
+            "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+          )) {
+            if ($c -and (Test-Path -LiteralPath $c)) { $bash = $c; break }
+          }
+          if (-not $bash) {
+            $cmd = Get-Command bash -EA SilentlyContinue
+            if ($cmd) { $bash = $cmd.Source }
+          }
+          if (-not $bash) { throw "Git Bash required for validate-jepsen-gha-matrix.sh on Windows" }
+          & $bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Surefire reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
+          name: surefire-reports-${{ runner.os }}
           path: |
             **/target/surefire-reports/**
             **/target/failsafe-reports/**
@@ -66,12 +179,32 @@ jobs:
 
   package-starters:
     name: Package product starters
-    runs-on: ubuntu-latest
+    needs: [build-test, resolve-runner]
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
     timeout-minutes: 30
-    needs: build-test
     steps:
+      - name: Mask host identity (Linux)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os != 'Windows'
+        run: |
+          m() { [ -n "${1:-}" ] && [ "${#1}" -ge 4 ] && echo "::add-mask::$1"; }
+          m "${USER:-}"; m "${HOME:-}"; m "${HOSTNAME:-}"; m "${RUNNER_NAME:-}"
+          m "${GITHUB_WORKSPACE:-}"; m "${RUNNER_TEMP:-}"; m "${USERPROFILE:-}"
+          m "$(hostname 2>/dev/null || true)"
+      - name: Mask host identity (Windows)
+        if: needs.resolve-runner.outputs.self_hosted == 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
+          M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
+          M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Harden self-hosted logs
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
 
       - name: Set up Temurin JDK 25
         uses: actions/setup-java@v4
@@ -80,17 +213,30 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Package server + Jepsen starters
+      - name: Harden after JDK
+        if: needs.resolve-runner.outputs.self_hosted == 'true'
+        uses: ./.github/actions/harden-self-hosted
+
+      - name: Package server + Jepsen starters (Linux)
+        if: runner.os == 'Linux'
         run: >
           mvn -B -ntp
           -pl grid-sql-server-starter,grid-sql-jepsen-starter
           -am package
           -DskipTests
 
+      - name: Package server + Jepsen starters (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
+          & $mvn -B -ntp -pl grid-sql-server-starter,grid-sql-jepsen-starter -am package "-DskipTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload fat jars
         uses: actions/upload-artifact@v4
         with:
-          name: grid-sql-starters
+          name: grid-sql-starters-${{ runner.os }}
           path: |
             grid-sql-server-starter/target/grid-sql-server-starter-*.jar
             grid-sql-jepsen-starter/target/grid-sql-jepsen-starter-*.jar

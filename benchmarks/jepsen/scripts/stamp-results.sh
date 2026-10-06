@@ -11,7 +11,11 @@ CHAOS="${CHAOS:-skipped}"
 FULL="${FULL:-not-run}"
 NOTES="${NOTES:-}"
 GIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-HOST="$(hostname 2>/dev/null || echo unknown)"
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  HOST="gha"
+else
+  HOST="$(hostname 2>/dev/null || echo unknown)"
+fi
 DATE="$(date -Iseconds 2>/dev/null || date)"
 
 RESULTS="$ROOT/RESULTS.md"

@@ -1,0 +1,14 @@
+name: Harden self-hosted logs
+description: Mask machine identity and secret-like env values on self-hosted GHA runners
+runs:
+  using: composite
+  steps:
+    - name: Mask host identity (Linux)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: bash "${{ github.workspace }}/.github/scripts/gha-harden-self-hosted.sh"
+    - name: Mask host identity (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        & "${{ github.workspace }}/.github/scripts/gha-harden-self-hosted.ps1"

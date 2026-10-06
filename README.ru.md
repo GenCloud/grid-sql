@@ -72,4 +72,4 @@ URL: `grid://127.0.0.1:15432/public` · `jdbc:grid://127.0.0.1:15432/public`.
 
 ## Участие
 
-См. [CONTRIBUTING.md](CONTRIBUTING.md) и [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+См. [CONTRIBUTING.md](CONTRIBUTING.md), [CLA.md](CLA.md) (обязателен для внешних PR) и [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
