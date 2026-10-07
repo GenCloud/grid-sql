@@ -8,16 +8,19 @@ param(
   # Living READ starts at 64; sweep finds host ceiling with errRate=0.
   # Pass as comma string from CLI: -ClientLevelsCsv "64,96,128,160"
   [string]$ClientLevelsCsv = "64,96,128,160",
-  [switch]$NoCutover
+  [switch]$NoCutover,
+  # Ring >=3: start replica2 (15434) and READ_REPLICA URL lists all SQL ports (least-inflight).
+  [switch]$Ring3
 )
 $ClientLevels = @(
   $ClientLevelsCsv.Split(@(',', ';', ' '), [StringSplitOptions]::RemoveEmptyEntries) |
     ForEach-Object { [int]$_.Trim() }
 )
 if ($ClientLevels.Count -lt 1) { throw "ClientLevelsCsv empty" }
-# Calm dual READ capacity: PRIMARY proposer vs READ_REPLICA on follower.
+# Calm dual/multi READ capacity: PRIMARY proposer vs READ_REPLICA least-inflight ring.
 # Same mix/duration/clients; require errorRate=0. TpsFloor=1 so stamp records
 # hardware TPS without living READ floor gate. Run alone (no QG/Jepsen/JMH).
+# -Ring3: writer + 2 replicas (SQL 15432/15433/15434); floor from first calm series.
 $ErrorActionPreference = "Stop"
 $Utf8 = [Text.UTF8Encoding]::new($false)
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -33,7 +36,11 @@ if (Test-Path (Join-Path $Jdk "bin\java.exe")) {
 $JavaOpts = "--enable-preview --add-modules=jdk.incubator.vector"
 $CutoverArg = "--grid.replication.swarm.apply-auto-cutover=true"
 $PrimaryGridUrl = "grid://grid:grid@127.0.0.1:15432/public"
-$ReplicaGridUrl = "grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public"
+if ($Ring3) {
+  $ReplicaGridUrl = "grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433,127.0.0.1:15434&readPreference=REPLICA&maxReadConnections=6"
+} else {
+  $ReplicaGridUrl = "grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433&readPreference=REPLICA&maxReadConnections=4"
+}
 # Discovery gate: pass on err=0 only (ignore living READ floor 52261).
 $DiscoveryTpsFloor = 1.0
 
@@ -43,7 +50,7 @@ function Write-Utf8([string]$Path, [string]$Content) {
 
 function Stop-HaJvms {
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -match "grid-sql-server-starter" -and $_.CommandLine -match "spring.profiles.active=(primary|replica)" } |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match "grid-sql-server-starter" -and $_.CommandLine -match "spring.profiles.active=(primary|replica2?)" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Seconds 3
 }
@@ -63,7 +70,9 @@ function Wait-Health([int]$Port, [string]$Path = "/health/liveness", [int]$Timeo
 function Start-Ha([string]$LogPrefix) {
   Set-Location $Starter
   if (-not $SkipWipe) {
-    foreach ($d in @("data-primary", "data-replica")) {
+    $dirs = @("data-primary", "data-replica")
+    if ($Ring3) { $dirs += "data-replica2" }
+    foreach ($d in $dirs) {
       $p = Join-Path $Starter $d
       if (Test-Path $p) { Remove-Item -Recurse -Force $p }
     }
@@ -83,11 +92,20 @@ function Start-Ha([string]$LogPrefix) {
   Start-Process -FilePath "java" -ArgumentList $pArgs -WorkingDirectory $Starter -RedirectStandardOutput $logPrimary -RedirectStandardError ($logPrimary + ".err") -WindowStyle Hidden | Out-Null
   Start-Sleep -Seconds 4
   Start-Process -FilePath "java" -ArgumentList $rArgs -WorkingDirectory $Starter -RedirectStandardOutput $logReplica -RedirectStandardError ($logReplica + ".err") -WindowStyle Hidden | Out-Null
+  if ($Ring3) {
+    $logReplica2 = Join-Path $Results ($LogPrefix + "-replica2.out")
+    $r2Args = @("-jar", $jar.FullName, "--spring.profiles.active=replica2")
+    if (-not $NoCutover) { $r2Args += $CutoverArg }
+    Start-Sleep -Seconds 2
+    Start-Process -FilePath "java" -ArgumentList $r2Args -WorkingDirectory $Starter -RedirectStandardOutput $logReplica2 -RedirectStandardError ($logReplica2 + ".err") -WindowStyle Hidden | Out-Null
+  }
   if (-not (Wait-Health 7777 "/health/liveness")) { throw "primary liveness timeout" }
   if (-not (Wait-Health 7778 "/health/liveness")) { throw "replica liveness timeout" }
+  if ($Ring3 -and -not (Wait-Health 7779 "/health/liveness")) { throw "replica2 liveness timeout" }
   if (-not (Wait-Health 7777 "/health/readiness" 180)) { throw "primary readiness timeout (orchid)" }
   if (-not (Wait-Health 7778 "/health/readiness" 180)) { throw "replica readiness timeout (orchid)" }
-  Write-Host "HA UP + ready (cutover=$(-not $NoCutover))"
+  if ($Ring3 -and -not (Wait-Health 7779 "/health/readiness" 180)) { throw "replica2 readiness timeout (orchid)" }
+  Write-Host "HA UP + ready ring=$(if ($Ring3) { 3 } else { 2 }) cutover=$(-not $NoCutover)"
   Start-Sleep -Seconds 15
 }
 
@@ -202,11 +220,14 @@ try {
   Write-Utf8 $SummaryPath ($summaryObj | ConvertTo-Json -Depth 6)
 
   $sb = New-Object System.Text.StringBuilder
-  [void]$sb.AppendLine("# Dual READ capacity ($StampPrefix)")
+  $ringNote = if ($Ring3) { "ring=3 (15432+15433+15434 least-inflight)" } else { "ring=2 (15432+15433)" }
+  [void]$sb.AppendLine("# Dual/multi READ capacity ($StampPrefix)")
   [void]$sb.AppendLine("")
   [void]$sb.AppendLine("- Mix: READ_ONLY ${ReadDur}s, capacity profile")
   [void]$sb.AppendLine("- Gate: errorRate=0; TpsFloor=$DiscoveryTpsFloor (discovery, not living 52261)")
   [void]$sb.AppendLine("- $cutoverNote")
+  [void]$sb.AppendLine("- $ringNote")
+  [void]$sb.AppendLine("- READ_REPLICA URL: $ReplicaGridUrl")
   [void]$sb.AppendLine("- Clients: $($ClientLevels -join ', ')")
   [void]$sb.AppendLine("")
   [void]$sb.AppendLine("| Role | Clients | TPS | p50us | p95us | p99us | errRate | outcome |")
@@ -221,7 +242,7 @@ try {
     [void]$sb.AppendLine("- **PRIMARY ceiling:** none with err=0")
   }
   if ($replicaBest) {
-    [void]$sb.AppendLine("- **READ_REPLICA ceiling (err=0):** $($replicaBest.tps) TPS @ $($replicaBest.clients) clients")
+    [void]$sb.AppendLine("- **READ_REPLICA ceiling (err=0):** $($replicaBest.tps) TPS @ $($replicaBest.clients) clients (host floor until raised)")
   } else {
     [void]$sb.AppendLine("- **READ_REPLICA ceiling:** none with err=0")
   }

@@ -53,7 +53,7 @@ java -jar grid-server-core/target/benchmarks.jar DuplexCodecBenchmark
 
 ## Рядом
 
-- [Критический путь записи ORCHID](perf-bio-consensus.md)
+- [Путь записи ORCHID](perf-bio-consensus.md)
 - [Путь записи](../understand/write-path-staging.md)
 - [Ёмкость и пороги](capacity-slo.md)
 

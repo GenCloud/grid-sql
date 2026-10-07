@@ -119,7 +119,7 @@ Write latency splits cleanly into a consensus stage and a disk stage. Read both 
 | `ship_backpressure` rises | Shipping cannot keep up with commits | Check peer apply rate and `flow.max-inflight-ops` |
 | `map_hit_rate` falls while sealed misses rise | Working set too small for the traffic | Raise `working-set-max-entries` if heap allows — [durability](configuration/durability.md) |
 
-Stage-by-stage breakdown of the write path: [consensus write path](../performance/perf-bio-consensus.md).
+Stage-by-stage breakdown of the write path: [ORCHID write path](../performance/perf-bio-consensus.md).
 
 ### Duty guidance
 

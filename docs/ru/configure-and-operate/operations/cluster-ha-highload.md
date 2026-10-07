@@ -8,14 +8,14 @@
 
 | Порт (по умолчанию) | Протокол | Кто подключается |
 |---------------------|----------|------------------|
-| **15432** | SQL, бинарные LE-кадры (`grid://`, `jdbc:grid://`) | Приложения, DBeaver, Jepsen |
+| **15432** | SQL, бинарные LE-кадры (`grid://`, `jdbc:grid://`) | Приложения (`grid://`), DBeaver/JDBC tooling, Jepsen |
 | **5615** (+1 на каждый следующий узел) | Репликация по Netty (`OPLOG_PUSH`, ORCHID, подтягивание) | Только узлы кластера |
 
 SQL-клиент, направленный на `5615`, ломает разбор кадров — соединение не поднимется. Подробности протокола: [сеть репликации](../../understand/replication-network.md).
 
 Ещё две заметки, которые экономят время:
 
-- `jdbc:grid://` — JDBC-клиент в `grid-sql-client` (сервисы и DBeaver). Reactive-путь — `ConnectionFactory` и `grid://`.
+- Для сервисов предпочитайте `ConnectionFactory` и `grid://`. `jdbc:grid://` — синхронный JDBC-клиент в `grid-sql-client` (DBeaver/IDE; тот же wire).
 - Для SIMD-ускорений JVM нужно запускать с `--add-modules=jdk.incubator.vector`.
 
 ## Топологии в одном ЦОД

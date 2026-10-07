@@ -50,8 +50,14 @@ public final class GridSqlLoadMix {
 		final int pick = ThreadLocalRandom.current().nextInt(profile.weightTotal());
 		final int key = session.nextKey();
 		if (pick < profile.weightEqLimit()) {
-			final String eqSql = sql.renderEqLimit(key);
-			return new Op(LABEL_EQ_LIMIT, "EQ+LIMIT id=" + key, s -> s.startQuery(eqSql));
+			final int eqKey = profile == GridSqlJmeterSession.MixProfile.BITMAP_FILTER
+					? Math.floorMod(key, GridSqlLoadSqlTemplates.BITMAP_FLAG_CARDINALITY)
+					: key;
+			final String eqSql = sql.renderEqLimit(eqKey);
+			final String labelDetail = profile == GridSqlJmeterSession.MixProfile.FOR_UPDATE
+					? "FOR_UPDATE id=" + eqKey
+					: "EQ+LIMIT id=" + eqKey;
+			return new Op(LABEL_EQ_LIMIT, labelDetail, s -> s.startQuery(eqSql));
 		}
 		final int afterEq = profile.weightEqLimit() + profile.weightUpsert();
 		if (pick < afterEq) {

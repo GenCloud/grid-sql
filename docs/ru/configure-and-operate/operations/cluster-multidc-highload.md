@@ -288,7 +288,7 @@ grid:
 | Jepsen N=3 в одном ЦОД | [benchmarks/jepsen/README.md](../../../../benchmarks/jepsen/README.md) |
 | Jepsen между ЦОД: оба режима, обрыв канала, убийство удалённого голосующего узла, потеря всего Active-ЦОД | [RESULTS.md](../../../../benchmarks/jepsen/multidc/RESULTS.md) |
 | Формальная модель-компаньон | `spec/orchid/OrchidLogMultiDc` — дополнение к Jepsen, не замена |
-| JMH: цена синхронного режима против асинхронного | [ёмкость и пороги](../../performance/capacity-slo.md), [критический путь ORCHID](../../performance/perf-bio-consensus.md) |
+| JMH: цена синхронного режима против асинхронного | [ёмкость и пороги](../../performance/capacity-slo.md), [путь записи ORCHID](../../performance/perf-bio-consensus.md) |
 
 Опорные цифры нагрузки: [ёмкость и пороги](../../performance/capacity-slo.md). Итоги согласованности — в ссылках Jepsen выше и на [сводных результатах](../../performance/results.md). Не гонять проверки согласованности вместе с нагрузкой: [методика](../../performance/methodology.md).
 

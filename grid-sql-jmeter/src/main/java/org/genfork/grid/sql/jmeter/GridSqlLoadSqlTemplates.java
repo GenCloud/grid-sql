@@ -78,6 +78,31 @@ public final class GridSqlLoadSqlTemplates {
 	public static final String DEFAULT_SQL_SEED_B_PREFIX =
 			"INSERT INTO " + PH_TABLE_B + " (bid, a_id, label) VALUES ";
 
+	/** Opt-in BITMAP_FILTER: table A includes low-cardinality flag. */
+	public static final String BITMAP_SQL_DDL_A =
+			"CREATE TABLE IF NOT EXISTS " + PH_TABLE_A
+					+ " (id INT PRIMARY KEY, val VARCHAR, n INT, flag INT)";
+	public static final String BITMAP_SQL_INDEX_FLAG =
+			"CREATE BITMAP INDEX IF NOT EXISTS idx_" + PH_TABLE_A + "_flag ON " + PH_TABLE_A + " (flag)";
+	public static final String BITMAP_SQL_EQ_LIMIT =
+			"SELECT id, val, n, flag FROM " + PH_TABLE_A + " WHERE flag = " + PH_ID + " LIMIT 32";
+	public static final String BITMAP_SQL_SEED_A_PREFIX =
+			"INSERT INTO " + PH_TABLE_A + " (id, val, n, flag) VALUES ";
+	/** Opt-in AQE_SCAN residual (non-indexed). */
+	public static final String AQE_SQL_EQ_LIMIT =
+			"SELECT id FROM " + PH_TABLE_A + " WHERE n >= 0 LIMIT 64";
+	/** Opt-in FOR_UPDATE autocommit. */
+	public static final String FOR_UPDATE_SQL_EQ_LIMIT =
+			"SELECT id, val FROM " + PH_TABLE_A + " WHERE id = " + PH_ID + " FOR UPDATE";
+
+	/** Flag cardinality for BITMAP seed / EQ pick (named constant). */
+	public static final int BITMAP_FLAG_CARDINALITY = 8;
+	/** Minimum seed for AQE_SCAN opt-in profile (matches AQE heavy floor). */
+	public static final int AQE_SCAN_MIN_SEED_ROWS = 10_000;
+
+	public static final String PROP_SQL_BITMAP_INDEX = "SQL_BITMAP_INDEX";
+	public static final String PROP_SQL_BITMAP_EQ = "SQL_BITMAP_EQ";
+
 	private final String tableA;
 	private final String tableB;
 	private final String sqlEqLimit;
@@ -90,6 +115,8 @@ public final class GridSqlLoadSqlTemplates {
 	private final String sqlIndexB;
 	private final String sqlSeedAPrefix;
 	private final String sqlSeedBPrefix;
+	private final String sqlBitmapIndex;
+	private final boolean bitmapSeed;
 
 	private GridSqlLoadSqlTemplates(
 			String tableA,
@@ -103,7 +130,9 @@ public final class GridSqlLoadSqlTemplates {
 			String sqlDdlB,
 			String sqlIndexB,
 			String sqlSeedAPrefix,
-			String sqlSeedBPrefix
+			String sqlSeedBPrefix,
+			String sqlBitmapIndex,
+			boolean bitmapSeed
 	) {
 		this.tableA = tableA;
 		this.tableB = tableB;
@@ -117,33 +146,68 @@ public final class GridSqlLoadSqlTemplates {
 		this.sqlIndexB = sqlIndexB;
 		this.sqlSeedAPrefix = sqlSeedAPrefix;
 		this.sqlSeedBPrefix = sqlSeedBPrefix;
+		this.sqlBitmapIndex = sqlBitmapIndex;
+		this.bitmapSeed = bitmapSeed;
 	}
 
 	/**
 	 * Resolve templates: non-blank sampler arg wins, else system property, else historical default.
 	 */
 	public static GridSqlLoadSqlTemplates resolve(PropSource source) {
+		return resolve(source, null);
+	}
+
+	/**
+	 * Resolve templates with opt-in MixProfile defaults (BITMAP / AQE / FOR_UPDATE).
+	 * Living CAPACITY / READ_ONLY / WRITE_ONLY keep byte-identical historical defaults.
+	 */
+	public static GridSqlLoadSqlTemplates resolve(
+			PropSource source,
+			GridSqlJmeterSession.MixProfile mixProfile
+	) {
 		final PropSource src = source == null ? PropSource.SYSTEM : source;
 		final String tableA = firstNonBlank(src.get(PROP_TABLE_A), DEFAULT_TABLE_A);
 		final String tableB = firstNonBlank(src.get(PROP_TABLE_B), DEFAULT_TABLE_B);
+		final GridSqlJmeterSession.MixProfile profile =
+				mixProfile == null ? GridSqlJmeterSession.MixProfile.CAPACITY : mixProfile;
+
+		String defaultEq = DEFAULT_SQL_EQ_LIMIT;
+		String defaultDdlA = DEFAULT_SQL_DDL_A;
+		String defaultSeedA = DEFAULT_SQL_SEED_A_PREFIX;
+		String defaultBitmapIndex = "";
+		boolean bitmapSeed = false;
+		if (profile == GridSqlJmeterSession.MixProfile.BITMAP_FILTER) {
+			defaultEq = BITMAP_SQL_EQ_LIMIT;
+			defaultDdlA = BITMAP_SQL_DDL_A;
+			defaultSeedA = BITMAP_SQL_SEED_A_PREFIX;
+			defaultBitmapIndex = BITMAP_SQL_INDEX_FLAG;
+			bitmapSeed = true;
+		} else if (profile == GridSqlJmeterSession.MixProfile.AQE_SCAN) {
+			defaultEq = AQE_SQL_EQ_LIMIT;
+		} else if (profile == GridSqlJmeterSession.MixProfile.FOR_UPDATE) {
+			defaultEq = FOR_UPDATE_SQL_EQ_LIMIT;
+		}
+
 		return new GridSqlLoadSqlTemplates(
 				tableA,
 				tableB,
-				firstNonBlank(src.get(PROP_SQL_EQ_LIMIT), DEFAULT_SQL_EQ_LIMIT),
+				firstNonBlank(src.get(PROP_SQL_EQ_LIMIT), defaultEq),
 				firstNonBlank(src.get(PROP_SQL_UPSERT), DEFAULT_SQL_UPSERT),
 				firstNonBlank(src.get(PROP_SQL_SHORT_TX_SELECT), DEFAULT_SQL_SHORT_TX_SELECT),
 				firstNonBlank(src.get(PROP_SQL_SHORT_TX_UPDATE), DEFAULT_SQL_SHORT_TX_UPDATE),
 				firstNonBlank(src.get(PROP_SQL_COUNT_JOIN), DEFAULT_SQL_COUNT_JOIN),
-				firstNonBlank(src.get(PROP_SQL_DDL_A), DEFAULT_SQL_DDL_A),
+				firstNonBlank(src.get(PROP_SQL_DDL_A), defaultDdlA),
 				firstNonBlank(src.get(PROP_SQL_DDL_B), DEFAULT_SQL_DDL_B),
 				firstNonBlank(src.get(PROP_SQL_INDEX_B), DEFAULT_SQL_INDEX_B),
-				firstNonBlank(src.get(PROP_SQL_SEED_A_PREFIX), DEFAULT_SQL_SEED_A_PREFIX),
-				firstNonBlank(src.get(PROP_SQL_SEED_B_PREFIX), DEFAULT_SQL_SEED_B_PREFIX)
+				firstNonBlank(src.get(PROP_SQL_SEED_A_PREFIX), defaultSeedA),
+				firstNonBlank(src.get(PROP_SQL_SEED_B_PREFIX), DEFAULT_SQL_SEED_B_PREFIX),
+				firstNonBlank(src.get(PROP_SQL_BITMAP_INDEX), defaultBitmapIndex),
+				bitmapSeed
 		);
 	}
 
 	public static GridSqlLoadSqlTemplates defaults() {
-		return resolve(PropSource.EMPTY);
+		return resolve(PropSource.EMPTY, null);
 	}
 
 	@FunctionalInterface
@@ -222,6 +286,18 @@ public final class GridSqlLoadSqlTemplates {
 		return render(sqlIndexB, 0, null, null);
 	}
 
+	/** Empty when not BITMAP_FILTER — caller skips. */
+	public String renderBitmapIndex() {
+		if (sqlBitmapIndex == null || sqlBitmapIndex.isBlank()) {
+			return "";
+		}
+		return render(sqlBitmapIndex, 0, null, null);
+	}
+
+	public boolean bitmapSeed() {
+		return bitmapSeed;
+	}
+
 	public String renderSeedInsertA(int fromInclusive, int toInclusive) {
 		final StringBuilder sb = new StringBuilder((toInclusive - fromInclusive + 1) * 48);
 		sb.append(render(sqlSeedAPrefix, 0, null, null));
@@ -229,7 +305,12 @@ public final class GridSqlLoadSqlTemplates {
 			if (i > fromInclusive) {
 				sb.append(", ");
 			}
-			sb.append('(').append(i).append(", 'seed-").append(i).append("', 0)");
+			if (bitmapSeed) {
+				final int flag = i % BITMAP_FLAG_CARDINALITY;
+				sb.append('(').append(i).append(", 'seed-").append(i).append("', 0, ").append(flag).append(')');
+			} else {
+				sb.append('(').append(i).append(", 'seed-").append(i).append("', 0)");
+			}
 		}
 		return sb.toString();
 	}

@@ -48,8 +48,6 @@ import org.genfork.grid.sql.SqlSession;
  * @since: 1.0
  */
 public final class DistForUpdateCoordinator {
-	/** Autocommit / statement-scoped peer lock correlator (no open TX). */
-	private static final long STATEMENT_SCOPED_TX_ID = 0L;
 
 	private DistForUpdateCoordinator() {
 	}
@@ -80,7 +78,7 @@ public final class DistForUpdateCoordinator {
 		if (agents == null || agents.isEmpty() || selectedKeys.isEmpty()) {
 			return new PeerLockBatch(selectedKeys, List.of());
 		}
-		final long txId = session.inTransaction() ? session.requireTx().txId() : STATEMENT_SCOPED_TX_ID;
+		final long txId = DistForUpdateCorrelatorUtil.peerLockCorrelator(session);
 		int expectedPeers = 0;
 		for (DistForUpdatePeerLockAgent a : agents) {
 			if (a != null) {

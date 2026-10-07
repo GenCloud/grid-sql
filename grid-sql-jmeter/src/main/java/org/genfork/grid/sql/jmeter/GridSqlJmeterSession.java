@@ -105,7 +105,22 @@ public final class GridSqlJmeterSession {
 		/** EQ 90 / JOIN 10 — read-only capacity stamp (no writes). */
 		READ_ONLY(90, 0, 0, 10),
 		/** UPSERT 100 — write-only capacity stamp (no reads / TX). */
-		WRITE_ONLY(0, 100, 0, 0);
+		WRITE_ONLY(0, 100, 0, 0),
+		/**
+		 * Opt-in BITMAP filter stamp — EQ on low-cardinality flag via CREATE BITMAP INDEX.
+		 * Living READ/WRITE templates must not use this profile.
+		 */
+		BITMAP_FILTER(100, 0, 0, 0),
+		/**
+		 * Opt-in residual AQE scan stamp — non-indexed WHERE over seed ≥ AQE floor.
+		 * Living READ/WRITE templates must not use this profile.
+		 */
+		AQE_SCAN(100, 0, 0, 0),
+		/**
+		 * Opt-in autocommit SELECT FOR UPDATE stamp (Dist path when agents wired).
+		 * Living CAPACITY must not use this profile.
+		 */
+		FOR_UPDATE(100, 0, 0, 0);
 
 		private final int weightEqLimit;
 		private final int weightUpsert;
@@ -404,6 +419,16 @@ public final class GridSqlJmeterSession {
 		return seedRows;
 	}
 
+	/**
+	 * AQE_SCAN opt-in requires seed ≥ AQE heavy floor; other profiles keep configured seed.
+	 */
+	public int effectiveSeedRows() {
+		if (mixProfile == MixProfile.AQE_SCAN) {
+			return Math.max(seedRows, GridSqlLoadSqlTemplates.AQE_SCAN_MIN_SEED_ROWS);
+		}
+		return seedRows;
+	}
+
 	public MixProfile mixProfile() {
 		return mixProfile;
 	}
@@ -573,7 +598,12 @@ public final class GridSqlJmeterSession {
 		awaitSetupUpdate(sqlTemplates.renderDdlA());
 		awaitSetupUpdate(sqlTemplates.renderDdlB());
 		awaitSetupUpdate(sqlTemplates.renderIndexB());
-		final int rows = Math.min(seedRows, keySpace);
+		final String bitmapIndexSql = sqlTemplates.renderBitmapIndex();
+		if (bitmapIndexSql != null && !bitmapIndexSql.isBlank()) {
+			awaitSetupUpdate(bitmapIndexSql);
+		}
+		final int effectiveSeed = effectiveSeedRows();
+		final int rows = Math.min(effectiveSeed, keySpace);
 		for (int from = 1; from <= rows; from += SEED_BATCH_SIZE) {
 			final int to = Math.min(from + SEED_BATCH_SIZE - 1, rows);
 			awaitSetupUpdate(sqlTemplates.renderSeedInsertA(from, to));

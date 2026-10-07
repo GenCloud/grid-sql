@@ -144,4 +144,4 @@ grid.replication.placement-optimizer:
 
 [ORCHID](orchid-consensus.md), [состояние репликации](replication-state.md), [сеть репликации](replication-network.md), [обзор архитектуры](architecture-overview.md).
 
-Измерения: [ёмкость и SLO](../performance/capacity-slo.md), [результаты прогонов](../performance/results.md), [критический путь записи](../performance/perf-bio-consensus.md), [методика](../performance/methodology.md).
+Измерения: [ёмкость и SLO](../performance/capacity-slo.md), [результаты прогонов](../performance/results.md), [путь записи ORCHID](../performance/perf-bio-consensus.md), [методика](../performance/methodology.md).

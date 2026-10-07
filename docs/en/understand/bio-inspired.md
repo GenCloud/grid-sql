@@ -144,4 +144,4 @@ Node maps: [multi-site](../configure-and-operate/operations/multi-dc.md).
 
 [ORCHID](orchid-consensus.md), [replication state](replication-state.md), [replication network](replication-network.md), [architecture overview](architecture-overview.md).
 
-Measurements: [capacity and SLO](../performance/capacity-slo.md), [results](../performance/results.md), [write critical path](../performance/perf-bio-consensus.md), [methodology](../performance/methodology.md).
+Measurements: [capacity and SLO](../performance/capacity-slo.md), [results](../performance/results.md), [ORCHID write path](../performance/perf-bio-consensus.md), [methodology](../performance/methodology.md).

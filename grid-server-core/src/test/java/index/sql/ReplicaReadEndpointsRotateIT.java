@@ -15,13 +15,24 @@
  */
 package index.sql;
 
+import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.sql.client.Connection;
 import org.genfork.grid.sql.client.ConnectionOptions;
+import org.genfork.grid.sql.client.RemoteConnection;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
 import org.genfork.grid.sql.client.ServerMeta;
 import org.genfork.grid.sql.client.SessionRole;
@@ -60,6 +71,8 @@ public class ReplicaReadEndpointsRotateIT {
 	private static final String SELECT = "SELECT v FROM rr_n WHERE id = 1";
 	private static final String EXPECTED_VALUE = "ok";
 	private static final String STALE_ERR_SNIPPET = "apply lag stale";
+	private static final int BALANCE_SELECTS = 24;
+	private static final int MIN_DISTINCT_ENDPOINTS = 2;
 
 	private SqlEngine primaryEngine;
 	private SqlEngine replica0Engine;
@@ -147,6 +160,42 @@ public class ReplicaReadEndpointsRotateIT {
 		assertTrue(
 				messageChainContains(err, STALE_ERR_SNIPPET),
 				"expected FAIL_CLOSED apply-lag stale, got: " + err);
+	}
+
+	@Test
+	void leastInflightBalancesAcrossNonStaleRing() {
+		replica0.overrideApplyLagStale(null);
+		replica1.overrideApplyLagStale(null);
+		primary.overrideApplyLagStale(null);
+
+		final String url = readUrl(replica0Port, replica1Port)
+				+ "&maxReadConnections=6&warmup=false";
+		readFactory = RemoteConnectionFactory.createReadFactory(url);
+		assertEquals(3, readFactory.endpoints().size());
+
+		final List<Connection> held = new ArrayList<>();
+		final Set<Integer> hitPorts = new HashSet<>();
+		try {
+			for (int i = 0; i < MIN_DISTINCT_ENDPOINTS + 1; i++) {
+				final Connection conn = readFactory.obtain().block(TIMEOUT);
+				assertTrue(conn != null);
+				held.add(conn);
+				final int port = ((InetSocketAddress) ((RemoteConnection) conn).transport().channel()
+						.remoteAddress()).getPort();
+				hitPorts.add(port);
+				final String v = conn.createStatement(SELECT).execute()
+						.flatMap(r -> r.map((row, meta) -> String.valueOf(row.get(0))))
+						.blockFirst(TIMEOUT);
+				assertEquals(EXPECTED_VALUE, v);
+			}
+		} finally {
+			for (Connection conn : held) {
+				conn.close().block(TIMEOUT);
+			}
+		}
+		assertTrue(
+				hitPorts.size() >= MIN_DISTINCT_ENDPOINTS,
+				"least-inflight must hit >=2 ring members, got " + hitPorts);
 	}
 
 	@Test

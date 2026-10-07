@@ -296,6 +296,6 @@ Empty `voters` with `SYNC_VOTERS_ACROSS_DC` → all remote peers except `learner
 | 1-DC Jepsen N=3 | [benchmarks/jepsen/README.md](../../../../benchmarks/jepsen/README.md) |
 | Multi-site Jepsen (ASYNC + SYNC_VOTERS, link cut, Active-site loss) | [benchmarks/jepsen/multidc/RESULTS.md](../../../../benchmarks/jepsen/multidc/RESULTS.md) |
 | Formal companion | `spec/orchid/OrchidLogMultiDc` (not a substitute for Jepsen) |
-| SYNC vs ASYNC write cost | [capacity](../../performance/capacity-slo.md), [ORCHID path](../../performance/perf-bio-consensus.md) |
+| SYNC vs ASYNC write cost | [capacity](../../performance/capacity-slo.md), [ORCHID write path](../../performance/perf-bio-consensus.md) |
 
 Next: [multi-site overview](multi-dc.md), [Compose deploy](deploy-compose.md), [promote a node](ha-promote.md).

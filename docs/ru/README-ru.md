@@ -138,7 +138,7 @@ Grid — распределённая SQL-база данных: скорост�
 | [Сводные результаты](performance/results.md) | |
 | [Методика](performance/methodology.md) | |
 | [Duplex-кодирование](performance/perf-duplex.md) | |
-| [Критический путь ORCHID](performance/perf-bio-consensus.md) | |
+| [Путь записи ORCHID](performance/perf-bio-consensus.md) | |
 
 ### Инструменты
 
@@ -150,7 +150,7 @@ Grid — распределённая SQL-база данных: скорост�
 
 ### Внутреннее
 
-Заметки для участников разработки:
+Заметки для участников разработки ([оглавление](internal/README.md)):
 
 - [Правила разработки](internal/development.md)
 - [ORCHID TLA](internal/orchid-tla.md)

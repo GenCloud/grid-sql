@@ -109,7 +109,7 @@ SQL и блокировки:
 | Растёт `ship_backpressure` | Доставка не успевает за commit | Скорость apply на пирах и `flow.max-inflight-ops` |
 | Падает `map_hit_rate`, растут промахи sealed | Рабочий набор мал для трафика | Поднять `working-set-max-entries`, если хватает heap — [долговременное хранение](configuration/durability.md) |
 
-Разбор стадий: [критический путь ORCHID](../performance/perf-bio-consensus.md).
+Разбор стадий: [путь записи ORCHID](../performance/perf-bio-consensus.md).
 
 ### Ориентиры дежурства
 

@@ -82,7 +82,8 @@ public final class GridSqlOpenSampler extends AbstractJavaSamplerClient {
 					context.getParameter(GridSqlJmeterSession.PARAM_MIX_PROFILE,
 							GridSqlJmeterSession.MixProfile.CAPACITY.name()));
 			final GridSqlLoadSqlTemplates sqlTemplates = GridSqlLoadSqlTemplates.resolve(
-					GridSqlLoadSqlTemplates.PropSource.samplerThenSystem(context::getParameter));
+					GridSqlLoadSqlTemplates.PropSource.samplerThenSystem(context::getParameter),
+					mix);
 			final String mode = context.getParameter(PARAM_MODE, MODE_OPEN);
 			final String loadUrl = context.getParameter(GridSqlJmeterSession.PARAM_GRID_URL);
 			final String setupUrlOverride = context.getParameter(GridSqlJmeterSession.PARAM_SETUP_GRID_URL, "");

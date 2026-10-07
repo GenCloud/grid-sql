@@ -81,14 +81,14 @@ Authority = failover ring for writer discovery (`PROMOTE_NOTIFY` / AUTH `ServerM
 ### Read URL extras (N endpoints)
 
 ```
-grid://user:pass@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433,127.0.0.1:15434&readPreference=REPLICA&maxReadConnections=2
+grid://user:pass@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433,127.0.0.1:15434&readPreference=REPLICA&maxReadConnections=6
 ```
 
 | Query | Meaning |
 |-------|---------|
-| `readEndpoints` | Comma `host:port` read ring (N≥1 when `readPreference=REPLICA`); client merges authority hosts into the ring so proposer + replicas share least-inflight SELECT |
+| `readEndpoints` | Comma `host:port` read ring (N≥1 when `readPreference=REPLICA`); client merges authority hosts into the ring so **all listed synced voters** share least-inflight SELECT (skip stale / `applyLagStale`; no Orchid gossip — app must list SQL endpoints) |
 | `readPreference` | `PRIMARY` (default) or `REPLICA` |
-| `maxReadConnections` | TCP cap for read factory (default 1) |
+| `maxReadConnections` | TCP cap for read factory; size ≥ ring so least-inflight can land on every member |
 | `staleReadPolicy` | v1: reject-on-stale only |
 
 ### Factories

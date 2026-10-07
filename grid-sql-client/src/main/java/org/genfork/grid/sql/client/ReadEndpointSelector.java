@@ -21,6 +21,9 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
 
 /**
  * Least-inflight pick among read endpoints with optional stale skip (atomics only).
+ * <p>
+ * Among equal least-inflight candidates, round-robin from {@link #tieBreakCursor} so warm-pool
+ * opens and concurrent autocommit SELECTs spread across the non-stale ring (no sticky slot-0).
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -32,6 +35,7 @@ public final class ReadEndpointSelector {
 
 	private final List<HostEndpoint> endpoints;
 	private final AtomicInteger cursor = new AtomicInteger(0);
+	private final AtomicInteger tieBreakCursor = new AtomicInteger(0);
 	private final AtomicIntegerArray inflight;
 	private final AtomicIntegerArray staleMarks;
 
@@ -60,12 +64,23 @@ public final class ReadEndpointSelector {
 	}
 
 	public HostEndpoint acquire(boolean skipStaleWhenPossible) {
+		final int bestIdx = pickLeastInflightIndex(skipStaleWhenPossible);
+		inflight.incrementAndGet(bestIdx);
+		return endpoints.get(bestIdx);
+	}
+
+	/**
+	 * Least-inflight index; among ties, round-robin from {@link #tieBreakCursor}.
+	 */
+	private int pickLeastInflightIndex(boolean skipStaleWhenPossible) {
 		final int n = endpoints.size();
-		int bestIdx = -1;
-		int bestLoad = Integer.MAX_VALUE;
+		final int start = Math.floorMod(tieBreakCursor.getAndIncrement(), n);
 		for (int pass = 0; pass < 2; pass++) {
 			final boolean allowStale = pass == 1 || !skipStaleWhenPossible;
-			for (int i = 0; i < n; i++) {
+			int bestIdx = -1;
+			int bestLoad = Integer.MAX_VALUE;
+			for (int k = 0; k < n; k++) {
+				final int i = (start + k) % n;
 				if (!allowStale && staleMarks.get(i) == STALE_MARK) {
 					continue;
 				}
@@ -76,14 +91,10 @@ public final class ReadEndpointSelector {
 				}
 			}
 			if (bestIdx >= 0) {
-				break;
+				return bestIdx;
 			}
 		}
-		if (bestIdx < 0) {
-			bestIdx = Math.floorMod(cursor.getAndIncrement(), n);
-		}
-		inflight.incrementAndGet(bestIdx);
-		return endpoints.get(bestIdx);
+		return Math.floorMod(cursor.getAndIncrement(), n);
 	}
 
 	public void release(HostEndpoint endpoint) {
@@ -93,17 +104,22 @@ public final class ReadEndpointSelector {
 		}
 	}
 
+	/**
+	 * Count {@code endpoint} as in-flight without a pick (failover after {@link #acquire}).
+	 */
+	public void retain(HostEndpoint endpoint) {
+		final int idx = indexOf(endpoint);
+		if (idx >= 0) {
+			inflight.incrementAndGet(idx);
+		}
+	}
+
 	/** Mark endpoint stale after {@code REPLICA_READ_*} / applyLagStale meta. */
 	public void markStale(HostEndpoint endpoint, boolean stale) {
 		final int idx = indexOf(endpoint);
 		if (idx >= 0) {
 			staleMarks.set(idx, stale ? STALE_MARK : FRESH_MARK);
 		}
-	}
-
-	/** Prefer non-stale endpoints when meta is known; else least-inflight. */
-	public HostEndpoint nextPreferFresh(boolean applyLagStaleHint) {
-		return acquire(true);
 	}
 
 	/** Rotate after fail-closed replica read: mark current stale and pick another. */
@@ -124,16 +140,6 @@ public final class ReadEndpointSelector {
 			}
 		}
 		return -1;
-	}
-
-	/** Test hook: endpoint count. */
-	int size() {
-		return endpoints.size();
-	}
-
-	/** Test hook: immutable endpoint list. */
-	List<HostEndpoint> endpoints() {
-		return endpoints;
 	}
 
 	/** Test hook: current inflight for index. */

@@ -8,12 +8,12 @@ Apps speak **SQL TCP**; peers speak **replication Netty** on a different port. P
 
 | Port (default) | Protocol | Used by |
 |----------------|----------|---------|
-| **15432** | SQL LE frames (`grid://` / `jdbc:grid://`) | Apps, DBeaver, Jepsen client |
+| **15432** | SQL LE frames (`grid://` / `jdbc:grid://`) | Apps (`grid://`), DBeaver/JDBC tooling, Jepsen |
 | **5615** (+1 per peer) | Replication Netty (`OPLOG_PUSH`, ORCHID, repair) | Nodes only |
 
 Pointing a SQL client at `5615` fails frame decode. See [replication-network.md](../../understand/replication-network.md).
 
-**Notes:** `jdbc:grid://` is the JDBC client in `grid-sql-client` (apps and DBeaver). The reactive path is `ConnectionFactory` + `grid://`. Query MapReduce resolves keys locally by default. SIMD benches need `--add-modules=jdk.incubator.vector`.
+**Notes:** Prefer `ConnectionFactory` + `grid://` for services. `jdbc:grid://` is the sync JDBC client in `grid-sql-client` (DBeaver/IDE tooling; same wire). Query MapReduce resolves keys locally by default. SIMD benches need `--add-modules=jdk.incubator.vector`.
 
 ## Topologies in one site
 

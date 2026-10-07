@@ -53,7 +53,7 @@ Both the blob and `ReplicationOp` carry `schemaEpoch`. A mismatch refuses the ap
 
 ## Next
 
-- [ORCHID write critical path](perf-bio-consensus.md)
+- [ORCHID write path](perf-bio-consensus.md)
 - [Write path](../understand/write-path-staging.md)
 - [Capacity and thresholds](capacity-slo.md)
 

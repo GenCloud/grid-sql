@@ -61,4 +61,23 @@ class GridSqlLoadSqlTemplatesTest {
 		assertEquals("custom_a", t.tableA());
 		assertEquals("SELECT id FROM custom_a WHERE id = 3", t.renderEqLimit(3));
 	}
+
+	@Test
+	void bitmapFilterProfileUsesFlagColumnAndIndex() {
+		final GridSqlLoadSqlTemplates t = GridSqlLoadSqlTemplates.resolve(
+				GridSqlLoadSqlTemplates.PropSource.EMPTY,
+				GridSqlJmeterSession.MixProfile.BITMAP_FILTER);
+		assertTrue(t.bitmapSeed());
+		assertTrue(t.renderBitmapIndex().contains("BITMAP"));
+		assertTrue(t.renderEqLimit(1).contains("flag"));
+		assertTrue(t.renderSeedInsertA(1, 1).contains(", 1)"));
+	}
+
+	@Test
+	void aqeScanProfileUsesResidualSelect() {
+		final GridSqlLoadSqlTemplates t = GridSqlLoadSqlTemplates.resolve(
+				GridSqlLoadSqlTemplates.PropSource.EMPTY,
+				GridSqlJmeterSession.MixProfile.AQE_SCAN);
+		assertTrue(t.renderEqLimit(1).contains("n >= 0"));
+	}
 }

@@ -23,8 +23,8 @@
 | Цель | Сначала | Затем |
 |------|---------|-------|
 | Локально проверить SQL | [быстрый старт](quick-start.md) | [подключение клиентов](connect-clients.md) |
-| Один узел с диском навсегда | [долговременное хранение](../configure-and-operate/configuration/durability.md) | [резервные копии](../configure-and-operate/operations/backup-restore.md) |
-| Primary + replica | [запуск кластера](start-cluster.md) | [повышение роли](../configure-and-operate/operations/ha-promote.md) |
+| Один узел с диском и durability | [долговременное хранение](../configure-and-operate/configuration/durability.md) | [резервные копии](../configure-and-operate/operations/backup-restore.md) |
+| Пишущий + реплика | [запуск кластера](start-cluster.md) | [повышение роли](../configure-and-operate/operations/ha-promote.md) |
 | Ввод в эксплуатацию | [чек-лист](production-checklist.md) | [мониторинг](../configure-and-operate/monitoring.md) |
 | Две площадки | [несколько ЦОД](../configure-and-operate/operations/multi-dc.md) | [отказы](../configure-and-operate/operations/failures.md) |
 | Видимость и TX | [параллелизм и видимость](../understand/concurrency-and-visibility.md) | [транзакции](../develop/transactions.md) |

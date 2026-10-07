@@ -50,6 +50,9 @@
 | `ReplicaReadLatencyBenchmark` | чтение, обслуженное репликой |
 | `SealedQueryPathBenchmark` | путь запроса по запечатанным файлам (*sealed*): память, гибрид, диск |
 | `QueryHeavinessEstimatorBenchmark` | оценка тяжести запроса для допуска AQE |
+| `AdaptiveParallelScanBenchmark` | последовательный скан против адаптивного параллельного |
+| `GridBitmapIndexBenchmark` | индекс BITMAP: равенство, список IN и пересечение AND по байтам ключей |
+| `ForUpdateDistNettyPeerLockBenchmark` | распределённый `FOR UPDATE`: блокировка Netty, фаза prepare и COMMIT |
 | `ShardPartitionMapReduceBenchmark` | MapReduce по партициям шардов |
 | `WireResidualBatchBenchmark` | пакетная проверка остаточных условий EQ по байтам протокола |
 | `run-jepsen-smoke.{ps1,sh}` | стенд Compose на трёх узлах; дописывает строку в RESULTS |

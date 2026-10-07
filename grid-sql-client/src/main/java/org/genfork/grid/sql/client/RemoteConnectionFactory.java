@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.sql.client;
 
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -511,9 +512,25 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 
 	/**
 	 * Poll best idle channel (shared by Mono / Stage acquire). Null when none open.
+	 * <p>
+	 * READ_REPLICA: prefer an idle TCP whose endpoint matches {@link ReadEndpointSelector#acquire}
+	 * so warm-pool reuse still spreads across the ring (lease held until park).
 	 */
 	private RemoteConnection takeIdleOrLeastLoaded() {
 		purgeClosed();
+		if (factoryRole.isReadReplica() && readSelector != null) {
+			final HostEndpoint preferred = readSelector.acquire(true);
+			final int preferredIdx = indexOfEndpoint(preferred);
+			final RemoteConnection match = takeIdleOnEndpoint(preferredIdx);
+			if (match != null) {
+				match.bindReadLeaseEndpointIndex(preferredIdx);
+				return match;
+			}
+			// No idle on preferred: drop lease and openNew (re-acquire). Do not steal idle
+			// TCP from another ring member — that collapses least-inflight to one port.
+			readSelector.release(preferred);
+			return null;
+		}
 		RemoteConnection bestIdle = null;
 		int bestIdleLoad = Integer.MAX_VALUE;
 		for (RemoteConnection c : idle) {
@@ -535,6 +552,45 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			destroy(bestIdle);
 		}
 		return null;
+	}
+
+	private RemoteConnection takeIdleOnEndpoint(int endpointIndex) {
+		if (endpointIndex < 0 || endpointIndex >= endpoints.size()) {
+			return null;
+		}
+		final HostEndpoint want = endpoints.get(endpointIndex);
+		for (RemoteConnection c : idle) {
+			if (!c.isOpen() || c.channel() == null || c.channel().remoteAddress() == null) {
+				continue;
+			}
+			if (!(c.channel().remoteAddress() instanceof InetSocketAddress remote)) {
+				continue;
+			}
+			if (remote.getPort() != want.port()) {
+				continue;
+			}
+			if (idle.remove(c)) {
+				c.clearParked();
+				idleCount.updateAndGet(n -> Math.max(0, n - 1));
+				if (c.isOpen()) {
+					return c;
+				}
+				destroy(c);
+			}
+		}
+		return null;
+	}
+
+	private int indexOfEndpoint(HostEndpoint endpoint) {
+		if (endpoint == null) {
+			return -1;
+		}
+		for (int i = 0; i < endpoints.size(); i++) {
+			if (endpoints.get(i).equals(endpoint)) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	private void purgeClosed() {
@@ -655,6 +711,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 							openContexts, options.maxTxContexts(), defaultSchema, options, connectionMeta,
 							factoryRole);
 					holder.set(conn);
+					conn.bindReadLeaseEndpointIndex(connected.endpointIndex());
 					liveCount.incrementAndGet();
 					all.add(conn);
 					ch.closeFuture().addListener(_ -> conn.markDead());
@@ -700,6 +757,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 							openContexts, options.maxTxContexts(), defaultSchema, options, connectionMeta,
 							factoryRole);
 					holder.set(conn);
+					conn.bindReadLeaseEndpointIndex(connected.endpointIndex());
 					liveCount.incrementAndGet();
 					all.add(conn);
 					ch.closeFuture().addListener(_ -> conn.markDead());
@@ -937,8 +995,10 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 				}
 			}
 
+			// Hold least-inflight until park/destroy (not only during TCP connect).
 			return connectFrom(bootstrap, start, 0, n, null)
-					.doFinally(_ -> readSelector.release(preferred));
+					.doOnError(_ -> readSelector.release(preferred))
+					.map(connected -> transferReadLease(preferred, connected));
 		}
 
 		final ServerMeta meta = lastServerMeta.get();
@@ -989,7 +1049,12 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			}
 
 			return connectFromStage(bootstrap, start, 0, n, null)
-					.whenComplete((ch, err) -> readSelector.release(preferred));
+					.whenComplete((ch, err) -> {
+						if (err != null || ch == null) {
+							readSelector.release(preferred);
+						}
+					})
+					.thenApply(connected -> transferReadLease(preferred, connected));
 		}
 
 		final ServerMeta meta = lastServerMeta.get();
@@ -1048,6 +1113,31 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		return new ConcurrentHashMap<>(capacity);
 	}
 
+	/**
+	 * Keep least-inflight on the endpoint we actually connected to until park/destroy.
+	 */
+	private ConnectedChannel transferReadLease(HostEndpoint preferred, ConnectedChannel connected) {
+		if (readSelector == null || preferred == null || connected == null) {
+			return connected;
+		}
+		final HostEndpoint actual = endpoints.get(connected.endpointIndex());
+		if (!preferred.equals(actual)) {
+			readSelector.release(preferred);
+			readSelector.retain(actual);
+		}
+		return connected;
+	}
+
+	private void releaseReadLease(RemoteConnection conn) {
+		if (conn == null || readSelector == null) {
+			return;
+		}
+		final int idx = conn.clearReadLeaseEndpointIndex();
+		if (idx >= 0 && idx < endpoints.size()) {
+			readSelector.release(endpoints.get(idx));
+		}
+	}
+
 	void park(RemoteConnection conn) {
 		if (conn == null || disposed.get()) {
 			destroy(conn);
@@ -1063,6 +1153,7 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			return;
 		}
 
+		releaseReadLease(conn);
 		if (conn.tryMarkParked()) {
 			idle.offer(conn);
 			idleCount.incrementAndGet();
@@ -1073,6 +1164,8 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 		if (conn == null) {
 			return;
 		}
+
+		releaseReadLease(conn);
 
 		if (idle.remove(conn)) {
 			conn.clearParked();

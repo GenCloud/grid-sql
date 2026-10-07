@@ -7,28 +7,28 @@
 ```mermaid
 flowchart TB
   App[Приложение]
-  App -->|WRITE_TX_DDL_PREPARE_FOR_UPDATE| Writer["кольцо_пишущих\nPRIMARY"]
+  App -->|запись_TX_DDL_PREPARE_FOR_UPDATE| Writer["кольцо_пишущих\nPRIMARY"]
   App -->|SELECT_EXPLAIN| Reads["readEndpoints\nREAD_REPLICA"]
-  Writer --> N1["n1_writer"]
+  Writer --> N1["n1_пишущий"]
   Writer --> N2["n2"]
-  Reads --> R1["replica_1"]
-  Reads --> R2["replica_N"]
-  CatchUpOnly["catch_up_or_Witness"] -.->|нет_клиентского_SQL| X[отказ]
+  Reads --> R1["реплика_1"]
+  Reads --> R2["реплика_N"]
+  CatchUpOnly["только_подтягивание_или_Witness"] -.->|нет_клиентского_SQL| X[отказ]
 ```
 
-Узлы без обслуживания клиентов (`learners`) и Witness клиентский SQL не обслуживают.
+Узлы без обслуживания клиентов (обучающиеся / learners) и Witness клиентский SQL не обслуживают.
 
 | Путь | Куда | Роль сессии | Допуск |
 |------|------|-------------|--------|
-| `begin`, DML, DDL, PREPARE, FOR UPDATE | кольцо пишущих | `PRIMARY` | узел с `writerEligible`, epoch совпадает, не stale |
+| `begin`, DML, DDL, PREPARE, FOR UPDATE | кольцо пишущих | `PRIMARY` | узел с `writerEligible`, epoch совпадает, данные не устарели |
 | `createStatement` read-only SELECT/EXPLAIN | `readEndpoints` | `READ_REPLICA` | ANTLR-маршрут клиента + допуск сервера |
 | `createReadStatement` / `executeRead` | `readEndpoints` | `READ_REPLICA` | явный API |
 
 ### FOR UPDATE и блокировки на пирах
 
-`FOR UPDATE` / `SKIP LOCKED` выполняются только на **пишущем** узле (не на реплике только для чтения). Индексные ключи в сериализованных байтах блокируются локально (`LockAwareKeyCursor`). При включённой репликации и непустом списке пиров Boot ставит Netty-агенты из **`peers` репликации** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`); пиры берут те же блокировки через `DistForUpdateCoordinator`. Голоса prepare несут **набор ключей на пира**; аренда на соседе истекает через **30 с** TTL (без sidecar-журнала prepare — долговечность через OpLog TX). Ошибка Netty на соседнем узле — **отказ клиенту**, не тихий только-локальный commit. В autocommit аренда блокировки на соседе снимается после оператора; в открытой TX — до COMMIT/ROLLBACK. Prepare/commit-dec — 2PC-lite по блокировкам в кадрах продукта, не внешний XA. Поддерживаются multi-table и INNER JOIN.
+`FOR UPDATE` / `SKIP LOCKED` выполняются только на **пишущем** узле (не на реплике только для чтения). Индексные ключи в сериализованных байтах блокируются локально (`LockAwareKeyCursor`). При включённой репликации и непустом списке пиров при старте выставляются Netty-агенты из **`peers` репликации** (`SqlServerRuntime` → `ReplicationCoordinator.createNettyDistForUpdatePeerLockAgents()`); пиры берут те же блокировки через `DistForUpdateCoordinator`. Голоса фазы prepare несут **набор ключей на пира**; аренда на соседе истекает через **30 с** (без отдельного журнала prepare — долговечность через журнал транзакций OpLog). Ошибка Netty на соседнем узле — **отказ клиенту**, а не тихий commit только на локальном узле. В autocommit аренда блокировки на соседе снимается после оператора; в открытой транзакции — до COMMIT/ROLLBACK. Prepare и commit-dec — облегчённый двухфазный протокол по блокировкам в кадрах продукта, не внешний XA. Поддерживаются несколько таблиц и INNER JOIN.
 
-Без репликации или при пустом списке peers блокировки только локальные. Отдельного YAML-ключа со списком DistForUpdate endpoints нет. Не путать с `grid.sql.distributed-peers` (разлёт только чтения SELECT/JOIN) — [SQL-сервер](../configuration/sql-server.md).
+Без репликации или при пустом списке `peers` блокировки только локальные. Отдельного YAML-ключа со списком адресов DistForUpdate нет. Не путать с `grid.sql.distributed-peers` (разлёт только чтения SELECT/JOIN) — [SQL-сервер](../configuration/sql-server.md).
 
 ### Авто-маршрут (v2)
 
@@ -55,14 +55,14 @@ grid:
       replica-reads-enabled: true
 ```
 
-### Primary + одна реплика (локально)
+### Пишущий узел + одна реплика (локально)
 
-Профили starter `application-primary.yml` / `application-replica.yml` включают чтение с реплики для локального стенда 1+1. В library по умолчанию `replica-reads-enabled: false`.
+Профили стартера `application-primary.yml` / `application-replica.yml` включают чтение с реплики для локального стенда 1+1. В библиотеке по умолчанию `replica-reads-enabled: false`.
 
-| Узел | Профиль | SQL | Репликация | dataDir |
-|------|---------|-----|------------|---------|
-| primary | `primary` | `:15432` | `:5615` | `./data-primary/...` |
-| replica | `replica` | `:15433` | `:5616` | `./data-replica/...` |
+| Узел | Профиль | SQL | Репликация | Каталог данных |
+|------|---------|-----|------------|----------------|
+| пишущий | `primary` | `:15432` | `:5615` | `./data-primary/...` |
+| реплика | `replica` | `:15433` | `:5616` | `./data-replica/...` |
 
 Узлы перекрёстно в `grid.replication.transport.peers`. У каждого узла свой `dataDir`.
 
@@ -78,15 +78,21 @@ grid://user:pass@127.0.0.1:15432,127.0.0.1:15433/public?connectTimeoutMs=1000&re
 
 ### URL чтения (N адресов)
 
+Приложение **обязано** перечислить SQL-адреса узлов кластера в authority и в `readEndpoints`.
+`createReadFactory` строит кольцо `readEndpoints` ∪ адреса authority и распределяет autocommit SELECT/EXPLAIN
+по правилу «наименьшее число незавершённых запросов» среди всех **не устаревших** членов кольца
+(предлагающий запись тоже в кольце). В v1 нет динамического состава из Orchid — только явный список в URL.
+После `applyLagStale` адрес помечается устаревшим, и трафик уходит на остальные.
+
 ```
-grid://user:pass@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433,127.0.0.1:15434&readPreference=REPLICA&maxReadConnections=2
+grid://user:pass@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433,127.0.0.1:15434&readPreference=REPLICA&maxReadConnections=6
 ```
 
 | Параметр | Смысл |
 |----------|--------|
-| `readEndpoints` | Список `host:port` для чтения (N≥1 при `readPreference=REPLICA`) |
+| `readEndpoints` | Список `host:port` для чтения (N≥1 при `readPreference=REPLICA`); для разгрузки пишущего укажите все синхронизированные избиратели |
 | `readPreference` | `PRIMARY` (по умолчанию) или `REPLICA` |
-| `maxReadConnections` | Потолок TCP для фабрики чтения (по умолчанию 1) |
+| `maxReadConnections` | Потолок TCP пула чтения (≥ размера кольца, иначе баланс схлопнется на один адрес) |
 | `staleReadPolicy` | v1: только отказ при устаревших данных |
 
 ### Фабрики
@@ -113,7 +119,7 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 | Witness | отказ чтения с реплики |
 | DML / BEGIN на `READ_REPLICA` | `READ_REPLICA_DML_DENIED` (после тега ANTLR) |
 
-В v1 нет политики `ALLOW_STALE` (только отказ при stale). После своей записи читайте с пишущего узла или смиритесь с возможным отставанием на реплике.
+В v1 нет политики `ALLOW_STALE` (только отказ при устаревших данных). После своей записи читайте с пишущего узла или смиритесь с возможным отставанием на реплике.
 
 ## Плюсы и риски
 
@@ -121,10 +127,10 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 |------|------|
 | Разгрузка пишущего от SELECT | При отставании — отказ и ротация адреса |
 | Авто-маршрут через общий ANTLR | `SqlRouteClassifier` должен совпадать с серверными тегами |
-| Явный read API доступен | Приложение может ошибочно звать `executeRead` для записи |
-| Jepsen остаётся PRIMARY-only | URL с `readEndpoints` в Elle отклоняется |
+| Явный API чтения доступен | Приложение может ошибочно звать `executeRead` для записи |
+| Jepsen остаётся только на PRIMARY | URL с `readEndpoints` в Elle отклоняется |
 | Hold может отдавать чтение при нормальном отставании | Witness никогда не отдаёт |
-| На Windows seal снимает mmap `.sbpt` перед REPLACE | Seal всё равно конкурирует с IO под нагрузкой |
+| На Windows уплотнение (seal) снимает mmap `.sbpt` перед REPLACE | Уплотнение всё равно конкурирует с дисковым вводом-выводом под нагрузкой |
 
 ## Поверхности API
 
@@ -133,8 +139,9 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 | `ConnectionFactory.fromUrl` + ANTLR авто-маршрут | готово (рекомендуется) |
 | `createReadStatement` / `executeRead` | готово (явный API) |
 | `RemoteConnectionFactory.createReadFactory` | готово (каналы к репликам) |
-| `staleReadPolicy` | v1 только отказ при stale |
+| `staleReadPolicy` | v1: только отказ при устаревших данных |
 | N `readEndpoints` + ротация на `applyLagStale` | готово (`ReplicaReadEndpointsRotateIT`) |
+| Баланс по незавершённым запросам на не устаревшем кольце (N≥3) | готово (`ReadEndpointSelector` + IT баланса) |
 
 Дальше: [отказы](failures.md), [повышение роли узла](ha-promote.md), [сеть репликации](../../understand/replication-network.md).
 

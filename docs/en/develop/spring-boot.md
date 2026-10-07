@@ -179,6 +179,7 @@ Rules for the client side:
 
 - Do **not** enable `grid.sql-server.enabled` and do not drag `grid-server-core` into every service — the engine must not start inside the application process.
 - One factory per process (or per peer), not a factory per request.
+- URL `maxTxContexts` is a **client** soft cap (default 256). The SQL listen path hard-caps **8** open contexts per TCP; Boot does not raise that from `grid.sql.max-tx-contexts`. See [SQL server](../configure-and-operate/configuration/sql-server.md).
 - Replica reads: client URL needs `readEndpoints`; the **server** also needs `grid.replication.ha.replica-reads-enabled: true` (library default off; starter `primary`/`replica` profiles turn it on). See [replica reads](../configure-and-operate/operations/replica-reads.md).
 - Do not block reactive chains inside a service; `.block()` belongs at the application boundary only. See [Java client](java-client.md).
 

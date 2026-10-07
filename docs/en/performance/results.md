@@ -107,6 +107,6 @@ When a plan goes parallel: [EXPLAIN and AQE](../sql/explain-and-aqe.md).
 - [Methodology](methodology.md)
 - [Capacity and thresholds](capacity-slo.md)
 - [Duplex value encoding](perf-duplex.md)
-- [ORCHID write critical path](perf-bio-consensus.md)
+- [ORCHID write path](perf-bio-consensus.md)
 
 Russian: [results.md](../../ru/performance/results.md).

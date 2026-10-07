@@ -51,8 +51,11 @@ SQL load comes from Apache JMeter over `grid-sql-client` (`grid://`), not JDBC. 
 | `ReplicaReadLatencyBenchmark` | read served from a replica |
 | `SealedQueryPathBenchmark` | sealed query path: memory, hybrid, disk |
 | `QueryHeavinessEstimatorBenchmark` | AQE admission estimate |
+| `AdaptiveParallelScanBenchmark` | serial vs adaptive parallel scan |
+| `GridBitmapIndexBenchmark` | BITMAP searchEq / searchIn / AND (wire keys) |
 | `ShardPartitionMapReduceBenchmark` | MapReduce over shard partitions |
 | `WireResidualBatchBenchmark` | batched residual EQ over wire bytes |
+| `ForUpdateDistNettyPeerLockBenchmark` | Dist FOR UPDATE Netty lock + prepare/COMMIT |
 | `run-jepsen-smoke.{ps1,sh}` | Compose N=3 stand; appends a row to RESULTS |
 
 `run-jmh-latency` runs the first five sequentially; the remaining tracks start from JUnit (`AbstractBenchmark.runJmh`) or the JMH CLI.
