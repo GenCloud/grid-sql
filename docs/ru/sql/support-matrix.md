@@ -15,7 +15,7 @@
 | Подготовленные | `PREPARE имя AS <оператор>`, `EXECUTE имя [USING v, …]`, `DEALLOCATE [PREPARE] имя` |
 | Таблицы | `CREATE TABLE [IF NOT EXISTS]`, `DROP TABLE [IF EXISTS]`, `ALTER TABLE … ADD COLUMN [IF NOT EXISTS]`, `ALTER TABLE … ADD [CONSTRAINT c] CHECK (…)`, `ALTER TABLE … ADD [CONSTRAINT c] PRIMARY KEY (…)`, `ALTER TABLE … ADD [CONSTRAINT c] FOREIGN KEY (…) REFERENCES …`, `ALTER TABLE … DROP COLUMN`, `ALTER TABLE … DROP CONSTRAINT` |
 | Индексы | `CREATE [UNIQUE\|BITMAP] INDEX [IF NOT EXISTS]`, `DROP INDEX [IF EXISTS] имя [ON таблица]` |
-| Схемы | `CREATE SCHEMA [IF NOT EXISTS] [AUTHORIZATION user]`, `DROP SCHEMA [IF EXISTS] имя [RESTRICT]`, `SET SCHEMA имя` | `AUTHORIZATION` игнорируется; `RESTRICT` по умолчанию; `CASCADE` отклоняется. Неквалифицированные имена → только схема сессии; cross-schema нужен явный `schema.table`; non-`public` catalog/replication key = `schema.table` |
+| Схемы | `CREATE SCHEMA [IF NOT EXISTS] [AUTHORIZATION user]`, `DROP SCHEMA [IF EXISTS] имя [RESTRICT]`, `SET SCHEMA имя` | `AUTHORIZATION` игнорируется; `RESTRICT` по умолчанию; `CASCADE` отклоняется. Неквалифицированные имена → только схема сессии; для другой схемы нужен явный `schema.table`; ключ каталога/репликации для схем кроме `public` = `schema.table` |
 | Представления | `CREATE VIEW … AS <запрос>`, `CREATE MATERIALIZED VIEW … AS <запрос>`, `REFRESH MATERIALIZED VIEW`, `DROP VIEW [IF EXISTS]` |
 | Последовательности | `CREATE SEQUENCE [IF NOT EXISTS] s [START WITH n] [INCREMENT BY n] [RECLAIM]`, `DROP SEQUENCE`, `SELECT NEXTVAL('s')`, `SELECT CURRVAL('s')` |
 | Функции | `CREATE FUNCTION f(аргументы) RETURNS тип AS CLASS 'fqcn' METHOD 'имя'`, `DROP FUNCTION` |

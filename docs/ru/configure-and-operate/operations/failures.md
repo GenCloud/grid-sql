@@ -93,7 +93,7 @@
 
 Jepsen unclean-revive (грязный рестарт узла с локальным `dataDir`) — PASS на стенде `2026-09-29-jepsen-unclean-revive`; полный прогон с ограждением tip / HELLO sealed rejoin — `2026-09-30-jepsen-full`. Матрица профилей A–M (**13/13** safety PASS) — `2026-10-03` (`run-jepsen-all-profiles.ps1`, [`COVERAGE.md`](../../../../benchmarks/jepsen/COVERAGE.md)).
 
-Симптомы tip-behind: `writerEligible=false` и отказ propose, пока локальный tip не догонит пиров; при ACK ниже watermark truncate — sealed pack на HELLO, затем хвост OpLog. После ASYNC захвата Hold без живой ссылки на бывший Active-ЦОД tip только среди Hold не снимает ограждение — ждать remote-DC peer. Под спокойным Multi-DC без nemesis (`*-nochao`) отказ `:no-proposer` / connect — дефект settle/доступности (клиент рано пошёл писать), не FAIL линейлизуемости: Elle/Knossos отбрасывает такие `:fail`. NACK по `prevOpSeq` — fail-closed triage OpLog/holdback/tip, кворум и `fsync` не ослаблять.
+Симптомы tip-behind: `writerEligible=false` и отказ propose, пока локальный tip не догонит пиров; при ACK ниже watermark truncate — sealed pack на HELLO, затем хвост OpLog. После ASYNC захвата Hold без живой ссылки на бывший Active-ЦОД tip только среди Hold не снимает ограждение — ждать remote-DC peer. Под спокойным Multi-DC без nemesis (`*-nochao`) отказ `:no-proposer` / connect — дефект settle/доступности (клиент рано пошёл писать), не FAIL линейлизуемости: Elle/Knossos отбрасывает такие `:fail`. NACK по `prevOpSeq` — разбор в режиме fail-closed (отказ предпочтительнее порчи данных): журнал OpLog, очередь holdback, ограждение tip; кворум и `fsync` не ослаблять.
 
 Сценарии: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md).
 

@@ -27,7 +27,7 @@
 | `Statement` | SQL; `execute` / `executeUpdate`; возвращает клиентский `Result` |
 | `Result` / `Row` | Набор строк или счётчик изменений на границе клиентского SPI |
 | `SqlResult` | Тип движка / commons на сервере — не то, что приложение получает из `Statement` |
-| `ServerMeta` | Метаданные закрепления пишущий (`writerEligible`, `promoteHint`, `regionEpoch`, …); `lastServerMeta()` на фабрике |
+| `ServerMeta` | Метаданные HA для закрепления на пишущем узле (`writerEligible`, `promoteHint`, `regionEpoch`, …); `lastServerMeta()` на фабрике |
 | `PreparedHandle` | Именованный PREPARE на сессии (`prepare` / `bind` / `execute` / `deallocate`) |
 
 ### ConnectionFactory

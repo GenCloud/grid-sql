@@ -83,7 +83,7 @@ mvn -pl grid-sql-client -am package -DskipTests
 
 ## Подключение в DBeaver
 
-1. **Database → Driver Manager → New**, добавьте jar.
+1. **База данных → Управление драйверами → Новый**, добавьте jar.
 2. Class name: `org.genfork.grid.jdbc.GridDriver`
 3. URL template / URL: `jdbc:grid://grid:grid@127.0.0.1:15432/public`
 
@@ -91,7 +91,7 @@ mvn -pl grid-sql-client -am package -DskipTests
 |------|----------|
 | Host | `127.0.0.1` |
 | Port | **15432** (реплика — **15433**) |
-| Database / Schema | Path после хостов = **схема** (например `public`), не отдельный JDBC catalog |
+| База / схема | Path после хостов = **схема** (например `public`), не отдельный JDBC catalog |
 | User / Password | Пустой каталог — можно без пароля; после первого `CREATE USER` — те же credentials, что в AUTH (см. [безопасность](../configure-and-operate/operations/security.md)) |
 
 Формат URL тот же, что у `grid://`, только с префиксом `jdbc:`: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. Path после хостов — **default schema** (не отдельный database catalog). Параметр `?hosts=` не поддерживается — несколько хостов пишутся через запятую в authority.
@@ -108,7 +108,7 @@ jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.
 
 - Дерево схемы: каталог, таблицы, колонки, индексы.
 - `Connection.getSchema()` отражает schema из path URL (например `…/my_app` → `my_app`).
-- Создание / удаление схем через SQL (`CREATE SCHEMA` / `DROP SCHEMA`; RESTRICT опционален). В Driver Manager DBeaver не включайте «Omit schema(s)».
+- Создание / удаление схем через SQL (`CREATE SCHEMA` / `DROP SCHEMA`; RESTRICT опционален). В «Управление драйверами» DBeaver не включайте «Omit schema(s)».
 - Админ только через SQL — у Custom Driver нет папки «Администрирование» / Manage Users:
   - `CREATE USER` / `DROP USER` / `GRANT` / `REVOKE`
   - `SELECT * FROM information_schema.users|roles|role_members|table_privileges`

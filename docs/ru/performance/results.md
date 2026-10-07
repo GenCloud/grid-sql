@@ -52,7 +52,7 @@
 | `hierarchicalSearchTick` (оптимизатор размещения) | 561.795 | µs/оп |
 | `releaseTwoShardEnvelope` | 294 728.130 | оп/с |
 
-Разбор одной долговечной записи по стадиям: [критический путь записи ORCHID](perf-bio-consensus.md).
+Разбор одной долговечной записи по стадиям: [путь записи ORCHID](perf-bio-consensus.md).
 
 ## Запросы и SQL
 
@@ -107,6 +107,6 @@
 - [Методика](methodology.md)
 - [Ёмкость и пороги](capacity-slo.md)
 - [Duplex-кодирование значений](perf-duplex.md)
-- [Критический путь записи ORCHID](perf-bio-consensus.md)
+- [Путь записи ORCHID](perf-bio-consensus.md)
 
 Английская версия: [results.md](../../en/performance/results.md).
