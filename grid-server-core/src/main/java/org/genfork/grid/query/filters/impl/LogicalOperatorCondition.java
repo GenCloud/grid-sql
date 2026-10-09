@@ -206,11 +206,42 @@ public class LogicalOperatorCondition implements FilterCondition {
 		}
 		try {
 			final Object actual = columnValue.apply(field);
+			// Decoded Object residual (VIEW/CTE post-filter, window ranks): compare Numbers
+			// without wire-width mismatch (BIGINT column vs INT literal).
+			if (actual instanceof Number actualNum && values.length > 0 && values[0] instanceof Number) {
+				return matchNumbers(actualNum, operator, values);
+			}
 			final byte[] actualWire = SqlWireUtil.toGenericArray(actual);
 			return matchWire(actualWire, operator, values);
 		} catch (RuntimeException ex) {
 			return false;
 		}
+	}
+
+	private static boolean matchNumbers(Number actual, Operator op, Object[] values) {
+		final double left = actual.doubleValue();
+		return switch (op) {
+			case EQ -> left == ((Number) values[0]).doubleValue();
+			case NE -> left != ((Number) values[0]).doubleValue();
+			case GT -> left > ((Number) values[0]).doubleValue();
+			case GE -> left >= ((Number) values[0]).doubleValue();
+			case LT -> left < ((Number) values[0]).doubleValue();
+			case LE -> left <= ((Number) values[0]).doubleValue();
+			case BETWEEN -> {
+				final double lo = ((Number) values[0]).doubleValue();
+				final double hi = ((Number) values[1]).doubleValue();
+				yield left >= lo && left <= hi;
+			}
+			case IN -> {
+				for (Object value : values) {
+					if (value instanceof Number n && left == n.doubleValue()) {
+						yield true;
+					}
+				}
+				yield false;
+			}
+			case LIKE -> false;
+		};
 	}
 
 	private static boolean matchWire(byte[] actual, Operator op, Object[] values) {

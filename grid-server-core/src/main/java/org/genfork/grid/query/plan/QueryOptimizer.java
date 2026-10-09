@@ -21,8 +21,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import org.genfork.grid.catalog.TableAnalyzeStats;
+import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.AbstractIndexOperation;
 import org.genfork.grid.mem.index.ArrayIndexType;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
@@ -80,6 +82,23 @@ public class QueryOptimizer {
 	                                                Map<String, ArrayIndexType> cachedOrderIndexFields,
 	                                                IndexOperationResult operationResult,
 	                                                TableRowStats tableStats) {
+		return chooseBestScanStrategy(
+				queryData, indexes, cachedOrderIndexFields, operationResult, tableStats, null, null);
+	}
+
+	/**
+	 * Cost-based TABLE vs BPTree vs FilterThenSort.
+	 *
+	 * @param schema      optional; enables wire-row ORDER BY when external-order fields are absent
+	 * @param rowResolver optional blob lookup for wire-row ORDER BY
+	 */
+	public static ScanChoice chooseBestScanStrategy(QueryData queryData,
+	                                                Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> indexes,
+	                                                Map<String, ArrayIndexType> cachedOrderIndexFields,
+	                                                IndexOperationResult operationResult,
+	                                                TableRowStats tableStats,
+	                                                TableSchema schema,
+	                                                Function<byte[], byte[]> rowResolver) {
 		final SortOrderData[] sortOrderData = queryData.sortOrder();
 		final long candidates = operationResult == null ? 0L : Math.max(0L, operationResult.getSize());
 		final int limit = queryData.paging() == null ? -1 : queryData.paging().limit();
@@ -98,7 +117,8 @@ public class QueryOptimizer {
 		}
 
 		final double sortCost = QueryCardinality.costFilterThenSort(candidates, limit);
-		final FilterThenSortStrategy filterThenSort = new FilterThenSortStrategy(cachedOrderIndexFields);
+		final FilterThenSortStrategy filterThenSort = new FilterThenSortStrategy(
+				cachedOrderIndexFields, schema, rowResolver);
 
 		if (sortOrderData.length == 1) {
 			final String sortField = sortOrderData[0].sortField();
@@ -116,26 +136,9 @@ public class QueryOptimizer {
 			}
 		}
 
-		// FilterThenSort needs external-order ArrayIndexType; otherwise fall back to table order.
-		if (cachedOrderIndexFields == null || !hasExternalOrderSortKeys(sortOrderData, cachedOrderIndexFields)) {
-			final double cost = QueryCardinality.costTableScan(candidates > 0 ? candidates : tableRows);
-			return new ScanChoice(TableScanStrategy.INSTANCE, cost, SqlExplainKinds.TABLE);
-		}
-
+		// ORDER BY must never fall back to unordered TableScan (HashSet / pointer lottery).
+		// FilterThenSort sorts via external-order ArrayIndexType when present, else wire row compare.
 		return new ScanChoice(filterThenSort, sortCost, SqlExplainKinds.INDEX);
-	}
-
-	private static boolean hasExternalOrderSortKeys(
-			SortOrderData[] sortOrderData,
-			Map<String, ArrayIndexType> cachedOrderIndexFields
-	) {
-		for (SortOrderData data : sortOrderData) {
-			if (data != null && data.sortField() != null
-					&& cachedOrderIndexFields.containsKey(data.sortField())) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/**
@@ -242,26 +245,54 @@ public class QueryOptimizer {
 		return Math.max(1L, tableRows);
 	}
 
+	/**
+	 * Composite-index rewrite with optional single-column ORDER BY hint (prefix leaf match).
+	 */
 	public static FilterConditionData tryOptimizeForCompositeIndex(Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
 	                                                               Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 	                                                               FilterCondition root,
 	                                                               SortOrderData sortOrder) {
+		final SortOrderData[] orders = sortOrder == null ? null : new SortOrderData[]{sortOrder};
+		return tryOptimizeForCompositeIndex(compositeIndexes, property2Index, root, orders, null);
+	}
+
+	/**
+	 * Composite-index rewrite; marks ordered PK leaf when AlwaysTrue + ascending PK-prefix ORDER BY.
+	 *
+	 * @param sortOrders          full ORDER BY list (multi-column OK for PK-prefix leaf)
+	 * @param primaryKeyColumns   catalog PK column names in order; may be {@code null} to skip PK leaf mark
+	 */
+	public static FilterConditionData tryOptimizeForCompositeIndex(Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
+	                                                               Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
+	                                                               FilterCondition root,
+	                                                               SortOrderData[] sortOrders,
+	                                                               List<String> primaryKeyColumns) {
 		final FilterCondition normalizedRoot = normalizeFilterTree(root);
 
 		// AND-over-OR distribute → DNF
 		FilterCondition dnfRoot = distributeAndOverOr(normalizedRoot);
+
+		// Composite prefix path still uses a single ORDER BY key (next column after EQ prefix).
+		final SortOrderData compositeSortHint = sortOrders != null && sortOrders.length == 1
+				? sortOrders[0]
+				: null;
 
 		// Try each composite index against the DNF tree
 		for (Map.Entry<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> entry : compositeIndexes.entrySet()) {
 			final List<String> indexFields = entry.getKey();
 			final AbstractIndexOperation<byte[][], CompositeTreeKey> index = entry.getValue();
 
-			final DnfResult dnfResult = optimizeDnfWithCompositeIndex(dnfRoot, indexFields, index, property2Index, sortOrder);
+			final DnfResult dnfResult = optimizeDnfWithCompositeIndex(dnfRoot, indexFields, index, property2Index, compositeSortHint);
 			dnfRoot = dnfResult.condition();
 
 			if (dnfResult.useSameOrderAscendingIndex()) {
 				return new FilterConditionData(dnfRoot, true);
 			}
+		}
+
+		if (dnfRoot instanceof AlwaysTrueCondition
+				&& PkOrderMatchUtil.matchesAscendingPrimaryKeyPrefix(sortOrders, primaryKeyColumns)) {
+			return new FilterConditionData(dnfRoot, true);
 		}
 
 		return new FilterConditionData(dnfRoot, false);

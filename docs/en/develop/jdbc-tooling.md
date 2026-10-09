@@ -104,6 +104,18 @@ Example replica URL:
 jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.0.0.1:15433,127.0.0.1:15434
 ```
 
+## DDL and autocommit (DBeaver)
+
+Grid **rejects DDL inside an open transaction** (`DDL not allowed inside an open transaction`). The catalog is not part of TX rollback — server contract, not a driver bug.
+
+DBeaver often defaults to `Auto-commit = OFF` (`Connection.setAutoCommit(false)` opens a TX immediately). Then `DROP TABLE` / `CREATE TABLE` fail with SQLState `25001`.
+
+| Action | How |
+|--------|-----|
+| DDL from SQL Editor | Turn **Auto-commit** on for the connection (or `COMMIT`, then DDL) |
+| DML in a TX | Auto-commit OFF is fine |
+| Flyway / app scripts | Already autocommit / outside TX |
+
 ## What works
 
 - Schema tree: catalog, tables, columns, indexes.
@@ -115,7 +127,7 @@ jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.
 - SQL Editor: one-off `SELECT` and DML within the simplified dialect.
 - **Multi-statement scripts** (semicolon-separated): ANTLR `script` split → `BATCH_EXEC` (DBeaver script without Bad SQL).
 - Transactions, including savepoints. Parallel TX = N JDBC `Connection`s from the same factory (multiplex), not one TX per socket.
-- A scrollable `ResultSet` and the Data Editor — for a single table with a primary key (rows materialized for IDE navigation).
+- A scrollable `ResultSet` and the Data Editor — for a single table with a primary key (rows materialized for IDE navigation). On a **composite PK**, Data Editor update/delete WHERE uses the **leading PK column only** (not the full composite key).
 - `Statement.cancel()` cancels the in-flight SyncAwait and sends wire `CANCEL`.
 - `Statement.setQueryTimeout` → Sync await budget; timezone via `Connection.setClientInfo("timezone", …)` / unwrap `SyncConnection`.
 - Unwrap: `SyncConnection`, `ServerMeta`, `SyncConnectionFactory`; helpers `pin` / `unpin` on `GridConnection`.

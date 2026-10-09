@@ -6,7 +6,7 @@
 
     <groupId>org.genfork</groupId>
     <artifactId>grid-sql</artifactId>
-    <version>1.0</version>
+    <version>1.1.0</version>
     <packaging>pom</packaging>
     <name>Grid SQL</name>
     <description>Grid SQL — durable in-memory SQL engine (org.genfork.grid)</description>

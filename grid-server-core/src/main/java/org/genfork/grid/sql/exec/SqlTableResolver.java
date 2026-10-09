@@ -216,8 +216,9 @@ public final class SqlTableResolver {
 		if (store != null) {
 			store.close();
 		}
-		// Intentionally no purgeDomainArtifacts here: sealed file delete / hydrate forget on
-		// every DROP/CREATE (JMeter capacity stamps) crushed READ_ONLY (~10k vs ~55k). Keep
-		// ReplicationCoordinator.purgeDomainArtifacts for explicit retire outside load DROP.
+
+		if (replicationCoordinator != null) {
+			replicationCoordinator.onTableDropped(tableName);
+		}
 	}
 }

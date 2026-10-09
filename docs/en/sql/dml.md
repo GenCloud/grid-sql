@@ -29,36 +29,54 @@ INSERT INTO orders (id, customer_id, total) VALUES
 
 Columns not listed take a declared `DEFAULT` (literal / `NOW()` / `CURRENT_TIMESTAMP` / `CURRENT_DATE`), otherwise `NULL` — unless they carry `NOT NULL`, `IDENTITY` or `SERIAL`.
 
+### INSERT … SELECT
+
+Rows may come from a `SELECT` instead of `VALUES`. Same apply-row / conflict / TX path as multi-row `VALUES`. Set-op sources (`UNION` / …) in the SELECT are rejected.
+
+```sql
+INSERT INTO orders_archive (id, customer_id, total)
+  SELECT id, customer_id, total FROM orders WHERE status = 'closed';
+
+INSERT INTO orders (id, customer_id, total)
+  SELECT id, customer_id, total FROM staging
+  ON CONFLICT (id) DO UPDATE SET total = EXCLUDED.total;
+```
+
 ## ON CONFLICT
 
-`UPSERT` is shorthand for "overwrite with the `VALUES` payload". When you need different behaviour, spell the conflict out:
+`UPSERT` is shorthand for "overwrite with the `VALUES` / SELECT payload". When you need different behaviour, spell the conflict out:
 
 ```sql
 -- silently skip a duplicate
 INSERT INTO orders (id, customer_id) VALUES (1, 100)
   ON CONFLICT DO NOTHING;
 
--- update only some columns
+-- update only some columns (literals, EXCLUDED, COALESCE, CASE)
 INSERT INTO orders (id, customer_id, total) VALUES (1, 100, 59.90)
-  ON CONFLICT (id) DO UPDATE SET total = 59.90, status = 'updated';
+  ON CONFLICT (id) DO UPDATE SET
+    total = EXCLUDED.total,
+    status = COALESCE(EXCLUDED.status, orders.status);
 ```
 
 The column list in `ON CONFLICT (...)` says which key the conflict is checked against: the primary key or a unique index. Without a list the primary key is used.
 
-`DO UPDATE SET` takes literal assignments only. A conflict resolution that has to read the stored value first — "add the incoming amount to the existing one" — belongs in an `UPDATE` inside a transaction, not in `ON CONFLICT`.
+`DO UPDATE SET` accepts literals (incl. `NULL` / `TRUE` / `FALSE` / `?`), `EXCLUDED.col`, builtins, `COALESCE(…)`, and row-aware `CASE`. A pure read-modify-write against the stored row (`total = total + 10`) still belongs in a plain `UPDATE`, not in `ON CONFLICT`.
 
 ## UPDATE
 
 ```sql
 UPDATE orders SET status = 'shipped' WHERE id = 1;
 UPDATE orders SET status = 'bulk', total = 0 WHERE customer_id = 100;
+UPDATE orders SET note = NULL, active = FALSE WHERE id = 1;
+UPDATE orders SET status = status WHERE id = 1;                 -- column copy
+UPDATE orders SET flag = CASE WHEN total > 0 THEN TRUE ELSE FALSE END WHERE id = 1;
 ```
 
 `WHERE` is mandatory. Updating a whole table in one unconditional statement is simply not in the grammar — that is deliberate protection against an accidental "update everything".
 
 `UPDATE` does **not** invent a missing PK row: no match → 0 rows affected, no empty seed in the map/journal. Insert or full-row overwrite uses `UPSERT` / `INSERT … ON CONFLICT`.
 
-The right-hand side of an assignment is not limited to literals. Three read-modify-write forms exist:
+Assignment RHS may be a literal (`NULL` / `TRUE` / `FALSE` / `?` / builtin), another column, `CASE`, or a read-modify-write form. Three RMW forms exist:
 
 ```sql
 UPDATE orders SET total = total + 10 WHERE id = 1;          -- numeric increment
@@ -167,12 +185,13 @@ Reads use the same dialect. In brief:
 | Sorting and slicing | `ORDER BY ... ASC/DESC`, `LIMIT n`, `LIMIT n OFFSET m`, plus `LIMIT offset, count` |
 | Set operations | `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT` |
 | Subqueries | `IN (SELECT ...)`, `EXISTS (SELECT ...)`, comparison against a scalar subquery |
+| No `FROM` | `SELECT 1`, `SELECT fn(…)`, `SELECT NEXTVAL('s')`, `SELECT EXISTS (SELECT …)`, `SELECT NOT EXISTS (SELECT …)` |
 | CTE | `WITH name AS (...) SELECT ...`, including `RECURSIVE` |
 | Window functions | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, aggregates with `OVER (PARTITION BY ... ORDER BY ...)` |
 | Row locking | `FOR UPDATE`, `FOR UPDATE SKIP LOCKED` |
-| Expressions | `CASE WHEN ... THEN ... ELSE ... END`, `CAST(x AS TYPE)`, function calls |
+| Expressions | `CASE WHEN ... THEN ... ELSE ... END`, `CAST(x AS TYPE)`, function calls; quoted identifiers (`"Col"`) fold to case-insensitive names |
 
-There are no expressions in projections, filters or `ORDER BY`, and no table aliases in `FROM`. For "neighbouring row" or "previous value" problems, reach for `WITH` plus `LAG`/`LEAD` rather than nested derived tables: the plan comes out shorter and more predictable.
+JOOQ `SELECT 1 AS one` inside `EXISTS` is accepted. Prefer `WITH` plus `LAG`/`LEAD` over nested derived tables when you need neighbouring-row logic.
 
 `FOR UPDATE` and `SKIP LOCKED` work on the writer node only. They are meaningless on a read replica — see [replica reads](../configure-and-operate/operations/replica-reads.md).
 

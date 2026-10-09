@@ -15,7 +15,7 @@ On a clean machine: install JDK 25 and Maven, clone the repo, then build online 
 
 ```bash
 mvn -pl grid-sql-server-starter -am package -DskipTests
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=capacity
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=capacity
 ```
 
 The `capacity` profile listens for SQL on **15432** with `fsync: true` and replication off. From an IDE you can run `org.genfork.grid.sql.SqlServerMain` with the same profile.
@@ -51,8 +51,8 @@ SQL is parsed by ANTLR only (`SimplifiedSql.g4`). DDL inside an open transaction
 ## Two-node HA
 
 ```bash
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=primary
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=replica
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=primary
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=replica
 ```
 
 Ports: SQL **15432** / **15433**, replication **5615** / **5616**. Multi-host URLs and writer pinning: [connect clients](connect-clients.md).

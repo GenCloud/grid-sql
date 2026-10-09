@@ -74,6 +74,7 @@ public final class GridResultSet implements ResultSet {
 	private static final String MSG_NOT_ON_INSERT = "Cursor is not on insert row";
 	private static final String MSG_INVALID_COLUMN = "Invalid column index: ";
 	private static final String MSG_UNKNOWN_COLUMN = "Unknown column: ";
+	private static final String MSG_DELETE_NO_ROW = "DELETE affected 0 rows";
 	private static final String SQLSTATE_GENERAL = "HY000";
 
 	private static final String SQL_NULL = "NULL";
@@ -907,7 +908,10 @@ public final class GridResultSet implements ResultSet {
 		final Object pkVal = rows.get(cursor)[edit.pkIndex()];
 		final String sql = SQL_DELETE + edit.qualifiedTable()
 				+ SQL_WHERE + edit.pkColumn() + SQL_EQ + sqlLiteral(pkVal);
-		statement.connection.executeUpdateInternal(sql);
+		final int updated = statement.connection.executeUpdateInternal(sql);
+		if (updated < 1) {
+			throw new SQLException(MSG_DELETE_NO_ROW, SQLSTATE_GENERAL);
+		}
 		rows.remove(cursor);
 		if (cursor >= rows.size()) {
 			cursor = rows.size();

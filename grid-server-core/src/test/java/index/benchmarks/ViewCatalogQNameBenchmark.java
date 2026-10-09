@@ -69,4 +69,13 @@ public class ViewCatalogQNameBenchmark extends AbstractLatencyBenchmark {
 	public String viewDefCatalogKeyLookup() {
 		return engine.catalog().getView(SCHEMA + ".v0").catalogKey();
 	}
+
+	@Benchmark
+	public int createViewJoiningPlainView() {
+		engine.execute("DROP VIEW IF EXISTS " + SCHEMA + ".vj");
+		engine.execute(
+				"CREATE VIEW " + SCHEMA + ".vj AS SELECT b.id, v0.v FROM "
+						+ SCHEMA + ".base b JOIN " + SCHEMA + ".v0 v0 ON b.id = v0.id");
+		return engine.catalog().getView(SCHEMA + ".vj").columns().size();
+	}
 }

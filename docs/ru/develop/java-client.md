@@ -20,7 +20,7 @@ JDBC-клиент (`org.genfork.grid.jdbc`) — стабильный синхр�
 <dependency>
   <groupId>org.genfork</groupId>
   <artifactId>grid-sql-client</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
@@ -199,6 +199,21 @@ grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:1
 ```
 
 Чтение своих записей через реплику без лишнего обхода через пишущий не гарантируется. При превышении допустимого отставания реплика отвечает `REPLICA_READ_STALE`, и клиент меняет адрес реплики. Полный разбор политик, отказов и рисков — [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
+
+### Принудительно на пишущий (`SqlClientRouteContext`)
+
+Если в URL есть `readEndpoints` / `readPreference=REPLICA`, autocommit `SELECT`/`EXPLAIN` может уйти на реплику. Миграции и DDL-tooling (Flyway, скрипты схемы), которым нужен только proposer, закрепляют текущий поток:
+
+```java
+try (AutoCloseable ignored = SqlClientRouteContext.forcePrimary()) {
+    // SELECT / EXPLAIN / любой оператор в этом потоке → пишущий, не пул READ_REPLICA
+    flyway.migrate();
+}
+// или: SqlClientRouteContext.runWithPrimary(() -> …);
+// или: SqlClientRouteContext.callWithPrimary(() -> …);
+```
+
+Thread-local; вложенный `forcePrimary()` при `close` восстанавливает предыдущий pin. Вне scope снова действует маршрутизация из URL.
 
 ## Потоковая выдача больших выборок
 

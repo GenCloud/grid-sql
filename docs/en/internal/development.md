@@ -55,7 +55,7 @@ Conditions: [methodology](../performance/methodology.md). Current numbers: [resu
 
 ```bash
 mvn -pl grid-sql-server-starter -am package
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar
 
 # Jepsen nodes
 mvn -pl grid-sql-jepsen-starter -am package
@@ -66,7 +66,6 @@ Replication status for operators is exposed through Actuator health and Micromet
 ## Related
 
 - [Architecture overview](../understand/architecture-overview.md)
-- [Bug journal](bug-journal.md)
 - [Capacity and thresholds](../performance/capacity-slo.md)
 - [Replica reads](../configure-and-operate/operations/replica-reads.md) and [promote a node](../configure-and-operate/operations/ha-promote.md)
 

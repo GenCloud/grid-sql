@@ -27,6 +27,7 @@ import org.genfork.grid.antlr.SimplifiedSqlParser.JoinClauseContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinCondContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinHeadContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinTargetContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.TableNameContext;
 import org.genfork.grid.sql.ast.SelectAst.JoinEq;
 import org.genfork.grid.sql.ast.SelectAst.JoinKind;
 
@@ -39,6 +40,8 @@ import org.genfork.grid.sql.ast.SelectAst.JoinKind;
  */
 public final class SqlIdentParseUtil {
 	private static final String FULL_TABLE_WHERE_SQL = "TRUE";
+	private static final char QUALIFIER_SEP = '.';
+	private static final char QUOTED_ID_QUOTE = '"';
 
 	private SqlIdentParseUtil() {
 	}
@@ -48,11 +51,51 @@ public final class SqlIdentParseUtil {
 		return FULL_TABLE_WHERE_SQL;
 	}
 
+	/**
+	 * Physical column name for {@code store.projectBytes} / {@code requireColumn}:
+	 * {@code t.col} → {@code col}; bare names unchanged.
+	 */
+	public static String physicalProjectionName(String projectionLabel) {
+		if (projectionLabel == null || projectionLabel.isEmpty()) {
+			return projectionLabel;
+		}
+		final int dot = projectionLabel.lastIndexOf(QUALIFIER_SEP);
+		if (dot < 0 || dot + 1 >= projectionLabel.length()) {
+			return projectionLabel;
+		}
+		return projectionLabel.substring(dot + 1);
+	}
+
 	public static String identText(IdentContext ctx) {
 		if (ctx == null) {
 			throw new IllegalArgumentException("missing ident");
 		}
-		return ctx.getText();
+		return stripQuotedIdent(ctx.getText());
+	}
+
+	/**
+	 * Strip optional double quotes from a lexer {@code QUOTED_ID} (JOOQ reserved-word escape).
+	 * Bare {@code ID} / keyword idents are returned unchanged.
+	 */
+	public static String stripQuotedIdent(String raw) {
+		if (raw == null || raw.length() < 2) {
+			return raw;
+		}
+		if (raw.charAt(0) == QUOTED_ID_QUOTE && raw.charAt(raw.length() - 1) == QUOTED_ID_QUOTE) {
+			return raw.substring(1, raw.length() - 1);
+		}
+		return raw;
+	}
+
+	/** Catalog / resolve key from {@code tableName} rule (schema.table or bare), quotes stripped. */
+	public static String tableNameText(TableNameContext ctx) {
+		if (ctx == null || ctx.ident() == null || ctx.ident().isEmpty()) {
+			throw new IllegalArgumentException("missing table name");
+		}
+		if (ctx.ident().size() == 1) {
+			return identText(ctx.ident(0));
+		}
+		return identText(ctx.ident(0)) + QUALIFIER_SEP + identText(ctx.ident(1));
 	}
 
 	/** Unqualified column id (t.col -> col). */
@@ -101,7 +144,7 @@ public final class SqlIdentParseUtil {
 	}
 
 	public static String joinTableName(JoinClauseContext jc) {
-		return jc.joinTarget().tableName().getText();
+		return tableNameText(jc.joinTarget().tableName());
 	}
 
 	public static JoinKind joinKindOf(JoinClauseContext jc) {

@@ -15,9 +15,11 @@
  */
 package org.genfork.grid.sql.exec;
 
+import org.genfork.grid.catalog.CatalogPersistUtil;
+import org.genfork.grid.catalog.CatalogQualifiedName;
+import org.genfork.grid.catalog.CatalogViewBodyQualifyUtil;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.CheckDef;
-import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.sql.ast.DdlAst.SequenceValueSql;
 import org.genfork.grid.sql.ast.DdlAst.FkSpec;
 import org.genfork.grid.sql.ast.DdlAst.DropSequenceSql;
@@ -57,9 +59,11 @@ import org.genfork.grid.sql.ast.DdlAst.DropTriggerSql;
 import org.genfork.grid.sql.ast.DdlAst.DropViewSql;
 import org.genfork.grid.sql.ast.DdlAst.RefreshMaterializedViewSql;
 import org.genfork.grid.sql.ast.SelectAst.SelectSql;
+import org.genfork.grid.sql.ast.SelectAst.WithSelectSql;
 import org.genfork.grid.sql.ast.DdlAst.SetSchemaSql;
 import org.genfork.grid.sql.ast.Stmt;
 import org.genfork.grid.sql.SqlStatementTag;
+import org.genfork.grid.sql.udf.SqlUdfCallContext;
 import org.genfork.grid.store.TableStore;
 
 import java.util.ArrayList;
@@ -184,7 +188,8 @@ public final class SqlDdlExecutor {
 			throw ex;
 		}
 		tables.ensureStore(schema);
-		final String persist = SqlDdlRender.createTable(s, table);
+		final String persist = SqlDdlRender.createTable(
+				s, table, schema.foreignKeys(), schema.checks());
 		catalog.appendDdl(persist);
 		publishDdl(persist, schema.schemaEpoch());
 		return SqlResult.ddl(SqlStatementTag.CREATE_TABLE);
@@ -254,7 +259,7 @@ public final class SqlDdlExecutor {
 		}
 		return SqlResult.resultSet(
 				List.of(SqlResult.ColumnMeta.of(s.nextVal() ? "nextval" : "currval", SqlType.BIGINT)),
-				List.<Object[]>of(new Object[]{Long.valueOf(value)}));
+				List.<Object[]>of(new Object[]{value}));
 	}
 
 	public SqlResult dropTable(SqlSession session, DropTableSql s) {
@@ -380,6 +385,7 @@ public final class SqlDdlExecutor {
 		final TableStore store = tables.requireStore(table);
 		final long epoch = catalog.nextEpoch();
 		final TableSchema next;
+		FkDef resolvedAddFk = null;
 		if (s.dropConstraintName() != null) {
 			next = dropConstraint(store.schema(), s.dropConstraintName(), epoch);
 		} else if (s.addForeignKey() != null) {
@@ -387,7 +393,7 @@ public final class SqlDdlExecutor {
 			final String fkName = fk.nameOrNull() == null || fk.nameOrNull().isBlank()
 					? FkDef.defaultName(table, fk.childColumns())
 					: fk.nameOrNull();
-			next = store.schema().withForeignKey(FkDef.of(
+			resolvedAddFk = FkDef.of(
 					fkName,
 					table,
 					fk.childColumns(),
@@ -396,7 +402,8 @@ public final class SqlDdlExecutor {
 							session.currentSchema()),
 					fk.parentColumns(),
 					FkAction.fromToken(fk.onDeleteOrNull()),
-					FkAction.fromToken(fk.onUpdateOrNull())), epoch);
+					FkAction.fromToken(fk.onUpdateOrNull()));
+			next = store.schema().withForeignKey(resolvedAddFk, epoch);
 		} else if (s.addPrimaryKeyColumns() != null) {
 			next = store.schema().withPrimaryKeyColumns(s.addPrimaryKeyColumns(), epoch);
 		} else if (s.addCheck() != null) {
@@ -428,7 +435,7 @@ public final class SqlDdlExecutor {
 		}
 		store.replaceColumnSchema(next);
 		catalog.replaceSchema(next);
-		final String persist = SqlDdlRender.alterTable(s, table);
+		final String persist = SqlDdlRender.alterTable(s, table, resolvedAddFk);
 		catalog.appendDdl(persist);
 		publishDdl(persist, epoch);
 		return SqlResult.ddl(SqlStatementTag.ALTER_TABLE);
@@ -451,6 +458,9 @@ public final class SqlDdlExecutor {
 
 	public SqlResult createView(SqlSession session, CreateViewSql s) {
 		ensureDdlWriteAdmission();
+		if (query == null) {
+			throw new IllegalStateException("query executor required for VIEW column inference");
+		}
 		final TableCatalog catalog = tables.catalog();
 		final String table = tables.resolveTable(session, s.table());
 		if (catalog.getView(table) != null || catalog.exists(table)) {
@@ -459,10 +469,13 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("View or table already exists: " + table);
 		}
+		// DDL edge: qualify before parse/infer; createView qualifies again (idempotent).
+		final String body = qualifyViewBody(table, s.selectSql());
+		final List<ColumnDef> viewCols = inferViewColumns(session, body);
 		final long epoch = catalog.nextEpoch();
-		catalog.createView(table, s.selectSql(), false);
+		final ViewDef created = catalog.createView(table, body, false, 0L, 0L, viewCols);
 		SqlNamedQueryExpand.clearCache();
-		final String persist = SqlDdlRender.createView(table, s.selectSql());
+		final String persist = SqlDdlRender.createView(table, created.selectSql());
 		catalog.appendDdl(persist);
 		publishDdl(persist, epoch);
 		return SqlResult.ddl(SqlStatementTag.CREATE_VIEW);
@@ -504,87 +517,28 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("View or table already exists: " + table);
 		}
-		final Stmt selectStmt = SqlStatementParser.parse(s.selectSql());
-		if (!(selectStmt instanceof SelectSql select)) {
-			throw new IllegalArgumentException("MATERIALIZED VIEW body must be SELECT");
-		}
-		if (select.hasJoins()) {
-			final List<ColumnDef> joinedCols = query.joinSchemaColumns(session, select);
-			final List<String> proj = select.projection();
-			final boolean star = proj.size() == 1 && "*".equals(proj.getFirst());
-			final List<ColumnDef> sourceCols = new ArrayList<>();
-			if (star) {
-				sourceCols.addAll(joinedCols);
-			} else {
-				for (String col : proj) {
-					ColumnDef found = null;
-					for (ColumnDef c : joinedCols) {
-						if (c.name().equalsIgnoreCase(col)) {
-							found = c;
-							break;
-						}
-					}
-					if (found == null) {
-						throw new IllegalArgumentException("unknown column in MATERIALIZED VIEW: " + col);
-					}
-					sourceCols.add(found);
-				}
-			}
-			if (sourceCols.isEmpty()) {
-				throw new IllegalArgumentException("MATERIALIZED VIEW projection empty");
-			}
-			final TableSchema.Builder b = TableSchema.builder(table).schemaEpoch(catalog.nextEpoch());
-			for (int i = 0; i < sourceCols.size(); i++) {
-				final ColumnDef col = sourceCols.get(i);
-				if (i == 0) {
-					b.primaryKey(col.name(), col.type());
-				} else {
-					b.column(col.name(), col.type(), col.nullable());
-				}
-			}
-			final TableSchema schema = catalog.createTable(b.build());
-			tables.ensureStore(schema);
-			populateMaterialized(session, table, select);
-			final long epoch = schema.schemaEpoch();
-			catalog.createView(table, s.selectSql(), true, epoch, epoch);
-			final String persist = SqlDdlRender.createMaterializedView(table, s.selectSql());
-			catalog.appendDdl(persist);
-			publishDdl(persist, epoch);
-			return SqlResult.ddl(SqlStatementTag.CREATE_MATERIALIZED_VIEW);
-		}
-		final String baseName = tables.resolveTable(session, select.table());
-		final TableSchema base = catalog.requireSchema(baseName);
-		final List<String> proj = select.projection();
-		final boolean star = proj.size() == 1 && "*".equals(proj.getFirst());
-		final List<ColumnDef> sourceCols = new ArrayList<>();
-		if (star) {
-			sourceCols.addAll(base.columns());
-		} else {
-			for (String col : proj) {
-				sourceCols.add(base.requireColumn(col));
-			}
-		}
-		if (sourceCols.isEmpty()) {
-			throw new IllegalArgumentException("MATERIALIZED VIEW projection empty");
-		}
+		// DDL edge: qualify before parse/populate; createView qualifies again (idempotent).
+		final String body = qualifyViewBody(table, s.selectSql());
+		final SelectSql schemaSelect = schemaSelectFromMvBody(body);
+		final List<ColumnDef> sourceCols = mvSourceColumns(session, schemaSelect);
+		final List<ColumnDef> mvCols = SqlMaterializedViewSchemaUtil.resolveColumns(sourceCols, schemaSelect);
 		final TableSchema.Builder b = TableSchema.builder(table).schemaEpoch(catalog.nextEpoch());
-		for (int i = 0; i < sourceCols.size(); i++) {
-			final ColumnDef col = sourceCols.get(i);
-			if (i == 0) {
-				b.primaryKey(col.name(), col.type());
-			} else {
-				b.column(col.name(), col.type(), col.nullable());
-			}
-		}
+		SqlMaterializedViewSchemaUtil.applyToBuilder(b, mvCols);
 		final TableSchema schema = catalog.createTable(b.build());
 		tables.ensureStore(schema);
-		populateMaterialized(session, table, select);
+		populateMaterializedFromSql(table, body);
 		final long epoch = schema.schemaEpoch();
-		catalog.createView(table, s.selectSql(), true, epoch, epoch);
-		final String persist = SqlDdlRender.createMaterializedView(table, s.selectSql());
+		catalog.createView(table, body, true, epoch, epoch);
+		final String persist = SqlDdlRender.createMaterializedView(table, body);
 		catalog.appendDdl(persist);
 		publishDdl(persist, epoch);
 		return SqlResult.ddl(SqlStatementTag.CREATE_MATERIALIZED_VIEW);
+	}
+
+	private static String qualifyViewBody(String resolvedViewCatalogKey, String selectSql) {
+		final CatalogQualifiedName qn = CatalogQualifiedName.parse(
+				resolvedViewCatalogKey, CatalogPersistUtil.SCHEMA_PUBLIC);
+		return CatalogViewBodyQualifyUtil.qualifyUnqualifiedTables(selectSql, qn.schemaName());
 	}
 
 	public SqlResult refreshMaterializedView(SqlSession session, RefreshMaterializedViewSql s) {
@@ -598,17 +552,17 @@ public final class SqlDdlExecutor {
 		if (def == null || !def.materialized()) {
 			throw new IllegalStateException("Materialized view not found: " + table);
 		}
-		final Stmt selectStmt = SqlStatementParser.parse(def.selectSql());
-		if (!(selectStmt instanceof SelectSql select)) {
-			throw new IllegalArgumentException("MATERIALIZED VIEW body must be SELECT");
-		}
+		// Fail-closed: compute first; clear+put only after success.
+		final SqlResult data = SqlUdfCallContext.require().execute(def.selectSql());
 		final TableStore store = tables.requireStore(table);
 		final List<Object[]> existing = store.allRows();
 		final ColumnDef pk = store.schema().pkColumn();
 		for (Object[] row : existing) {
 			store.removeIndexed(row[pk.ordinal()]);
 		}
-		populateMaterialized(session, table, select);
+		for (Object[] row : data.rows()) {
+			store.putIndexed(row);
+		}
 		final long epoch = catalog.nextEpoch();
 		catalog.noteViewRefreshed(table, epoch, catalog.currentEpoch());
 		final String persist = SqlDdlRender.refreshMaterializedView(table);
@@ -617,8 +571,62 @@ public final class SqlDdlExecutor {
 		return SqlResult.ddl(SqlStatementTag.REFRESH_MATERIALIZED_VIEW);
 	}
 
-	private void populateMaterialized(SqlSession session, String table, SelectSql select) {
-		final SqlResult data = query.select(session, select);
+	private static SelectSql schemaSelectFromMvBody(String body) {
+		final Stmt selectStmt = SqlStatementParser.parse(body);
+		if (selectStmt instanceof SelectSql select) {
+			return select;
+		}
+		if (selectStmt instanceof WithSelectSql with) {
+			if (with.ctes().size() != 1) {
+				throw new IllegalArgumentException(
+						"MATERIALIZED VIEW WITH body supports exactly one CTE for schema inference");
+			}
+			final Stmt cteBody = SqlStatementParser.parse(with.ctes().getFirst().bodySql());
+			if (!(cteBody instanceof SelectSql select)) {
+				throw new IllegalArgumentException("MATERIALIZED VIEW CTE body must be SELECT");
+			}
+			return select;
+		}
+		throw new IllegalArgumentException("MATERIALIZED VIEW body must be SELECT or WITH … SELECT");
+	}
+
+	/**
+	 * Infer plain-VIEW projection for {@code information_schema.columns} / JDBC metadata.
+	 * <p>
+	 * WITH … SELECT: resolve CTE output columns first, then apply the outer projection
+	 * ({@code SELECT *} copies CTE schema; explicit outer list maps onto CTE labels).
+	 */
+	private List<ColumnDef> inferViewColumns(SqlSession session, String body) {
+		final Stmt selectStmt = SqlStatementParser.parse(body);
+		if (selectStmt instanceof SelectSql select) {
+			return SqlMaterializedViewSchemaUtil.resolveColumns(mvSourceColumns(session, select), select);
+		}
+		if (selectStmt instanceof WithSelectSql with) {
+			if (with.ctes().size() != 1) {
+				throw new IllegalArgumentException(
+						"VIEW WITH body supports exactly one CTE for schema inference");
+			}
+			final Stmt cteBody = SqlStatementParser.parse(with.ctes().getFirst().bodySql());
+			if (!(cteBody instanceof SelectSql cteSelect)) {
+				throw new IllegalArgumentException("VIEW CTE body must be SELECT");
+			}
+			final List<ColumnDef> cteCols = SqlMaterializedViewSchemaUtil.resolveColumns(
+					mvSourceColumns(session, cteSelect), cteSelect);
+			return SqlMaterializedViewSchemaUtil.resolveColumns(cteCols, with.outer());
+		}
+		throw new IllegalArgumentException("VIEW body must be SELECT or WITH … SELECT");
+	}
+
+	private List<ColumnDef> mvSourceColumns(SqlSession session, SelectSql select) {
+		if (select.hasJoins()) {
+			return query.joinSchemaColumns(session, select);
+		}
+		return SqlCatalogSourceColumnsUtil.columnsForCatalogKey(
+				tables.catalog(), tables.resolveTable(session, select.table()));
+	}
+
+	private void populateMaterializedFromSql(String table, String bodySql) {
+		final SqlResult data = SqlUdfCallContext.require().execute(bodySql);
 		final TableStore store = tables.requireStore(table);
 		for (Object[] row : data.rows()) {
 			store.putIndexed(row);

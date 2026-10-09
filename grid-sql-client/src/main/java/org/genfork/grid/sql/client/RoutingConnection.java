@@ -107,6 +107,7 @@ public final class RoutingConnection implements Connection {
 	public Statement createStatement(String sql) {
 		SqlClientRouteUtil.onSql(prepareRouteCache, sql);
 		if (readFactory != null
+				&& !SqlClientRouteContext.suppressReplicaReads()
 				&& SqlClientRouteUtil.routeFor(prepareRouteCache, sql) == SqlRouteClassifier.Route.READ) {
 			return new RoutingReadStatement(readFactory, sql);
 		}
@@ -142,7 +143,10 @@ public final class RoutingConnection implements Connection {
 
 	@Override
 	public Flux<Result> executeBatch(List<String> sqls) {
-		if (readFactory == null || sqls == null || sqls.isEmpty()) {
+		if (readFactory == null
+				|| SqlClientRouteContext.suppressReplicaReads()
+				|| sqls == null
+				|| sqls.isEmpty()) {
 			return writer.executeBatch(sqls);
 		}
 		if (!SqlClientRouteUtil.allRead(prepareRouteCache, sqls)) {

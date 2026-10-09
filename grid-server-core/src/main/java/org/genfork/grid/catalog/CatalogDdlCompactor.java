@@ -90,7 +90,8 @@ public final class CatalogDdlCompactor {
 				continue;
 			}
 			final String prefix = view.materialized() ? CREATE_MAT_VIEW_PREFIX : CREATE_VIEW_PREFIX;
-			lines.add(prefix + view.catalogKey() + AS_KW + view.selectSql());
+			final String body = CatalogDdlJournalUtil.flattenNewlines(view.selectSql());
+			lines.add(prefix + view.catalogKey() + AS_KW + body);
 		}
 		return List.copyOf(lines);
 	}
@@ -106,11 +107,12 @@ public final class CatalogDdlCompactor {
 			}
 			first = false;
 			sb.append(col.name()).append(' ').append(col.type().name());
-			if (col.identity()) {
-				sb.append(IDENTITY);
-			}
+			// Order must match SimplifiedSql columnDef / SqlDdlRender: NOT NULL before IDENTITY.
 			if (!col.nullable() && !col.primaryKey()) {
 				sb.append(NOT_NULL);
+			}
+			if (col.identity()) {
+				sb.append(IDENTITY);
 			}
 			if (col.primaryKey()) {
 				tablePk.add(col.name());
@@ -125,6 +127,14 @@ public final class CatalogDdlCompactor {
 				sb.append(tablePk.get(i));
 			}
 			sb.append(')');
+		}
+		for (FkDef fk : schema.foreignKeys()) {
+			sb.append(", ");
+			CatalogDdlConstraintRenderUtil.appendForeignKeyClause(sb, fk);
+		}
+		for (CheckDef check : schema.checks()) {
+			sb.append(", ");
+			CatalogDdlConstraintRenderUtil.appendCheckClause(sb, check);
 		}
 		sb.append(')');
 		return sb.toString();

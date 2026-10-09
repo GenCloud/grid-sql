@@ -66,7 +66,7 @@ URL: `jdbc:grid://grid:grid@127.0.0.1:15432/public`
 - Driver Manager: do **not** enable “Omit schema(s)” / “Omit single schema”
 - Multi-statement scripts → ANTLR split → BATCH_EXEC
 - `readEndpoints` + `readPreference=REPLICA` → Sync routing (SELECT → replica)
-- Scrollable ResultSet + Data Editor (single-table + PK; materialize for IDE)
+- Scrollable ResultSet + Data Editor (single-table + PK; materialize for IDE). Composite PK: Data Editor WHERE uses the **leading** PK column only.
 - Statement.cancel → SyncAwait cancel + wire CANCEL
 - Column metadata from SPI RowMetadata / ROW_DESC v2 (JDBC catalog hints only as fallback)
 - Unwrap SyncConnection / ServerMeta; pin/unpin; timezone client-info

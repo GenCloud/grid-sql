@@ -15,8 +15,8 @@
 
 - Запросы разбираются грамматикой ANTLR: Simplified SQL, ограниченный диалект — не полная копия «большого» SQL.
 - DDL для таблиц, индексов, ограничений и схем (`CREATE SCHEMA` / `SET SCHEMA`). Неквалифицированное имя таблицы привязывается только к схеме сессии; в репликации / OpLog / sealed для non-`public` домен = `schema.table`.
-- DML: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT` и подмножество `MERGE`.
-- SELECT: фильтры, соединения INNER / LEFT / RIGHT / FULL JOIN, `GROUP BY` и `PARTITION BY` по нескольким колонкам, `ORDER BY`, `LIMIT`, `OFFSET`.
+- DML: `INSERT` (`VALUES` или `SELECT`), `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT` и подмножество `MERGE`.
+- SELECT: фильтры, соединения INNER / LEFT / RIGHT / FULL JOIN, `GROUP BY` и `PARTITION BY` по нескольким колонкам, `ORDER BY`, `LIMIT`, `OFFSET`; скалярный `SELECT 1` / `EXISTS` без `FROM`.
 - `EXISTS` / `NOT EXISTS`, обобщённые табличные выражения (`WITH`), представления, оконные функции, скалярные и табличные пользовательские функции — в пределах диалекта.
 - `PREPARE` и параметры запросов.
 - `EXPLAIN`, а для тяжёлых планов — адаптивное исполнение (AQE).

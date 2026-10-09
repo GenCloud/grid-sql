@@ -87,17 +87,30 @@ public final class TableCatalog {
 			String selectSql,
 			boolean materialized,
 			long lastRefreshEpoch,
-			long schemaEpochAtRefresh
+			long schemaEpochAtRefresh,
+			List<ColumnDef> columns
 	) {
 		public ViewDef {
 			Objects.requireNonNull(selectSql, "selectSql");
 			final CatalogQualifiedName qn = CatalogQualifiedName.of(schemaName, objectName);
 			schemaName = qn.schemaName();
 			objectName = qn.objectName();
+			columns = columns == null || columns.isEmpty() ? List.of() : List.copyOf(columns);
 		}
 
 		public ViewDef(String schemaName, String objectName, String selectSql, boolean materialized) {
-			this(schemaName, objectName, selectSql, materialized, 0L, 0L);
+			this(schemaName, objectName, selectSql, materialized, 0L, 0L, List.of());
+		}
+
+		public ViewDef(
+				String schemaName,
+				String objectName,
+				String selectSql,
+				boolean materialized,
+				long lastRefreshEpoch,
+				long schemaEpochAtRefresh
+		) {
+			this(schemaName, objectName, selectSql, materialized, lastRefreshEpoch, schemaEpochAtRefresh, List.of());
 		}
 
 		public CatalogQualifiedName qualifiedName() {
@@ -109,7 +122,8 @@ public final class TableCatalog {
 		}
 
 		public ViewDef withRefresh(long refreshEpoch, long schemaEpoch) {
-			return new ViewDef(schemaName, objectName, selectSql, materialized, refreshEpoch, schemaEpoch);
+			return new ViewDef(
+					schemaName, objectName, selectSql, materialized, refreshEpoch, schemaEpoch, columns);
 		}
 	}
 
@@ -161,6 +175,12 @@ public final class TableCatalog {
 	private final ConcurrentHashMap<String, Boolean> creatingTables = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, Object> stores = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, ViewDef> views = new ConcurrentHashMap<>();
+	/**
+	 * Immutable name → defining SELECT for non-materialized views.
+	 * <p>
+	 * Bodies are schema-qualified once at {@link #createView}; expand paths must not re-parse.
+	 */
+	private volatile Map<String, String> viewSelectBodiesSnapshot = Map.of();
 	private final ConcurrentHashMap<String, FunctionDef> functions = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, List<TriggerDef>> triggersByTable = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, String> triggerTableByName = new ConcurrentHashMap<>();
@@ -928,7 +948,7 @@ public final class TableCatalog {
 	 * materialized views share the name with their backing table.
 	 */
 	public ViewDef createView(String name, String selectSql, boolean materialized) {
-		return createView(name, selectSql, materialized, 0L, 0L);
+		return createView(name, selectSql, materialized, 0L, 0L, List.of());
 	}
 
 	/**
@@ -945,6 +965,25 @@ public final class TableCatalog {
 			long lastRefreshEpoch,
 			long schemaEpochAtRefresh
 	) {
+		return createView(name, selectSql, materialized, lastRefreshEpoch, schemaEpochAtRefresh, List.of());
+	}
+
+	/**
+	 * Register a VIEW or MATERIALIZED VIEW with optional projected column metadata
+	 * (plain VIEW → {@code information_schema.columns} / JDBC {@code getColumns}).
+	 *
+	 * @param lastRefreshEpoch     epoch of last REFRESH / initial populate (0 if none)
+	 * @param schemaEpochAtRefresh catalog schema epoch observed at that refresh
+	 * @param columns              inferred projection for plain views; empty for MV (backing table carries schema)
+	 */
+	public ViewDef createView(
+			String name,
+			String selectSql,
+			boolean materialized,
+			long lastRefreshEpoch,
+			long schemaEpochAtRefresh,
+			List<ColumnDef> columns
+	) {
 		Objects.requireNonNull(name, "name");
 		Objects.requireNonNull(selectSql, "selectSql");
 		final CatalogQualifiedName qn = CatalogQualifiedName.parse(name, CatalogPersistUtil.SCHEMA_PUBLIC);
@@ -955,17 +994,21 @@ public final class TableCatalog {
 		if (materialized && !schemas.containsKey(k) && !creatingTables.containsKey(k)) {
 			throw new IllegalStateException("Materialized view backing table missing: " + name);
 		}
+		// DDL / journal-replay edge only: qualify bare FROM/JOIN once; never on expand hot path.
+		final String body = CatalogViewBodyQualifyUtil.qualifyUnqualifiedTables(selectSql, qn.schemaName());
 		final ViewDef def = new ViewDef(
 				qn.schemaName(),
 				qn.objectName(),
-				selectSql,
+				body,
 				materialized,
 				lastRefreshEpoch,
-				schemaEpochAtRefresh);
+				schemaEpochAtRefresh,
+				columns);
 		final ViewDef prev = views.putIfAbsent(k, def);
 		if (prev != null) {
 			throw new IllegalStateException("View already exists: " + name);
 		}
+		publishViewSelectBodies();
 		return def;
 	}
 
@@ -999,6 +1042,7 @@ public final class TableCatalog {
 			}
 			throw new IllegalStateException("View not found: " + name);
 		}
+		publishViewSelectBodies();
 		return removed;
 	}
 
@@ -1011,18 +1055,26 @@ public final class TableCatalog {
 
 	/**
 	 * Non-materialized view name → defining SELECT (lower keys) for {@link org.genfork.grid.sql.SqlNamedQueryExpand}.
+	 * <p>
+	 * Snapshot only — bodies already qualified at {@link #createView}; no ANTLR / rewrite here.
 	 */
 	public Map<String, String> viewSelectBodies() {
+		return viewSelectBodiesSnapshot;
+	}
+
+	private void publishViewSelectBodies() {
 		if (views.isEmpty()) {
-			return Map.of();
+			viewSelectBodiesSnapshot = Map.of();
+			return;
 		}
 		final Map<String, String> out = new HashMap<>(views.size() * 2);
 		for (Map.Entry<String, ViewDef> e : views.entrySet()) {
-			if (!e.getValue().materialized()) {
-				out.put(e.getKey(), e.getValue().selectSql());
+			final ViewDef view = e.getValue();
+			if (!view.materialized()) {
+				out.put(e.getKey(), view.selectSql());
 			}
 		}
-		return Map.copyOf(out);
+		viewSelectBodiesSnapshot = out.isEmpty() ? Map.of() : Map.copyOf(out);
 	}
 
 	/**
@@ -1350,7 +1402,8 @@ public final class TableCatalog {
 			return;
 		}
 		try {
-			GridFs.appendString(catalogDir.resolve(DDL_FILE), ddlStatement.trim() + System.lineSeparator());
+			final String singleLine = CatalogDdlJournalUtil.flattenNewlines(ddlStatement).trim();
+			GridFs.appendString(catalogDir.resolve(DDL_FILE), singleLine + System.lineSeparator());
 		} catch (IOException e) {
 			throw new IllegalStateException("Failed to persist DDL", e);
 		}

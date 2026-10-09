@@ -19,9 +19,14 @@ import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationPeerProps;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationProps;
 import org.genfork.grid.mem.stage.GridEntriesProcessor;
+import org.genfork.grid.replication.OrchidNotSyncedException;
+import org.genfork.grid.replication.ReplicationCoordinator;
+import org.genfork.grid.replication.orchid.OrchidNode;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Function;
 
 /**
@@ -87,5 +92,80 @@ public final class ReplTestSupport {
 		p.setPort(port);
 		p.setDc(dc);
 		return p;
+	}
+
+	/**
+	 * Wait until the whole in-process cluster is phase-synced with a stable writable proposer.
+	 * <p>
+	 * Single-sample {@link OrchidNode#isSynced()} can flicker true under Kuramoto R oscillation
+	 * right after HELLO (admit then fails with {@link OrchidNotSyncedException}). Require full
+	 * live local mesh, hold for {@code stableMs}, then probe {@link ReplicationCoordinator#ensureOrchidSynced()}.
+	 */
+	public static void awaitStableSyncedProposer(ReplicationCoordinator proposer,
+	                                             List<ReplicationCoordinator> cluster,
+	                                             int expectedLiveLocalPeers,
+	                                             long timeoutMs,
+	                                             long stableMs) {
+		if (proposer == null || cluster == null || cluster.isEmpty()) {
+			throw new IllegalArgumentException("proposer/cluster required");
+		}
+		if (expectedLiveLocalPeers < 0 || timeoutMs <= 0L || stableMs <= 0L) {
+			throw new IllegalArgumentException("expectedLiveLocalPeers/timeoutMs/stableMs must be positive");
+		}
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		final long parkNs = TimeUnit.MILLISECONDS.toNanos(SYNC_POLL_MS);
+		long stableSinceMs = -1L;
+		while (System.currentTimeMillis() < deadline) {
+			if (isClusterReady(proposer, cluster, expectedLiveLocalPeers)) {
+				final long now = System.currentTimeMillis();
+				if (stableSinceMs < 0L) {
+					stableSinceMs = now;
+				}
+				if (now - stableSinceMs >= stableMs) {
+					try {
+						proposer.ensureOrchidSynced();
+						return;
+					} catch (OrchidNotSyncedException ignored) {
+						stableSinceMs = -1L;
+					}
+				}
+			} else {
+				stableSinceMs = -1L;
+			}
+			LockSupport.parkNanos(parkNs);
+		}
+		throw new IllegalStateException("ORCHID sync not stable for writable propose: " + describeCluster(proposer, cluster));
+	}
+
+	private static final long SYNC_POLL_MS = 20L;
+
+	private static boolean isClusterReady(ReplicationCoordinator proposer,
+	                                      List<ReplicationCoordinator> cluster,
+	                                      int expectedLiveLocalPeers) {
+		if (!proposer.getOrchidNode().isPhaseRankedProposer()) {
+			return false;
+		}
+		for (ReplicationCoordinator coord : cluster) {
+			final OrchidNode node = coord.getOrchidNode();
+			if (!node.isSynced() || node.liveLocalPeerCount() < expectedLiveLocalPeers) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static String describeCluster(ReplicationCoordinator proposer, List<ReplicationCoordinator> cluster) {
+		final StringBuilder sb = new StringBuilder();
+		sb.append("proposer=").append(proposer.getOrchidNode().getNodeId())
+				.append(" ranked=").append(proposer.getOrchidNode().isPhaseRankedProposer())
+				.append(" active=").append(proposer.getOrchidNode().getPhaseRankedProposerId());
+		for (ReplicationCoordinator coord : cluster) {
+			final OrchidNode node = coord.getOrchidNode();
+			sb.append(" | ").append(node.getNodeId())
+					.append(" synced=").append(node.isSynced())
+					.append(" R=").append(node.orderParameterR())
+					.append(" liveLocal=").append(node.liveLocalPeerCount());
+		}
+		return sb.toString();
 	}
 }

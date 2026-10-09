@@ -47,4 +47,38 @@ class SqlNamedQueryExpandFastPathTest {
 		assertNotSame(sql, out, "WITH must enter expandUncached (not identity fast-path)");
 		assertEquals("SELECT id FROM t", out);
 	}
+
+	@Test
+	void insertSelectExpandsCatalogViewInSource() {
+		final String sql = "INSERT INTO dest (id, v) SELECT id, v FROM vsrc";
+		final String out = SqlNamedQueryExpand.expand(
+				sql,
+				Map.of("vsrc", "SELECT id, v FROM base WHERE v > 0"));
+		assertEquals("INSERT INTO dest (id, v) SELECT id, v FROM base WHERE v > 0", out);
+	}
+
+	@Test
+	void insertValuesDoesNotExpand() {
+		final String sql = "INSERT INTO dest VALUES (1, 2)";
+		final String out = SqlNamedQueryExpand.expand(sql, Map.of("dest", "SELECT 1"));
+		assertEquals(sql, out);
+	}
+
+	@Test
+	void complexViewWithWhereDefersKeepFromName() {
+		final String viewBody =
+				"SELECT id, RANK() OVER (ORDER BY pts DESC) AS rnk FROM scores";
+		final String sql = "SELECT id FROM ranked WHERE rnk <= 2";
+		final String out = SqlNamedQueryExpand.expand(sql, Map.of("ranked", viewBody));
+		assertEquals(sql, out, "complex VIEW + WHERE must defer (keep FROM ranked)");
+	}
+
+	@Test
+	void complexWithWhereKeepsOriginalWith() {
+		final String sql =
+				"WITH ranked AS (SELECT id, RANK() OVER (ORDER BY pts DESC) AS rnk FROM scores) "
+						+ "SELECT id FROM ranked WHERE rnk <= 2";
+		final String out = SqlNamedQueryExpand.expand(sql, Map.of());
+		assertEquals(sql, out, "complex WITH + WHERE must defer (keep WITH text)");
+	}
 }

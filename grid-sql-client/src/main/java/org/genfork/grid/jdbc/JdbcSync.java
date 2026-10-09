@@ -31,12 +31,17 @@ public final class JdbcSync {
 	private static final String SQLSTATE_CHECK = "23514";
 	private static final String SQLSTATE_UNIQUE = "23505";
 	private static final String SQLSTATE_FK = "23503";
+	private static final String SQLSTATE_INVALID_TX_STATE = "25001";
 	private static final String SQLSTATE_GENERAL = "HY000";
 	private static final String MARKER_CHECK = "CHECK violation";
 	private static final String MARKER_UNIQUE = "UNIQUE";
 	private static final String MARKER_DUPLICATE = "duplicate";
 	private static final String MARKER_FK = "FOREIGN KEY";
 	private static final String MARKER_FK_VIOLATION = "foreign key";
+	private static final String MARKER_DDL_IN_TX = "DDL not allowed inside an open transaction";
+	private static final String HINT_DDL_IN_TX =
+			"DDL not allowed inside an open transaction "
+					+ "(use connection autocommit ON or COMMIT before DDL; DBeaver: enable Auto-commit)";
 
 	private JdbcSync() {
 	}
@@ -45,15 +50,26 @@ public final class JdbcSync {
 		if (cause instanceof SQLException sql) {
 			return sql;
 		}
-		final String message = cause == null || cause.getMessage() == null
+		final String raw = cause == null || cause.getMessage() == null
 				? String.valueOf(cause)
 				: cause.getMessage();
-		return new SQLException(message, mapSqlState(message), cause);
+		final String message = clarifyMessage(raw);
+		return new SQLException(message, mapSqlState(raw), cause);
+	}
+
+	static String clarifyMessage(String message) {
+		if (message != null && message.contains(MARKER_DDL_IN_TX)) {
+			return HINT_DDL_IN_TX;
+		}
+		return message;
 	}
 
 	static String mapSqlState(String message) {
 		if (message == null) {
 			return SQLSTATE_GENERAL;
+		}
+		if (message.contains(MARKER_DDL_IN_TX)) {
+			return SQLSTATE_INVALID_TX_STATE;
 		}
 		if (message.contains(MARKER_CHECK)) {
 			return SQLSTATE_CHECK;

@@ -24,15 +24,24 @@ import java.util.Locale;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.misc.Interval;
 import org.genfork.grid.antlr.SimplifiedSqlParser;
+import org.genfork.grid.antlr.SimplifiedSqlParser.CaseExprContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.CaseScalarContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.CoalesceArgContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.CoalesceExprContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.NumericColPlusContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.NumericPlusAtomContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.ValueContext;
 import org.genfork.grid.catalog.SqlTypeCoercion;
+import org.genfork.grid.query.filters.FilterCondition;
+import org.genfork.grid.query.plan.QueryParser;
+import org.genfork.grid.sql.SqlBuiltinExpr.CaseBranch;
+import org.genfork.grid.sql.SqlBuiltinExpr.CaseExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ClockExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ClockKind;
 import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
 import org.genfork.grid.sql.SqlBuiltinExpr.ExcludedRef;
+import org.genfork.grid.sql.SqlBuiltinExpr.NumericColPlus;
 import org.genfork.grid.sql.ast.DmlAst.SequenceCallExpr;
 
 /**
@@ -155,7 +164,7 @@ public final class SqlParseSupport {
 			return SqlTypeCoercion.toTimestamptz(unquote(v.STRING().getText()), PARSE_ZONE.get());
 		}
 		if (v.caseExpr() != null) {
-			return evalConstantCase(v.caseExpr());
+			return caseExpr(v.caseExpr());
 		}
 		if (v.NULL() != null) {
 			return null;
@@ -256,14 +265,51 @@ public final class SqlParseSupport {
 		return new SequenceCallExpr(ctx.NEXTVAL() != null, name);
 	}
 
-	private static Object evalConstantCase(SimplifiedSqlParser.CaseExprContext ctx) {
+	/**
+	 * Constant TRUE/FALSE CASE folds at parse; row-aware CASE becomes {@link CaseExpr}.
+	 */
+	public static Object caseExpr(CaseExprContext ctx) {
 		final List<SimplifiedSqlParser.ExpressionContext> whens = ctx.expression();
-		final List<ValueContext> values = ctx.value();
+		final List<CaseScalarContext> scalars = ctx.caseScalar();
 		final boolean hasElse = ctx.ELSE() != null;
-		final int branchCount = hasElse ? values.size() - 1 : values.size();
+		final int branchCount = hasElse ? scalars.size() - 1 : scalars.size();
 		if (whens.size() != branchCount) {
 			throw new IllegalArgumentException("CASE WHEN/THEN arity mismatch");
 		}
+		boolean allConstantWhen = true;
+		boolean allPlainScalar = true;
+		for (int i = 0; i < whens.size(); i++) {
+			if (constantBool(whens.get(i)) == null) {
+				allConstantWhen = false;
+			}
+			if (!isPlainValueScalar(scalars.get(i))) {
+				allPlainScalar = false;
+			}
+		}
+		if (hasElse && !isPlainValueScalar(scalars.getLast())) {
+			allPlainScalar = false;
+		}
+		if (allConstantWhen && allPlainScalar) {
+			return evalConstantCase(whens, scalars, hasElse);
+		}
+		final QueryParser.SqlFilterVisitor visitor = new QueryParser.SqlFilterVisitor();
+		final List<CaseBranch> branches = new ArrayList<>(whens.size());
+		for (int i = 0; i < whens.size(); i++) {
+			final FilterCondition when = visitor.visit(whens.get(i));
+			if (when == null) {
+				throw new IllegalArgumentException("CASE WHEN produced empty condition");
+			}
+			branches.add(new CaseBranch(when, caseScalar(scalars.get(i))));
+		}
+		final Object elseValue = hasElse ? caseScalar(scalars.getLast()) : null;
+		return new CaseExpr(branches, elseValue);
+	}
+
+	private static Object evalConstantCase(
+			List<SimplifiedSqlParser.ExpressionContext> whens,
+			List<CaseScalarContext> scalars,
+			boolean hasElse
+	) {
 		for (int i = 0; i < whens.size(); i++) {
 			final Boolean cond = constantBool(whens.get(i));
 			if (cond == null) {
@@ -271,13 +317,33 @@ public final class SqlParseSupport {
 						"non-constant CASE WHEN not supported in value context (use TRUE/FALSE only)");
 			}
 			if (cond) {
-				return literal(values.get(i));
+				return caseScalar(scalars.get(i));
 			}
 		}
 		if (hasElse) {
-			return literal(values.getLast());
+			return caseScalar(scalars.getLast());
 		}
 		return null;
+	}
+
+	private static boolean isPlainValueScalar(CaseScalarContext ctx) {
+		return ctx.value() != null && ctx.numericPlusAtom() == null;
+	}
+
+	/** Decode CASE THEN/ELSE scalar (value or {@code col + lit}). */
+	public static Object caseScalar(CaseScalarContext ctx) {
+		if (ctx.numericPlusAtom() != null) {
+			return numericColPlus(ctx.numericPlusAtom());
+		}
+		return literal(ctx.value());
+	}
+
+	/** Decode {@code col + lit} / {@code (col + lit)}. */
+	public static NumericColPlus numericColPlus(NumericPlusAtomContext atom) {
+		final NumericColPlusContext plus = atom.numericColPlus();
+		return new NumericColPlus(
+				SqlIdentParseUtil.simpleColumn(plus.columnName()),
+				literal(plus.value()));
 	}
 
 	private static Boolean constantBool(SimplifiedSqlParser.ExpressionContext expr) {

@@ -22,6 +22,8 @@ script
 
 executable
     : withQuery
+    /** Before {@link #query}: {@code SELECT nextval/currval} must not become selectExpr + value. */
+    | selectSequenceStmt
     | query
     | insertStmt
     | mergeStmt
@@ -48,7 +50,6 @@ executable
     | dropTriggerStmt
     | createSequenceStmt
     | dropSequenceStmt
-    | selectSequenceStmt
     | explainStmt
     | beginStmt
     | commitStmt
@@ -254,6 +255,7 @@ explainStmt
 
 explainBody
     : withQuery
+    | selectSequenceStmt
     | query
     | insertStmt
     | mergeStmt
@@ -280,7 +282,6 @@ explainBody
     | dropTriggerStmt
     | createSequenceStmt
     | dropSequenceStmt
-    | selectSequenceStmt
     | beginStmt
     | commitStmt
     | rollbackStmt
@@ -312,6 +313,8 @@ analyzeStmt
 insertStmt
     : (INSERT | UPSERT) INTO tableName ('(' insertColumnList ')')? VALUES valueTuple (',' valueTuple)*
       onConflictClause? returningClause?
+    | (INSERT | UPSERT) INTO tableName ('(' insertColumnList ')')? query
+      onConflictClause? returningClause?
     ;
 
 returningClause
@@ -328,7 +331,7 @@ conflictAction
     ;
 
 /**
- * Single-row MERGE: USING (VALUES тАж) or USING table; PK/unique ON equality;
+ * Single-row MERGE: USING (VALUES ...) or USING table; PK/unique ON equality;
  * WHEN MATCHED UPDATE + WHEN NOT MATCHED INSERT.
  */
 mergeStmt
@@ -375,15 +378,25 @@ updateStmt
       (WHERE expression)? returningClause?
     ;
 
+/**
+ * Prefer {@code value} (NULL/TRUE/FALSE/?/literals) before {@code columnName} copy —
+ * NULL/TRUE/FALSE are also {@link #keywordAsIdent} and would otherwise parse as ColumnRef.
+ */
 updateAssign
     : columnName '=' updateRhs
     | columnName '=' value
+    | columnName '=' columnName
     ;
 
 updateRhs
     : columnName (CONCAT_OP value)+
-    | columnName '+' value
+    | numericColPlus
     | CONCAT '(' columnName ',' value ')'
+    ;
+
+/** Numeric read-modify-write fragment: {@code col + literal} (SET RMW / CASE). */
+numericColPlus
+    : columnName '+' value
     ;
 
 createTableStmt
@@ -403,6 +416,8 @@ columnDef
     : columnName serialType (PRIMARY KEY)? columnDefault?
     | columnName typeName (NOT NULL)? identityClause? (PRIMARY KEY)? columnDefault?
     | columnName typeName (NOT NULL)? (PRIMARY KEY)? identityClause? columnDefault?
+    | columnName typeName identityClause (NOT NULL)? (PRIMARY KEY)? columnDefault?
+    | columnName typeName identityClause (PRIMARY KEY)? (NOT NULL)? columnDefault?
     ;
 
 /** Literal or clock builtin for INSERT omit-col materialization. */
@@ -515,9 +530,13 @@ selectItem
     | windowExpr (AS alias=ident)?
     | functionCall (AS alias=ident)?
     | coalesceExpr (AS alias=ident)?
+    | EXISTS '(' selectQuery ')' (AS alias=ident)?
+    | NOT EXISTS '(' selectQuery ')' (AS alias=ident)?
     | NOW '(' ')' (AS alias=ident)?
     | CURRENT_TIMESTAMP (AS alias=ident)?
     | CURRENT_DATE (AS alias=ident)?
+    /** JOOQ {@code SELECT 1 AS one} inside EXISTS / fetchExists. */
+    | value (AS alias=ident)?
     ;
 
 functionCall
@@ -558,7 +577,8 @@ columnList
     ;
 
 /**
- * Unquoted identifier: plain {@link #ID} or any lexer keyword (keyword-as-identifier).
+ * Identifier: plain {@link #ID}, keyword-as-identifier, or double-quoted {@link #QUOTED_ID}
+ * (quotes stripped to bare CI name — JOOQ reserved-word escape, not PG case-sensitive ids).
  * Bare table aliases without AS stay {@link #ID} only so WHERE/JOIN are not swallowed.
  */
 columnName
@@ -572,6 +592,7 @@ tableName
 ident
     : ID
     | keywordAsIdent
+    | QUOTED_ID
     ;
 
 /** All lexer keywords usable as unquoted column / alias / window / table name parts. */
@@ -634,6 +655,7 @@ predicate
     : columnName operator value                    # Comparison
     | columnName operator columnName               # ColumnComparison
     | columnName operator '(' selectQuery ')'      # ComparisonSubquery
+    | numericPlusAtom operator value               # NumericPlusComparison
     | functionCall operator value                  # FunctionComparison
     | aggregateExpr operator value                 # AggComparison
     | columnName BETWEEN value AND value           # Between
@@ -643,6 +665,12 @@ predicate
     | columnName LIKE STRING                       # Like
     | columnName IS NULL                           # IsNull
     | columnName IS NOT NULL                       # IsNotNull
+    ;
+
+/** {@code col + lit} or {@code (col + lit)} for CASE WHEN / residual compare. */
+numericPlusAtom
+    : numericColPlus
+    | '(' numericColPlus ')'
     ;
 
 trueFalseExpression
@@ -703,7 +731,13 @@ oldNewRef
     ;
 
 caseExpr
-    : CASE (WHEN expression THEN value)+ (ELSE value)? END
+    : CASE (WHEN expression THEN caseScalar)+ (ELSE caseScalar)? END
+    ;
+
+/** CASE THEN/ELSE scalar: literal/builtin value or numeric {@code col + lit}. */
+caseScalar
+    : value
+    | numericPlusAtom
     ;
 
 orderList
@@ -882,6 +916,8 @@ PARAM: '?';
 SEMI: ';';
 
 ID: [a-z_][a-z0-9_]*;
+/** Double-quoted identifier; content is bare name (strip quotes in parse util). */
+QUOTED_ID: '"' (~'"')+ '"';
 INT: [0-9]+;
 FLOAT: [0-9]+ '.' [0-9]* | '.' [0-9]+;
 STRING: '\'' ('\'\'' | ~'\'')* '\'';

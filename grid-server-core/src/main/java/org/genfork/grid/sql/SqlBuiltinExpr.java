@@ -18,6 +18,8 @@ package org.genfork.grid.sql;
 import java.util.List;
 import java.util.Objects;
 
+import org.genfork.grid.query.filters.FilterCondition;
+
 /**
  * Parse-time markers for dialect builtins carried in SET / INSERT / ON CONFLICT maps.
  * <p>
@@ -42,13 +44,47 @@ public final class SqlBuiltinExpr {
 		}
 	}
 
-	/** Column reference inside {@code COALESCE} (DML SET / default maps). */
+	/** Column reference inside {@code COALESCE} / {@code SET col = other_col}. */
 	public record ColumnRef(String column) {
 		public ColumnRef {
 			Objects.requireNonNull(column, "column");
 			if (column.isBlank()) {
 				throw new IllegalArgumentException("column required");
 			}
+		}
+	}
+
+	/** {@code col + literal} in CASE THEN/ELSE (numeric RMW fragment). */
+	public record NumericColPlus(String column, Object addend) {
+		public NumericColPlus {
+			Objects.requireNonNull(column, "column");
+			if (column.isBlank()) {
+				throw new IllegalArgumentException("column required");
+			}
+			Objects.requireNonNull(addend, "addend");
+		}
+	}
+
+	/**
+	 * Row-aware {@code CASE WHEN … THEN … [ELSE …] END} for UPDATE SET.
+	 * <p>
+	 * {@code thenValue}/{@code elseValue} are literals or markers
+	 * ({@link ColumnRef}, {@link NumericColPlus}, nested builtins).
+	 */
+	public record CaseBranch(FilterCondition when, Object thenValue) {
+		public CaseBranch {
+			Objects.requireNonNull(when, "when");
+		}
+	}
+
+	/** Deferred CASE evaluated against the existing row at encode time. */
+	public record CaseExpr(List<CaseBranch> branches, Object elseValueOrNull) {
+		public CaseExpr {
+			Objects.requireNonNull(branches, "branches");
+			if (branches.isEmpty()) {
+				throw new IllegalArgumentException("CASE requires at least one WHEN");
+			}
+			branches = List.copyOf(branches);
 		}
 	}
 

@@ -150,10 +150,7 @@ Write, read, and mixed planning figures for the lab host (two nodes, `fsync: tru
 
 ### Internal
 
-Engineering notes for contributors ([index](en/internal/README.md)):
-
 - [Development](en/internal/development.md)
 - [ORCHID TLA](en/internal/orchid-tla.md)
-- [Bug journal](en/internal/bug-journal.md)
 - [EncodeBuffers](en/internal/encode-buffers.md)
 - [GridFs](en/internal/grid-fs.md)

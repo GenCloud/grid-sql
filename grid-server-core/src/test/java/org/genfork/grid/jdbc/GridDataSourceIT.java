@@ -17,6 +17,7 @@ package org.genfork.grid.jdbc;
 
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.sql.client.SqlClientRouteContext;
 import org.genfork.grid.sql.netty.SqlServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -139,6 +140,32 @@ class GridDataSourceIT {
 			assertTrue(remote.isOpen(), "park must leave channel open while DataSource retains factory");
 		}
 	}
+
+	/**
+	 * Shared product DS with readEndpoints: {@link SqlClientRouteContext#forcePrimary()}
+	 * keeps Flyway-style DDL+SELECT on PRIMARY (dead replica must not be used).
+	 */
+	@Test
+	void forcePrimaryContextSeesHistoryTableAfterCreateDespiteReadEndpoints() throws Exception {
+		final int deadReplicaPort = freePort();
+		final String productUrl = "jdbc:grid://u:p@127.0.0.1:" + port
+				+ "/public?readPreference=REPLICA&readEndpoints=127.0.0.1:" + deadReplicaPort;
+		try (GridDataSource ds = GridDataSource.fromUrl(productUrl)) {
+			assertNotNull(ds.syncFactory().readFactory());
+			try (AutoCloseable ignored = SqlClientRouteContext.forcePrimary();
+				 Connection c = ds.getConnection();
+				 Statement st = c.createStatement()) {
+				st.execute("CREATE TABLE flyway_schema_history ("
+						+ "installed_rank INT PRIMARY KEY, version VARCHAR, description VARCHAR)");
+				try (ResultSet rs = st.executeQuery(
+						"SELECT COUNT(*) FROM flyway_schema_history")) {
+					assertTrue(rs.next());
+					assertEquals(0, rs.getInt(1));
+				}
+			}
+		}
+	}
+
 	private static int freePort() throws Exception {
 		try (ServerSocket ss = new ServerSocket(0)) {
 			ss.setReuseAddress(true);

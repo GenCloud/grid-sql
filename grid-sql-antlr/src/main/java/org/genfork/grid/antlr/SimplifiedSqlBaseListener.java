@@ -821,6 +821,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterNumericColPlus(SimplifiedSqlParser.NumericColPlusContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitNumericColPlus(SimplifiedSqlParser.NumericColPlusContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterCreateTableStmt(SimplifiedSqlParser.CreateTableStmtContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1421,6 +1433,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterNumericPlusComparison(SimplifiedSqlParser.NumericPlusComparisonContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitNumericPlusComparison(SimplifiedSqlParser.NumericPlusComparisonContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterFunctionComparison(SimplifiedSqlParser.FunctionComparisonContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1529,6 +1553,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterNumericPlusAtom(SimplifiedSqlParser.NumericPlusAtomContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitNumericPlusAtom(SimplifiedSqlParser.NumericPlusAtomContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterTrueFalseExpression(SimplifiedSqlParser.TrueFalseExpressionContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1632,6 +1668,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitCaseExpr(SimplifiedSqlParser.CaseExprContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterCaseScalar(SimplifiedSqlParser.CaseScalarContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitCaseScalar(SimplifiedSqlParser.CaseScalarContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

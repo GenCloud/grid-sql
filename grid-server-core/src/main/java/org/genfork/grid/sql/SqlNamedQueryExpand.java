@@ -61,6 +61,19 @@ public final class SqlNamedQueryExpand {
 	private static final String INTERSECT_ALL_SEP = " INTERSECT ALL ";
 	private static final String EXCEPT_SEP = " EXCEPT ";
 	private static final String EXCEPT_ALL_SEP = " EXCEPT ALL ";
+	private static final String ERR_JOIN_ON_JOIN =
+			"JOIN on CTE/VIEW that already has JOIN is not supported";
+	private static final String ERR_COMPLEX_OUTER_AGG =
+			"cannot further aggregate/join CTE/VIEW with join or agg body";
+	private static final String ERR_SET_OP_BODY =
+			"CTE/VIEW body with set op cannot be inlined further";
+	private static final String ERR_BODY_NOT_SELECT =
+			"CTE/VIEW body is not a SELECT: ";
+	private static final String ERR_EXPAND_DEPTH =
+			"CTE/VIEW expand depth exceeded (possible cycle)";
+	/** Inline / expand result: rewritten SQL or defer (keep FROM name for runtime evaluate). */
+	private record ExpandOutcome(String sql, boolean deferred) {
+	}
 	/** Bail on first syntax error — no ConsoleErrorListener spam (e.g. SELECT1). */
 	private static final BaseErrorListener BAIL_ERRORS = new BaseErrorListener() {
 		@Override
@@ -142,7 +155,6 @@ public final class SqlNamedQueryExpand {
 				|| ex.dropTriggerStmt() != null
 				|| ex.createTableStmt() != null
 				|| ex.dropTableStmt() != null
-				|| ex.insertStmt() != null
 				|| ex.deleteStmt() != null
 				|| ex.updateStmt() != null
 				|| ex.beginStmt() != null
@@ -167,6 +179,11 @@ public final class SqlNamedQueryExpand {
 			named.putAll(catalogViews);
 		}
 
+		// INSERT/UPSERT … SELECT: expand VIEW names in the source query (VALUES form unchanged).
+		if (ex.insertStmt() != null) {
+			return expandInsertStmt(ex.insertStmt(), tokens, named);
+		}
+
 		QueryContext outer;
 		if (ex.withQuery() != null) {
 			final WithQueryContext wq = ex.withQuery();
@@ -180,40 +197,80 @@ public final class SqlNamedQueryExpand {
 				named.put(name, body);
 			}
 			outer = wq.query();
+			final ExpandOutcome expanded = expandQueryOutcome(outer, tokens, named);
+			// Deferred residual left FROM cte — keep original WITH for WithSelectSql parse.
+			if (expanded.deferred()) {
+				return sql;
+			}
+			return expanded.sql();
 		} else if (ex.query() != null) {
 			outer = ex.query();
 		} else if (ex.explainStmt() != null) {
 			if (ex.explainStmt().explainBody().query() == null) {
 				return sql;
 			}
-			final String inner = expandQuery(ex.explainStmt().explainBody().query(), tokens, named);
+			final ExpandOutcome inner = expandQueryOutcome(ex.explainStmt().explainBody().query(), tokens, named);
 			if (ex.explainStmt().ANALYZE() != null) {
-				return "EXPLAIN ANALYZE " + inner;
+				return "EXPLAIN ANALYZE " + inner.sql();
 			}
-			return "EXPLAIN " + inner;
+			return "EXPLAIN " + inner.sql();
 		} else {
 			return sql;
 		}
 
-		return expandQuery(outer, tokens, named);
+		return expandQueryOutcome(outer, tokens, named).sql();
 	}
 
-	private static String expandQuery(QueryContext outer, CommonTokenStream tokens, Map<String, String> named) {
+	/**
+	 * Expand catalog VIEW / CTE names inside {@code INSERT|UPSERT … SELECT} only.
+	 * {@code INSERT … VALUES} is returned unchanged (no FROM).
+	 */
+	private static String expandInsertStmt(
+			SimplifiedSqlParser.InsertStmtContext insert,
+			CommonTokenStream tokens,
+			Map<String, String> named
+	) {
+		if (insert.query() == null) {
+			return textOf(tokens, insert);
+		}
+		final ExpandOutcome expandedSelect = expandQueryOutcome(insert.query(), tokens, named);
+		final org.antlr.v4.runtime.CharStream input = tokens.getTokenSource().getInputStream();
+		final int insertStart = insert.start.getStartIndex();
+		final int queryStart = insert.query().start.getStartIndex();
+		final int queryStop = insert.query().stop.getStopIndex();
+		final int insertStop = insert.stop.getStopIndex();
+		final String prefix = input.getText(Interval.of(insertStart, queryStart - 1));
+		final String suffix = queryStop < insertStop
+				? input.getText(Interval.of(queryStop + 1, insertStop))
+				: "";
+		return prefix + expandedSelect.sql() + suffix;
+	}
+
+	private static ExpandOutcome expandQueryOutcome(
+			QueryContext outer,
+			CommonTokenStream tokens,
+			Map<String, String> named
+	) {
 		if (outer.selectExprQuery() != null) {
-			return textOf(tokens, outer.selectExprQuery());
+			return new ExpandOutcome(textOf(tokens, outer.selectExprQuery()), false);
 		}
 		final SelectQueryContext head = outer.selectQuery();
 		final List<UnionTailContext> tails = outer.unionTail();
 		if (tails == null || tails.isEmpty()) {
-			return expandSelect(head, tokens, named);
+			return expandSelectOutcome(head, tokens, named);
 		}
 		final StringBuilder sb = new StringBuilder();
-		sb.append(expandSelect(head, tokens, named));
+		boolean deferred = false;
+		final ExpandOutcome headOut = expandSelectOutcome(head, tokens, named);
+		deferred |= headOut.deferred();
+		sb.append(headOut.sql());
 		for (UnionTailContext tail : tails) {
 			sb.append(setOpText(tail));
-			sb.append(expandSelect(tail.selectQuery(), tokens, named));
+			final ExpandOutcome arm = expandSelectOutcome(tail.selectQuery(), tokens, named);
+			deferred |= arm.deferred();
+			sb.append(arm.sql());
 		}
-		return sb.toString();
+		return new ExpandOutcome(sb.toString(), deferred);
 	}
 
 	private static String setOpText(UnionTailContext tail) {
@@ -228,7 +285,7 @@ public final class SqlNamedQueryExpand {
 		return all ? UNION_ALL_SEP : UNION_SEP;
 	}
 
-	private static String expandSelect(
+	private static ExpandOutcome expandSelectOutcome(
 			SelectQueryContext outer,
 			CommonTokenStream tokens,
 			Map<String, String> named
@@ -245,14 +302,23 @@ public final class SqlNamedQueryExpand {
 			final String simple = dot >= 0 ? key.substring(dot + 1) : key;
 			final String body = named.containsKey(key) ? named.get(key) : named.get(simple);
 			if (body == null) {
-				return current;
+				return new ExpandOutcome(current, false);
 			}
-			current = inlineNamed(q, ts, body);
+			final ExpandOutcome outcome = inlineNamed(q, ts, body);
+			if (outcome.deferred()) {
+				// Keep FROM view/cte + outer WHERE for runtime residual evaluate.
+				return outcome;
+			}
+			current = outcome.sql();
 		}
-		throw new IllegalArgumentException("CTE/VIEW expand depth exceeded (possible cycle)");
+		throw new IllegalArgumentException(ERR_EXPAND_DEPTH);
 	}
 
-	private static String inlineNamed(SelectQueryContext outer, CommonTokenStream tokens, String innerSql) {
+	private static ExpandOutcome inlineNamed(
+			SelectQueryContext outer,
+			CommonTokenStream tokens,
+			String innerSql
+	) {
 		String flatInner = innerSql;
 		if (startsWithWith(innerSql)) {
 			flatInner = expand(innerSql, Map.of());
@@ -262,22 +328,26 @@ public final class SqlNamedQueryExpand {
 		final SimplifiedSqlParser p = new SimplifiedSqlParser(ts);
 		final QueryContext innerRoot = p.query();
 		if (innerRoot.unionTail() != null && !innerRoot.unionTail().isEmpty()) {
-			throw new IllegalArgumentException("CTE/VIEW body with set op cannot be inlined further");
+			throw new IllegalArgumentException(ERR_SET_OP_BODY);
 		}
 		final SelectQueryContext inner = innerRoot.selectQuery();
 		if (inner == null) {
-			throw new IllegalArgumentException("CTE/VIEW body is not a SELECT: " + flatInner);
+			throw new IllegalArgumentException(ERR_BODY_NOT_SELECT + flatInner);
 		}
 		final boolean innerHasJoin = inner.joinClause() != null && !inner.joinClause().isEmpty();
 		final boolean outerHasJoin = outer.joinClause() != null && !outer.joinClause().isEmpty();
 		if (innerHasJoin && outerHasJoin) {
-			throw new IllegalArgumentException("JOIN on CTE/VIEW that already has JOIN is not supported");
+			throw new IllegalArgumentException(ERR_JOIN_ON_JOIN);
 		}
 		if (innerHasJoin || inner.GROUP() != null || selectListHasAggOrWindow(inner.selectList())) {
-			if (outer.WHERE() != null || outer.GROUP() != null || outer.HAVING() != null
+			if (outer.GROUP() != null || outer.HAVING() != null
 					|| outerHasJoin
 					|| selectListHasAggOrWindow(outer.selectList())) {
-				throw new IllegalArgumentException("cannot further filter/aggregate/join CTE/VIEW with join or agg body");
+				throw new IllegalArgumentException(ERR_COMPLEX_OUTER_AGG);
+			}
+			if (outer.WHERE() != null) {
+				// Residual WHERE on JOIN/WINDOW body — defer (do not push past RANK).
+				return new ExpandOutcome(textOf(tokens, outer), true);
 			}
 			final StringBuilder sb = new StringBuilder(textOf(ts, inner));
 			if (outer.ORDER() != null) {
@@ -289,7 +359,7 @@ public final class SqlNamedQueryExpand {
 			if (outer.OFFSET() != null && outer.offsetInt != null) {
 				sb.append(" OFFSET ").append(outer.offsetInt.getText());
 			}
-			return sb.toString();
+			return new ExpandOutcome(sb.toString(), false);
 		}
 
 		final String baseTable = fromTableName(inner);
@@ -339,7 +409,7 @@ public final class SqlNamedQueryExpand {
 		} else if (inner.OFFSET() != null && inner.offsetInt != null) {
 			sb.append(" OFFSET ").append(inner.offsetInt.getText());
 		}
-		return sb.toString();
+		return new ExpandOutcome(sb.toString(), false);
 	}
 
 	private static boolean selectListHasAggOrWindow(SimplifiedSqlParser.SelectListContext sl) {

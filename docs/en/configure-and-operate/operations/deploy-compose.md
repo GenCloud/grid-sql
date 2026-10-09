@@ -12,7 +12,7 @@ Do **not** use `jamoa-grid-jepsen:local` here — that image is for chaos / Elle
 
 ```powershell
 powershell -File .\examples\scripts\build-sql-image.ps1
-# Fat jar: grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar
+# Fat jar: grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar
 # Dockerfile: examples/docker/Dockerfile
 ```
 

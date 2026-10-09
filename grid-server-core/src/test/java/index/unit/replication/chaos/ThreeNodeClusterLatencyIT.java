@@ -16,6 +16,7 @@
 package index.unit.replication.chaos;
 
 import index.unit.replication.ReplTestSupport;
+import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.mem.GridScalableMap;
 import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.replication.MutationRecorder;
@@ -34,6 +35,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * In-process 3-node latency: MutationRecorder commit + async ship visibility on peers.
+ * <p>
+ * Waits for a <em>stable</em> ORCHID writable window (full live mesh + hold + admit probe).
+ * A single-sample {@code isSynced()} right after HELLO can flicker true under Kuramoto R
+ * oscillation and then fail the first {@code recordCommittedBlocking}.
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -43,6 +48,13 @@ public class ThreeNodeClusterLatencyIT {
 
 	private static final int OPS = 50;
 	private static final String DOMAIN = "chaos.Latency3";
+	/** Configured peers per node in this topology (N=3 → 2 peers). */
+	private static final int EXPECTED_LIVE_LOCAL_PEERS = 2;
+	private static final long SYNC_TIMEOUT_MS = 30_000L;
+	/** Hold past HELLO R flicker before first admit (see suite flake at ~120ms wall). */
+	private static final long SYNC_STABLE_MS = 300L;
+	private static final int VISIBILITY_POLLS = 400;
+	private static final long VISIBILITY_POLL_SLEEP_MS = 5L;
 
 	@TempDir
 	Path tempDir;
@@ -52,17 +64,17 @@ public class ThreeNodeClusterLatencyIT {
 		final int portA = freePort();
 		final int portB = freePort();
 		final int portC = freePort();
-		final var propsA = ReplTestSupport.safetyProps(
+		final GridConfigurationProperties propsA = ReplTestSupport.safetyProps(
 				"lat-a", "lat3", "dc-a", portA, tempDir.resolve("a"),
 				List.of(ReplTestSupport.peer("lat-b", "dc-a", portB), ReplTestSupport.peer("lat-c", "dc-a", portC))
 		);
 		propsA.getReplication().getCrossDc().setBatchMaxOps(1);
 		propsA.getReplication().getCrossDc().setBatchMaxWaitMs(1);
-		final var propsB = ReplTestSupport.safetyProps(
+		final GridConfigurationProperties propsB = ReplTestSupport.safetyProps(
 				"lat-b", "lat3", "dc-a", portB, tempDir.resolve("b"),
 				List.of(ReplTestSupport.peer("lat-a", "dc-a", portA), ReplTestSupport.peer("lat-c", "dc-a", portC))
 		);
-		final var propsC = ReplTestSupport.safetyProps(
+		final GridConfigurationProperties propsC = ReplTestSupport.safetyProps(
 				"lat-c", "lat3", "dc-a", portC, tempDir.resolve("c"),
 				List.of(ReplTestSupport.peer("lat-a", "dc-a", portA), ReplTestSupport.peer("lat-b", "dc-a", portB))
 		);
@@ -86,12 +98,12 @@ public class ThreeNodeClusterLatencyIT {
 			b.start();
 			c.start();
 
-			final long deadline = System.currentTimeMillis() + 20_000;
-			while (System.currentTimeMillis() < deadline
-					&& (!a.getOrchidNode().isSynced() || !b.getOrchidNode().isSynced() || !c.getOrchidNode().isSynced()
-					|| !a.getOrchidNode().isPhaseRankedProposer())) {
-				Thread.sleep(50);
-			}
+			ReplTestSupport.awaitStableSyncedProposer(
+					a,
+					List.of(a, b, c),
+					EXPECTED_LIVE_LOCAL_PEERS,
+					SYNC_TIMEOUT_MS,
+					SYNC_STABLE_MS);
 			assertTrue(a.getOrchidNode().isPhaseRankedProposer(), "lat-a should be proposer");
 
 			for (int i = 0; i < OPS; i++) {
@@ -105,7 +117,7 @@ public class ThreeNodeClusterLatencyIT {
 				final long v0 = System.nanoTime();
 				boolean seenB = false;
 				boolean seenC = false;
-				for (int p = 0; p < 400; p++) {
+				for (int p = 0; p < VISIBILITY_POLLS; p++) {
 					if (!seenB && procB.get(key) != null) {
 						visBMs.add((System.nanoTime() - v0) / 1_000_000.0);
 						seenB = true;
@@ -117,7 +129,7 @@ public class ThreeNodeClusterLatencyIT {
 					if (seenB && seenC) {
 						break;
 					}
-					Thread.sleep(5);
+					Thread.sleep(VISIBILITY_POLL_SLEEP_MS);
 				}
 				if (!seenB) {
 					missB++;

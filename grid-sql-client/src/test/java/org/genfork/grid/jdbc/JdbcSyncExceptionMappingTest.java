@@ -49,4 +49,13 @@ class JdbcSyncExceptionMappingTest {
 		assertEquals("23514", JdbcSync.toSqlException(new RuntimeException("CHECK violation")).getSQLState());
 		assertEquals("23503", JdbcSync.toSqlException(new RuntimeException("FOREIGN KEY")).getSQLState());
 	}
+
+	@Test
+	void toSqlExceptionMapsDdlInTxWithAutocommitHint() {
+		final SQLException ex = JdbcSync.toSqlException(
+				new IllegalStateException("DDL not allowed inside an open transaction"));
+		assertEquals("25001", ex.getSQLState());
+		assertTrue(ex.getMessage().contains("autocommit"), ex.getMessage());
+		assertTrue(ex.getMessage().contains("DBeaver"), ex.getMessage());
+	}
 }

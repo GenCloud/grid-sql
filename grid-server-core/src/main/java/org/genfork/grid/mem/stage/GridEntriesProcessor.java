@@ -50,6 +50,10 @@ import org.genfork.grid.diag.VisibilityDiag;
  */
 public class GridEntriesProcessor {
 	private static final Comparator<Entry> ENTRY_COMPARATOR = Comparator.comparingLong(Entry::getStoreTime);
+	/**
+	 * RAM marker that blocks sealed mmap miss after DELETE (empty payload is never a live row).
+	 */
+	private static final byte[] SEALED_DELETE_TOMBSTONE = new byte[0];
 
 
 	public static class Entry {
@@ -198,7 +202,7 @@ public class GridEntriesProcessor {
 		for (Map.Entry<byte[], byte[]> e : gridScalableMap.entrySet()) {
 			final byte[] key = e.getKey();
 			final byte[] value = e.getValue();
-			if (key != null && value != null) {
+			if (key != null && value != null && !isSealedDeleteTombstone(value)) {
 				consumer.accept(key, value);
 			}
 		}
@@ -212,7 +216,7 @@ public class GridEntriesProcessor {
 			return;
 		}
 		if (delete) {
-			removeMapOnly(key);
+			putSealedDeleteTombstone(key);
 		} else {
 			putMapOnly(key, value);
 		}
@@ -284,6 +288,13 @@ public class GridEntriesProcessor {
 	public byte[] getCommitted(byte[] key) {
 		final byte[] inMap = gridScalableMap.get(key);
 		if (inMap != null) {
+			if (isSealedDeleteTombstone(inMap)) {
+				if (VisibilityDiag.enabled()) {
+					VisibilityDiag.debugf("map.getCommitted",
+							"MISS shard=%d source=tombstone %s", shardNum, VisibilityDiag.keyTag(key));
+				}
+				return null;
+			}
 			touchWorkingSet(key);
 			if (VisibilityDiag.enabled()) {
 			    VisibilityDiag.debugf("map.getCommitted",
@@ -355,6 +366,11 @@ public class GridEntriesProcessor {
 	 */
 	public void evictCommitted(byte[] key) {
 		if (key == null || stagingArea.containsKey(new KeyEntry(key))) {
+			return;
+		}
+		final byte[] existing = gridScalableMap.get(key);
+		if (isSealedDeleteTombstone(existing)) {
+			// Keep tombstone until sealed rewrite — eviction would resurrect mmap payload.
 			return;
 		}
 		final byte[] removed = gridScalableMap.remove(key);
@@ -535,13 +551,12 @@ public class GridEntriesProcessor {
 					}
 					touchWorkingSet(key);
 				} else {
-					final byte[] removed = gridScalableMap.remove(key);
-			if (VisibilityDiag.enabled()) {
-			    VisibilityDiag.debugf("map.installCommitted",
-			            "shard=%d DELETE %s removed=%s", shardNum, VisibilityDiag.keyTag(key),
-			            removed != null);
-			}
-					if (removed != null && gridIndexWorker != null) {
+					putSealedDeleteTombstone(key);
+					if (VisibilityDiag.enabled()) {
+						VisibilityDiag.debugf("map.installCommitted",
+								"shard=%d DELETE %s tombstone=true", shardNum, VisibilityDiag.keyTag(key));
+					}
+					if (gridIndexWorker != null) {
 						gridIndexWorker.add(entry);
 					}
 				}
@@ -616,8 +631,8 @@ public class GridEntriesProcessor {
 			return;
 		}
 		if (delete) {
-			final byte[] removed = gridScalableMap.remove(key);
-			if (removed != null && gridIndexWorker != null) {
+			putSealedDeleteTombstone(key);
+			if (gridIndexWorker != null) {
 				gridIndexWorker.indexNowRemove(key);
 			}
 		} else {
@@ -647,10 +662,18 @@ public class GridEntriesProcessor {
 
 	/**
 	 * Map remove only (no staging / index queue). Pair with sync index drop.
+	 * <p>
+	 * When a sealed mmap twin is attached, installs a tombstone so {@link #getCommitted}
+	 * cannot resurrect the key from disk.
 	 */
 	public byte[] removeMapOnly(byte[] key) {
 		if (key == null) {
 			return null;
+		}
+		if (sealedReader != null) {
+			final byte[] prior = gridScalableMap.get(key);
+			putSealedDeleteTombstone(key);
+			return isSealedDeleteTombstone(prior) ? null : prior;
 		}
 		final byte[] removed = gridScalableMap.remove(key);
 		final WorkingSetBudget budget = workingSetBudget;
@@ -658,6 +681,15 @@ public class GridEntriesProcessor {
 			budget.remove(key);
 		}
 		return removed;
+	}
+
+	private void putSealedDeleteTombstone(byte[] key) {
+		gridScalableMap.put(key, SEALED_DELETE_TOMBSTONE);
+		touchWorkingSet(key);
+	}
+
+	private static boolean isSealedDeleteTombstone(byte[] value) {
+		return value != null && value.length == 0;
 	}
 
 	public WrapTableQueue getQueue() {

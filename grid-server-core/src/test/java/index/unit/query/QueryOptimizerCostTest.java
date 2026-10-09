@@ -25,6 +25,7 @@ import org.genfork.grid.query.plan.QueryData;
 import org.genfork.grid.query.plan.QueryOptimizer;
 import org.genfork.grid.query.plan.SortOrderData;
 import org.genfork.grid.query.plan.TableRowStats;
+import org.genfork.grid.query.plan.strategy.FilterThenSortStrategy;
 import org.genfork.grid.query.plan.strategy.TableScanStrategy;
 import org.genfork.grid.sql.exec.SqlExplainKinds;
 import org.junit.jupiter.api.Test;
@@ -89,7 +90,7 @@ class QueryOptimizerCostTest {
 	}
 
 	@Test
-	void chooseScanStrategyWithoutExternalOrderFallsBackToTableScan() {
+	void chooseScanStrategyWithoutExternalOrderUsesFilterThenSort() {
 		final SortOrderData[] order = new SortOrderData[]{
 				new SortOrderData("age", SortOrderData.OrderDirection.ASC)
 		};
@@ -104,9 +105,9 @@ class QueryOptimizerCostTest {
 				result,
 				TableRowStats.fromLive(10_000L, 0L)
 		);
-		// FilterThenSort requires external-order ArrayIndexType; empty map → table scan.
-		assertTrue(choice.strategy() instanceof TableScanStrategy);
-		assertEquals(SqlExplainKinds.TABLE, choice.kind());
+		// ORDER BY must never fall back to unordered TableScan — wire-row FilterThenSort.
+		assertTrue(choice.strategy() instanceof FilterThenSortStrategy);
+		assertEquals(SqlExplainKinds.INDEX, choice.kind());
 		assertTrue(choice.estimatedCost() >= 0.0);
 	}
 }

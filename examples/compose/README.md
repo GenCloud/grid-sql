@@ -12,7 +12,7 @@ RU: [README.ru.md](README.ru.md) · Docs: [docs/en/configure-and-operate/operati
 
 ```powershell
 powershell -File .\examples\scripts\build-sql-image.ps1
-# → jamoa-grid-sql:local  (fat jar: grid-sql-server-starter-1.0-SNAPSHOT.jar)
+# → jamoa-grid-sql:local  (fat jar: grid-sql-server-starter-1.1.0.jar)
 ```
 
 ## Topologies

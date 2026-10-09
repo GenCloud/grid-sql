@@ -17,9 +17,12 @@ package index.unit.btree;
 
 import jodd.util.Bits;
 import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
+import org.genfork.grid.serial.SqlWireUtil;
 import org.genfork.grid.serial.WireFieldCompare;
+import org.genfork.grid.serial.WireSpan;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -52,6 +55,30 @@ class ArraysComparatorSignedTest {
 		assertTrue(COMPARATOR.compare(one, negOne) > 0);
 		assertTrue(COMPARATOR.compare(negOne, zero) < 0);
 		assertTrue(COMPARATOR.compare(negOne, one) < 0);
+	}
+
+	@Test
+	void rangeCompareMatchesOwnedArrayCompare() {
+		final byte[] pad = new byte[12];
+		Bits.putInt(pad, 4, -1);
+		Bits.putInt(pad, 0, 1);
+		final byte[] ownedNeg = intBytes(-1);
+		final byte[] ownedOne = intBytes(1);
+		assertEquals(
+				COMPARATOR.compare(ownedOne, ownedNeg),
+				COMPARATOR.compare(pad, 0, 4, pad, 4, 4));
+		assertEquals(
+				WireFieldCompare.compare(ownedOne, ownedNeg),
+				WireFieldCompare.compare(WireSpan.of(pad, 0, 4), WireSpan.of(pad, 4, 4)));
+	}
+
+	@Test
+	void spanNullOrderingMatchesOwnedNull() {
+		final byte[] one = intBytes(1);
+		assertEquals(
+				WireFieldCompare.compare(SqlWireUtil.getNullPtr(), one),
+				WireFieldCompare.compare(WireSpan.nullSpan(), WireSpan.ofOwned(one)));
+		assertEquals(0, WireFieldCompare.compare(WireSpan.nullSpan(), WireSpan.nullSpan()));
 	}
 
 	private static byte[] intBytes(int value) {

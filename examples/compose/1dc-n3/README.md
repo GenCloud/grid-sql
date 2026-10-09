@@ -7,11 +7,13 @@ powershell -File ..\..\scripts\build-sql-image.ps1
 docker compose --env-file env\mid.env up -d
 ```
 
-| Node | SQL | HTTP | Repl | Config |
-|------|-----|------|------|--------|
-| n1 | 15432 | 7777 | 5615 | `config/application-n1.yml` |
-| n2 | 15433 | 7778 | 5616 | `config/application-n2.yml` |
-| n3 | 15434 | 7779 | 5617 | `config/application-n3.yml` |
+| Node | SQL | HTTP | Repl | Config | Logs (volume) |
+|------|-----|------|------|--------|----------------|
+| n1 | 15432 | 7777 | 5615 | `config/application-n1.yml` | `n1-logs` → `/app/logs/grid-sql.log` |
+| n2 | 15433 | 7778 | 5616 | `config/application-n2.yml` | `n2-logs` |
+| n3 | 15434 | 7779 | 5617 | `config/application-n3.yml` | `n3-logs` |
+
+Logging defaults to INFO (not jepsen DEBUG) so reconnect storms stay readable.
 
 RU: [README.ru.md](README.ru.md)
 

@@ -17,6 +17,7 @@ package index.benchmarks;
 
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.sql.SqlSession;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
@@ -53,9 +54,16 @@ public class CatalogDdlRecoverBenchmark extends AbstractLatencyBenchmark {
 	public void setup() throws Exception {
 		bloatedDir = Files.createTempDirectory("grid-ddl-bloat");
 		final SqlEngine seed = new SqlEngine(new TableCatalog(bloatedDir), null, 2);
+		final SqlSession session = seed.newSession();
+		seed.execute(session, "CREATE SCHEMA IF NOT EXISTS " + SCHEMA);
+		seed.execute(session, "SET SCHEMA " + SCHEMA);
+		seed.execute(session, "CREATE TABLE IF NOT EXISTS parent (id INT PRIMARY KEY)");
+		seed.execute(session,
+				"CREATE TABLE IF NOT EXISTS t (id INT PRIMARY KEY, parent_id INT, "
+						+ "CONSTRAINT t_parent_fk FOREIGN KEY (parent_id) REFERENCES parent (id))");
 		for (int i = 0; i < SPAM_ROUNDS; i++) {
-			seed.execute("CREATE SCHEMA IF NOT EXISTS " + SCHEMA);
-			seed.execute("CREATE TABLE IF NOT EXISTS " + TABLE + " (id INT PRIMARY KEY, v INT)");
+			seed.execute(session, "CREATE SCHEMA IF NOT EXISTS " + SCHEMA);
+			seed.execute(session, "CREATE TABLE IF NOT EXISTS " + TABLE + " (id INT PRIMARY KEY, v INT)");
 		}
 		/* Compacted sibling: recover once then copy compacted catalog tree. */
 		compactedDir = Files.createTempDirectory("grid-ddl-compact");

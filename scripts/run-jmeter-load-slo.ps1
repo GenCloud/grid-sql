@@ -130,7 +130,7 @@ $JarCandidate = Get-ChildItem -Path (Join-Path $ModuleDir "target") -Filter "gri
   Where-Object { $_.Name -notmatch "sources|javadoc|original" } |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
-$Jar = if ($JarCandidate) { $JarCandidate.FullName } else { Join-Path $ModuleDir "target\grid-sql-jmeter-1.0.jar" }
+$Jar = if ($JarCandidate) { $JarCandidate.FullName } else { Join-Path $ModuleDir "target\grid-sql-jmeter-1.1.0.jar" }
 $DepDir = Join-Path $ModuleDir "target\dependency"
 $ReportDir = Join-Path $WorkDir "$Stamp-reports"
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
@@ -153,7 +153,7 @@ $CpParts.Add($Jar)
 # JMeter ships log4j-slf4j-impl; Spring's log4j-to-slf4j on the same CP blows up AbstractJavaSamplerClient <clinit>.
 $ExcludeDepPrefixes = @("log4j-to-slf4j", "log4j-slf4j-impl", "slf4j-reload4j", "slf4j-log4j12")
 if (Test-Path $DepDir) {
-  # Prefer non-SNAPSHOT artifacts when both 1.0 and 1.0-SNAPSHOT sit in dependency/ (version bump leftover).
+  # Prefer non-SNAPSHOT artifacts when both 1.0 and 1.1.0 sit in dependency/ (version bump leftover).
   $byBase = @{}
   Get-ChildItem $DepDir -Filter "*.jar" | Where-Object {
     $base = $_.BaseName
@@ -198,7 +198,7 @@ if ($DrySmoke) {
   "errorRate": null,
   "jmeterHome": "$($JMeterHome -replace '\\','/')",
   "jmx": "grid-sql-jmeter/grid-sql-load.jmx",
-  "samplerJar": "grid-sql-jmeter/target/grid-sql-jmeter-1.0-SNAPSHOT.jar",
+  "samplerJar": "grid-sql-jmeter/target/grid-sql-jmeter-1.1.0.jar",
   "classpathEntries": $($CpParts.Count),
   "reports": {
     "aggregateReport": "Aggregate Report (JMeter UI / CSV)",

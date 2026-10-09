@@ -22,6 +22,7 @@ services:
     volumes:
       - ./config:/app/config:ro
       - n1-data:/app/data
+      - ./n1-logs:/app/logs
     command:
       - --spring.config.additional-location=file:/app/config/application-n1.yml
     ports:
@@ -50,6 +51,7 @@ services:
     volumes:
       - ./config:/app/config:ro
       - n2-data:/app/data
+      - ./n2-logs:/app/logs
     command:
       - --spring.config.additional-location=file:/app/config/application-n2.yml
     ports:
@@ -78,6 +80,7 @@ services:
     volumes:
       - ./config:/app/config:ro
       - n3-data:/app/data
+      - ./n3-logs:/app/logs
     command:
       - --spring.config.additional-location=file:/app/config/application-n3.yml
     ports:

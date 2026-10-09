@@ -15,8 +15,8 @@ Need a short answer: what Grid does today, and what it deliberately leaves outsi
 
 - Queries are parsed with an ANTLR grammar: Simplified SQL, a bounded dialect — not a full SQL clone.
 - DDL for tables, indexes, constraints, and schemas (`CREATE SCHEMA` / `SET SCHEMA`). An unqualified table name binds only to the session schema; for non-`public` tables the replication / OpLog / sealed domain is `schema.table`.
-- DML: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT`, and a subset of `MERGE`.
-- SELECT: filters, INNER / LEFT / RIGHT / FULL JOIN, multi-column `GROUP BY` and `PARTITION BY`, `ORDER BY`, `LIMIT`, `OFFSET`.
+- DML: `INSERT` (`VALUES` or `SELECT`), `UPDATE`, `DELETE`, `TRUNCATE TABLE`, `UPSERT`, `INSERT … ON CONFLICT`, and a subset of `MERGE`.
+- SELECT: filters, INNER / LEFT / RIGHT / FULL JOIN, multi-column `GROUP BY` and `PARTITION BY`, `ORDER BY`, `LIMIT`, `OFFSET`; scalar `SELECT 1` / `EXISTS` without `FROM`.
 - `EXISTS` / `NOT EXISTS`, CTEs (`WITH`), views, window functions, scalar and table user functions — within the dialect.
 - `PREPARE` and bound parameters.
 - `EXPLAIN`, and adaptive execution (AQE) for heavy plans.

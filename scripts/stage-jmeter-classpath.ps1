@@ -12,7 +12,7 @@ mvn -pl grid-sql-jmeter -am package -DskipTests
 
 if ($LASTEXITCODE -ne 0) { throw "mvn failed: $LASTEXITCODE" }
 
-$Jar = Join-Path $Root "grid-sql-jmeter\target\grid-sql-jmeter-1.0-SNAPSHOT.jar"
+$Jar = Join-Path $Root "grid-sql-jmeter\target\grid-sql-jmeter-1.1.0.jar"
 $DepDir = Join-Path $Root "grid-sql-jmeter\target\dependency"
 $Exclude = @("log4j-to-slf4j", "log4j-slf4j-impl", "slf4j-reload4j", "slf4j-log4j12")
 $parts = New-Object System.Collections.Generic.List[string]

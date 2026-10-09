@@ -678,6 +678,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitUpdateRhs(SimplifiedSqlParser.UpdateRhsContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#numericColPlus}.
+	 * @param ctx the parse tree
+	 */
+	void enterNumericColPlus(SimplifiedSqlParser.NumericColPlusContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#numericColPlus}.
+	 * @param ctx the parse tree
+	 */
+	void exitNumericColPlus(SimplifiedSqlParser.NumericColPlusContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#createTableStmt}.
 	 * @param ctx the parse tree
 	 */
@@ -1196,6 +1206,18 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitComparisonSubquery(SimplifiedSqlParser.ComparisonSubqueryContext ctx);
 	/**
+	 * Enter a parse tree produced by the {@code NumericPlusComparison}
+	 * labeled alternative in {@link SimplifiedSqlParser#predicate}.
+	 * @param ctx the parse tree
+	 */
+	void enterNumericPlusComparison(SimplifiedSqlParser.NumericPlusComparisonContext ctx);
+	/**
+	 * Exit a parse tree produced by the {@code NumericPlusComparison}
+	 * labeled alternative in {@link SimplifiedSqlParser#predicate}.
+	 * @param ctx the parse tree
+	 */
+	void exitNumericPlusComparison(SimplifiedSqlParser.NumericPlusComparisonContext ctx);
+	/**
 	 * Enter a parse tree produced by the {@code FunctionComparison}
 	 * labeled alternative in {@link SimplifiedSqlParser#predicate}.
 	 * @param ctx the parse tree
@@ -1304,6 +1326,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitIsNotNull(SimplifiedSqlParser.IsNotNullContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#numericPlusAtom}.
+	 * @param ctx the parse tree
+	 */
+	void enterNumericPlusAtom(SimplifiedSqlParser.NumericPlusAtomContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#numericPlusAtom}.
+	 * @param ctx the parse tree
+	 */
+	void exitNumericPlusAtom(SimplifiedSqlParser.NumericPlusAtomContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#trueFalseExpression}.
 	 * @param ctx the parse tree
 	 */
@@ -1393,6 +1425,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitCaseExpr(SimplifiedSqlParser.CaseExprContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#caseScalar}.
+	 * @param ctx the parse tree
+	 */
+	void enterCaseScalar(SimplifiedSqlParser.CaseScalarContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#caseScalar}.
+	 * @param ctx the parse tree
+	 */
+	void exitCaseScalar(SimplifiedSqlParser.CaseScalarContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#orderList}.
 	 * @param ctx the parse tree

@@ -174,6 +174,10 @@ public class ReplicationCoordinator {
 	private final TxMarkerService txMarkerService;
 	private final RegionClaimService regionClaimService;
 	private final SealedHydrateService sealedHydrateService;
+	/**
+	 * KEYS catalog sidecars; null when durability/replication off.
+	 */
+	private final IndexCheckpointService indexCheckpointService;
 	private final PeerMembershipService peerMembershipService;
 
 	public void setOverlayStore(OverlayStore overlayStore) {
@@ -293,6 +297,7 @@ public class ReplicationCoordinator {
 			this.txMarkerService = null;
 			this.regionClaimService = null;
 			this.sealedHydrateService = null;
+			this.indexCheckpointService = null;
 			this.peerMembershipService = null;
 			return;
 		}
@@ -321,7 +326,7 @@ public class ReplicationCoordinator {
 		this.crossDcPublisher.setEnvelopeCoordinator(txEnvelopeCoordinator);
 
         final SnapshotService snapshotService = new SnapshotService(opLog, nodeState);
-        final IndexCheckpointService indexCheckpointService = new IndexCheckpointService(dataDir.resolve("index-ckpt"));
+		this.indexCheckpointService = new IndexCheckpointService(dataDir.resolve("index-ckpt"));
 		this.opLogArchiveRoot = OpLogArchivePathUtil.resolveArchiveRoot(durability);
 		this.opLogArchiveStreamRoot = OpLogArchivePathUtil.resolveStreamRoot(durability, opLogArchiveRoot);
 		this.sealedGridMapService = new SealedGridMapService(dataDir.resolve("sealed"), opLogArchiveRoot);
@@ -367,7 +372,7 @@ public class ReplicationCoordinator {
 		this.peerMembershipService = new PeerMembershipService(true, crossDcEnabled, repairEnabled, nodeState, opLog, orchidNode, nettyTransport, sparseCatchUp, homologousRepair, publisher, crossDcPublisher, peers, regionClaimService);
 		this.peerMembershipService.setSealedGridMapService(sealedGridMapService);
 		this.txMarkerService = new TxMarkerService(true, crossDcEnabled, nodeState, opLog, streamOpLogAppender, orchidNode, publisher, crossDcPublisher, homologousRepair);
-		this.sealedHydrateService = new SealedHydrateService(true, hydrateMode, workingSetMaxEntries, adaptiveDiskFirstController, nodeState, opLog, snapshotService, indexCheckpointService, sealedGridMapService, homologousRepair, appliers);
+		this.sealedHydrateService = new SealedHydrateService(true, hydrateMode, workingSetMaxEntries, adaptiveDiskFirstController, nodeState, opLog, snapshotService, this.indexCheckpointService, sealedGridMapService, homologousRepair, appliers);
 		publisher.setPeers(peers);
 		crossDcPublisher.setRemotePeers(peers);
 		if (peerTransportEnabled) {
@@ -1246,6 +1251,36 @@ public class ReplicationCoordinator {
 
 	public SealedGridMapService getSealedGridMapService() {
 		return this.sealedGridMapService;
+	}
+
+	/**
+	 * DROP TABLE hygiene: forget hydrate memo + drop KEYS index-ckpt sidecars.
+	 * Does <strong>not</strong> delete sealed {@code .gmap}/{@code .sbpt} (see {@link #purgeDomainArtifacts}).
+	 */
+	public void onTableDropped(String domainType) {
+		if (domainType == null || domainType.isBlank()) {
+			return;
+		}
+		if (sealedHydrateService != null) {
+			sealedHydrateService.forgetDomain(domainType);
+		}
+		if (indexCheckpointService != null) {
+			indexCheckpointService.deleteDomain(domainType);
+		}
+	}
+
+	/**
+	 * Explicit domain retire outside load DROP: sealed files + index-ckpt + hydrate memo.
+	 * Sealed delete is not on every DROP — CREATE/DROP churn with {@code .gmap} purge crushed READ_ONLY.
+	 */
+	public void purgeDomainArtifacts(String domainType) {
+		if (domainType == null || domainType.isBlank()) {
+			return;
+		}
+		if (sealedGridMapService != null) {
+			sealedGridMapService.deleteDomain(domainType);
+		}
+		onTableDropped(domainType);
 	}
 
 	public OrchidNode getOrchidNode() {

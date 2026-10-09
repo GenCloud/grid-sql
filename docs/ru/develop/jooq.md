@@ -34,7 +34,7 @@
 <dependency>
   <groupId>org.genfork</groupId>
   <artifactId>grid-jooq</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
@@ -42,7 +42,7 @@
 
 ## API
 
-- `GridSQL` — `SQLDialect.DEFAULT` + Settings. Поверхность: EQ JOIN (INNER/LEFT/…), ORDER+LIMIT, INSERT/UPSERT/ON CONFLICT, UPDATE/DELETE с WHERE.
+- `GridSQL` — `SQLDialect.DEFAULT` + Settings. Поверхность: EQ JOIN (INNER/LEFT/…), ORDER+LIMIT, INSERT/UPSERT/`INSERT … SELECT`/ON CONFLICT, UPDATE/DELETE с WHERE, скалярный `SELECT 1` / `EXISTS` (в т.ч. JOOQ `SELECT 1 AS one` внутри EXISTS). Кавычные идентификаторы из codegen сворачиваются без учёта регистра.
   Предпочитайте `UPSERT` или plain `ON CONFLICT` — jOOQ `onConflict` при DEFAULT может выдать `ON DUPLICATE KEY` (SimplifiedSql отклонит).
 - `GridDSL` — render-only, `Connection`, `DataSource` (предпочтительно `GridDataSource`), `ConnectionProvider`, URL `jdbc:grid://`.
 - `GridConnectionProvider` — sync acquire/release для jOOQ.

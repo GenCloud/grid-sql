@@ -27,8 +27,8 @@ mvn -o -pl grid-sql-server-starter -am package -DskipTests
 Start two processes with the ready-made profiles:
 
 ```powershell
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=primary
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=replica
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=primary
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=replica
 ```
 
 | Process | Profile | SQL | Replication | Actuator | `dataDir` |

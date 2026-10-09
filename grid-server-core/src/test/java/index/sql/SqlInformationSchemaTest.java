@@ -83,6 +83,84 @@ class SqlInformationSchemaTest {
 	}
 
 	@Test
+	void columnsExposeByteaNotBytesEnumName() {
+		engine.execute("CREATE TABLE bin_t (id INT PRIMARY KEY, payload BYTEA)");
+		final SqlResult r = engine.execute(
+				"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'bin_t'");
+		boolean foundPayload = false;
+		for (Object[] row : r.rows()) {
+			if ("payload".equalsIgnoreCase(String.valueOf(row[0]))) {
+				assertEquals("BYTEA", String.valueOf(row[1]));
+				foundPayload = true;
+			}
+		}
+		assertTrue(foundPayload);
+	}
+
+	@Test
+	void columnsListsPlainViewProjection() {
+		engine.execute("CREATE VIEW v_t AS SELECT id, name FROM t WHERE id > 0");
+		final SqlResult tables = engine.execute(
+				"SELECT table_name, table_type FROM information_schema.tables WHERE table_name = 'v_t'");
+		assertEquals(1, tables.rows().size());
+		assertEquals("VIEW", String.valueOf(tables.rows().getFirst()[1]));
+		final SqlResult r = engine.execute(
+				"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'v_t'");
+		final Set<String> cols = new HashSet<>();
+		String idType = null;
+		for (Object[] row : r.rows()) {
+			final String col = String.valueOf(row[0]).toLowerCase();
+			cols.add(col);
+			if ("id".equals(col)) {
+				idType = String.valueOf(row[1]);
+			}
+		}
+		assertTrue(cols.contains("id"));
+		assertTrue(cols.contains("name"));
+		assertEquals("INT", idType);
+	}
+
+	@Test
+	void columnsListsWithViewOuterProjection() {
+		engine.execute(
+				"CREATE VIEW v_ranked AS WITH ranked AS ("
+						+ "SELECT id, name, RANK() OVER (ORDER BY id DESC) AS rnk FROM t"
+						+ ") SELECT id, name, rnk FROM ranked WHERE rnk <= 10");
+		final SqlResult r = engine.execute(
+				"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'v_ranked'");
+		final Set<String> cols = new HashSet<>();
+		String rnkType = null;
+		for (Object[] row : r.rows()) {
+			final String col = String.valueOf(row[0]).toLowerCase();
+			cols.add(col);
+			if ("rnk".equals(col)) {
+				rnkType = String.valueOf(row[1]);
+			}
+		}
+		assertTrue(cols.contains("id"));
+		assertTrue(cols.contains("name"));
+		assertTrue(cols.contains("rnk"));
+		assertEquals("BIGINT", rnkType);
+	}
+
+	@Test
+	void columnsListsJoinViewProjection() {
+		engine.execute("CREATE TABLE side (id INT PRIMARY KEY, score INT)");
+		engine.execute(
+				"CREATE VIEW v_join AS SELECT t.id, t.name, side.score "
+						+ "FROM t JOIN side ON t.id = side.id");
+		final SqlResult r = engine.execute(
+				"SELECT column_name FROM information_schema.columns WHERE table_name = 'v_join'");
+		final Set<String> cols = new HashSet<>();
+		for (Object[] row : r.rows()) {
+			cols.add(String.valueOf(row[0]).toLowerCase());
+		}
+		assertTrue(cols.contains("id"));
+		assertTrue(cols.contains("name"));
+		assertTrue(cols.contains("score"));
+	}
+
+	@Test
 	void statisticsListsIndex() {
 		final SqlResult r = engine.execute(
 				"SELECT index_name FROM information_schema.statistics WHERE table_name = 't'");

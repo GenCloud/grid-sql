@@ -35,6 +35,7 @@ import org.genfork.grid.sql.client.RemoteConnection;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
 import org.genfork.grid.sql.client.Row;
 import org.genfork.grid.sql.client.ServerMeta;
+import org.genfork.grid.sql.client.SqlClientRouteContext;
 import org.genfork.grid.sql.client.SqlClientRouteUtil;
 import org.genfork.grid.sql.client.SqlClientSql;
 import org.genfork.grid.sql.client.transport.TransportConnection;
@@ -143,6 +144,7 @@ public final class SyncConnection implements AutoCloseable {
 			SqlClientRouteUtil.onSql(prepareRouteCache, sql);
 		}
 		if (readFactory != null
+				&& !SqlClientRouteContext.suppressReplicaReads()
 				&& SqlClientRouteUtil.routeFor(prepareRouteCache, sql) == SqlRouteClassifier.Route.READ) {
 			return SyncStatement.autocommitRead(readFactory, sql, effective, syncExecutor);
 		}
@@ -157,7 +159,9 @@ public final class SyncConnection implements AutoCloseable {
 		final Duration effective = execTimeout == null || execTimeout.isZero() || execTimeout.isNegative()
 				? timeout
 				: execTimeout;
-		if (readFactory != null && SqlClientRouteUtil.allRead(prepareRouteCache, sqls)) {
+		if (readFactory != null
+				&& !SqlClientRouteContext.suppressReplicaReads()
+				&& SqlClientRouteUtil.allRead(prepareRouteCache, sqls)) {
 			final Connection borrowed =
 					SyncAwait.await(readFactory.obtainStage(), effective, null, syncExecutor);
 			if (!(borrowed instanceof RemoteConnection readRemote)) {

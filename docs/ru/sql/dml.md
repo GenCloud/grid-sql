@@ -29,36 +29,54 @@ INSERT INTO orders (id, customer_id, total) VALUES
 
 Колонки, не перечисленные в списке, получают объявленный `DEFAULT` (литерал / `NOW()` / `CURRENT_TIMESTAMP` / `CURRENT_DATE`), иначе `NULL` — если у них нет `NOT NULL`, `IDENTITY` или `SERIAL`.
 
+### INSERT … SELECT
+
+Строки можно брать из `SELECT` вместо `VALUES`. Тот же путь apply-row / conflict / TX, что и у multi-row `VALUES`. Источники с set-op (`UNION` / …) в SELECT отклоняются.
+
+```sql
+INSERT INTO orders_archive (id, customer_id, total)
+  SELECT id, customer_id, total FROM orders WHERE status = 'closed';
+
+INSERT INTO orders (id, customer_id, total)
+  SELECT id, customer_id, total FROM staging
+  ON CONFLICT (id) DO UPDATE SET total = EXCLUDED.total;
+```
+
 ## ON CONFLICT
 
-`UPSERT` — короткая запись для «перезаписать значениями из `VALUES`». Когда нужно другое поведение, пишите конфликт явно:
+`UPSERT` — короткая запись для «перезаписать значениями из `VALUES` / SELECT». Когда нужно другое поведение, пишите конфликт явно:
 
 ```sql
 -- молча пропустить дубликат
 INSERT INTO orders (id, customer_id) VALUES (1, 100)
   ON CONFLICT DO NOTHING;
 
--- обновить только часть колонок
+-- обновить часть колонок (литералы, EXCLUDED, COALESCE, CASE)
 INSERT INTO orders (id, customer_id, total) VALUES (1, 100, 59.90)
-  ON CONFLICT (id) DO UPDATE SET total = 59.90, status = 'updated';
+  ON CONFLICT (id) DO UPDATE SET
+    total = EXCLUDED.total,
+    status = COALESCE(EXCLUDED.status, orders.status);
 ```
 
 Список колонок в `ON CONFLICT (...)` указывает, по какому ключу проверяется конфликт: первичный ключ или уникальный индекс. Без списка берётся первичный ключ.
 
-В `DO UPDATE SET` допустимы только литеральные присваивания. Разрешение конфликта, которому нужно сначала прочитать сохранённое значение («прибавить пришедшую сумму к текущей»), делается `UPDATE` внутри транзакции, а не через `ON CONFLICT`.
+В `DO UPDATE SET` допустимы литералы (в т.ч. `NULL` / `TRUE` / `FALSE` / `?`), `EXCLUDED.col`, builtins, `COALESCE(…)`, row-aware `CASE`. Чистый read-modify-write по сохранённой строке (`total = total + 10`) — через обычный `UPDATE`, не через `ON CONFLICT`.
 
 ## UPDATE
 
 ```sql
 UPDATE orders SET status = 'shipped' WHERE id = 1;
 UPDATE orders SET status = 'bulk', total = 0 WHERE customer_id = 100;
+UPDATE orders SET note = NULL, active = FALSE WHERE id = 1;
+UPDATE orders SET status = status WHERE id = 1;                 -- копирование колонки
+UPDATE orders SET flag = CASE WHEN total > 0 THEN TRUE ELSE FALSE END WHERE id = 1;
 ```
 
 `WHERE` обязателен. Обновление всей таблицы одним оператором без условия грамматикой не предусмотрено — это защита от случайного «обновить всё».
 
 `UPDATE` **не создаёт** отсутствующую строку по PK: нет совпадения — 0 затронутых строк, без empty seed в карте/журнале. Вставка или перезапись целиком — через `UPSERT` / `INSERT … ON CONFLICT`.
 
-Правая часть присваивания допускает не только литералы. Форм «прочитать, изменить, записать» ровно три:
+Правая часть присваивания: литерал (`NULL` / `TRUE` / `FALSE` / `?` / builtin), другая колонка, `CASE` или форма «прочитать, изменить, записать». Форм RMW ровно три:
 
 ```sql
 UPDATE orders SET total = total + 10 WHERE id = 1;          -- числовое приращение
@@ -167,12 +185,13 @@ DEALLOCATE PREPARE upsert_order;
 | Сортировка и срез | `ORDER BY ... ASC/DESC`, `LIMIT n`, `LIMIT n OFFSET m`, а также `LIMIT offset, count` |
 | Множества | `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT` |
 | Подзапросы | `IN (SELECT ...)`, `EXISTS (SELECT ...)`, сравнение со скалярным подзапросом |
+| Без `FROM` | `SELECT 1`, `SELECT fn(…)`, `SELECT NEXTVAL('s')`, `SELECT EXISTS (SELECT …)`, `SELECT NOT EXISTS (SELECT …)` |
 | CTE | `WITH name AS (...) SELECT ...`, в том числе `RECURSIVE` |
 | Оконные функции | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, агрегаты с `OVER (PARTITION BY ... ORDER BY ...)` |
 | Блокировка строк | `FOR UPDATE`, `FOR UPDATE SKIP LOCKED` |
-| Выражения | `CASE WHEN ... THEN ... ELSE ... END`, `CAST(x AS TYPE)`, вызовы функций |
+| Выражения | `CASE WHEN ... THEN ... ELSE ... END`, `CAST(x AS TYPE)`, вызовы функций; кавычные идентификаторы (`"Col"`) сворачиваются без учёта регистра |
 
-Выражений в списке выборки, фильтре и `ORDER BY` нет, псевдонимов таблиц в `FROM` тоже. Для задач вида «соседняя запись» или «предыдущее значение» берите `WITH` плюс `LAG`/`LEAD`, а не вложенные производные таблицы: план получается короче и предсказуемее.
+JOOQ `SELECT 1 AS one` внутри `EXISTS` принимается. Для «соседней записи» предпочитайте `WITH` плюс `LAG`/`LEAD`, а не вложенные производные таблицы.
 
 `FOR UPDATE` и `SKIP LOCKED` работают только на узле-писателе. На реплике для чтения они смысла не имеют — см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 
