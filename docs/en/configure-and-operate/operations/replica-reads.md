@@ -39,6 +39,8 @@ With `readEndpoints` configured, `ConnectionFactory.fromUrl(url)` returns a rout
 
 N `readEndpoints` are supported (`host:port` list). Prefer **`ConnectionFactory.fromUrl`** — routing is automatic; no manual dual-factory wiring.
 
+To pin the current thread to the writer (Flyway / DDL tooling on a replica-capable URL), use `SqlClientRouteContext.forcePrimary()` / `runWithPrimary` / `callWithPrimary` — see [Java client](../../develop/java-client.md).
+
 Server ANTLR admission (`SqlStatementTag`) remains the abort-on-error gate on `READ_REPLICA` sessions.
 
 ## Server configuration

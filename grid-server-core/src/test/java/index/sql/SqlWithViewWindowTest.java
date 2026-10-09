@@ -69,6 +69,97 @@ class SqlWithViewWindowTest {
 	}
 
 	@Test
+	void windowViewOuterWhereResidual() {
+		engine.execute("CREATE TABLE scores (id INT PRIMARY KEY, pts INT)");
+		engine.execute("INSERT INTO scores VALUES (1, 30)");
+		engine.execute("INSERT INTO scores VALUES (2, 10)");
+		engine.execute("INSERT INTO scores VALUES (3, 20)");
+		engine.execute(
+				"CREATE VIEW ranked AS SELECT id, pts, RANK() OVER (ORDER BY pts DESC) AS rnk FROM scores");
+		final SqlResult r = engine.execute("SELECT id FROM ranked WHERE rnk <= 2");
+		assertEquals(2, r.rows().size());
+	}
+
+	@Test
+	void withWindowOuterWhereResidual() {
+		engine.execute("CREATE TABLE scores (id INT PRIMARY KEY, pts INT)");
+		engine.execute("INSERT INTO scores VALUES (1, 30)");
+		engine.execute("INSERT INTO scores VALUES (2, 10)");
+		engine.execute("INSERT INTO scores VALUES (3, 20)");
+		final SqlResult r = engine.execute(
+				"WITH ranked AS (SELECT id, pts, RANK() OVER (ORDER BY pts DESC) AS rnk FROM scores) "
+						+ "SELECT id FROM ranked WHERE rnk <= 2");
+		assertEquals(2, r.rows().size());
+	}
+
+	@Test
+	void insertSelectFromSimpleView() {
+		engine.execute("CREATE TABLE base (id INT PRIMARY KEY, v INT)");
+		engine.execute("INSERT INTO base VALUES (1, 10)");
+		engine.execute("INSERT INTO base VALUES (2, 20)");
+		engine.execute("CREATE VIEW v AS SELECT id, v FROM base WHERE v >= 20");
+		engine.execute("CREATE TABLE dest (id INT PRIMARY KEY, v INT)");
+		engine.execute("INSERT INTO dest SELECT id, v FROM v");
+		final SqlResult r = engine.execute("SELECT id, v FROM dest");
+		assertEquals(1, r.rows().size());
+		assertEquals(2, r.rows().getFirst()[0]);
+		assertEquals(20, r.rows().getFirst()[1]);
+	}
+
+	@Test
+	void insertSelectFromWindowViewWithWhere() {
+		engine.execute("CREATE TABLE base (id INT PRIMARY KEY, score INT)");
+		engine.execute("INSERT INTO base VALUES (1, 30)");
+		engine.execute("INSERT INTO base VALUES (2, 10)");
+		engine.execute("INSERT INTO base VALUES (3, 20)");
+		engine.execute(
+				"CREATE VIEW ranked AS SELECT id, score, RANK() OVER (ORDER BY score DESC) AS rnk FROM base");
+		engine.execute("CREATE TABLE snap (id INT PRIMARY KEY, rnk INT)");
+		engine.execute("INSERT INTO snap SELECT id, rnk FROM ranked WHERE rnk <= 2");
+		final SqlResult r = engine.execute("SELECT id FROM snap ORDER BY id");
+		assertEquals(2, r.rows().size());
+	}
+
+	@Test
+	void materializedViewWindowJoinAndWhere() {
+		engine.execute("CREATE TABLE base (id INT PRIMARY KEY, score INT, g INT)");
+		engine.execute("CREATE TABLE side (id INT PRIMARY KEY, g INT)");
+		engine.execute("INSERT INTO base VALUES (1, 30, 1)");
+		engine.execute("INSERT INTO base VALUES (2, 10, 1)");
+		engine.execute("INSERT INTO base VALUES (3, 20, 1)");
+		engine.execute("INSERT INTO side VALUES (9, 1)");
+		engine.execute(
+				"CREATE MATERIALIZED VIEW ranked AS "
+						+ "SELECT base.id AS owner_id, score, "
+						+ "RANK() OVER (ORDER BY score DESC) AS rnk "
+						+ "FROM base JOIN side ON g = g");
+		engine.execute("CREATE TABLE snap (id INT PRIMARY KEY, rnk INT)");
+		engine.execute("INSERT INTO snap SELECT owner_id, rnk FROM ranked WHERE rnk <= 2");
+		final SqlResult r = engine.execute("SELECT id FROM snap ORDER BY id");
+		assertEquals(2, r.rows().size());
+		engine.execute("INSERT INTO base VALUES (4, 40, 1)");
+		engine.execute("REFRESH MATERIALIZED VIEW ranked");
+		final SqlResult after = engine.execute("SELECT owner_id FROM ranked WHERE rnk = 1");
+		assertEquals(1, after.rows().size());
+		assertEquals(4, ((Number) after.rows().getFirst()[0]).intValue());
+	}
+
+	@Test
+	void materializedViewWithCteWindowFilter() {
+		engine.execute("CREATE TABLE base (id INT PRIMARY KEY, score INT)");
+		engine.execute("INSERT INTO base VALUES (1, 30)");
+		engine.execute("INSERT INTO base VALUES (2, 10)");
+		engine.execute("INSERT INTO base VALUES (3, 20)");
+		engine.execute(
+				"CREATE MATERIALIZED VIEW top2 AS "
+						+ "WITH ranked AS ("
+						+ "SELECT id, score, RANK() OVER (ORDER BY score DESC) AS rnk FROM base"
+						+ ") SELECT id, score, rnk FROM ranked WHERE rnk <= 2");
+		final SqlResult r = engine.execute("SELECT id FROM top2 ORDER BY id");
+		assertEquals(2, r.rows().size());
+	}
+
+	@Test
 	void minMaxHavingDistinct() {
 		engine.execute("CREATE TABLE g (id INT PRIMARY KEY, bucket INT, score INT)");
 		engine.execute("INSERT INTO g VALUES (1, 1, 10)");

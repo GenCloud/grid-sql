@@ -20,9 +20,14 @@ import org.genfork.grid.catalog.SqlType;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,9 +47,13 @@ public final class GridJdbcCatalogSupport {
 	private static final String SQL_COLUMNS =
 			"SELECT table_schema, table_name, column_name, is_nullable, data_type, ordinal_position "
 					+ "FROM information_schema.columns";
-	private static final String SQL_PK =
-			"SELECT table_schema, table_name, column_name, ordinal_position "
+	private static final String SQL_TABLE_CONSTRAINTS =
+			"SELECT table_schema, table_name, constraint_name, constraint_type "
+					+ "FROM information_schema.table_constraints";
+	private static final String SQL_KEY_COLUMN_USAGE =
+			"SELECT table_schema, table_name, column_name, ordinal_position, constraint_name "
 					+ "FROM information_schema.key_column_usage";
+	private static final String CONSTRAINT_PRIMARY_KEY = "PRIMARY KEY";
 
 	private GridJdbcCatalogSupport() {
 	}
@@ -73,6 +82,10 @@ public final class GridJdbcCatalogSupport {
 		return new String[]{"public", m.group(1)};
 	}
 
+	/**
+	 * Resolve edit context: PRIMARY KEY columns only, ordered by {@code ordinal_position}.
+	 * {@link GridTableEditContext#pkColumn()} is the leading PK column (partial-delete contract).
+	 */
 	public static GridTableEditContext resolveEditContext(GridConnection connection, String sql)
 			throws SQLException {
 		final String[] from = extractSimpleFromTable(sql);
@@ -81,26 +94,83 @@ public final class GridJdbcCatalogSupport {
 		}
 		final String schema = from[0];
 		final String table = from[1];
-		String pk = null;
-		final ResultSet rsPk = connection.executeQueryInternal(SQL_PK);
+		final Set<String> pkConstraintNames = loadPrimaryKeyConstraintNames(connection, schema, table);
+		if (pkConstraintNames.isEmpty()) {
+			return null;
+		}
+		final List<PkCol> pkCols = loadOrderedPrimaryKeyColumns(connection, schema, table, pkConstraintNames);
+		if (pkCols.isEmpty()) {
+			return null;
+		}
+		final List<String> names = new ArrayList<>(pkCols.size());
+		for (PkCol col : pkCols) {
+			names.add(col.columnName());
+		}
+		return new GridTableEditContext(schema, table, names.getFirst(), -1, names);
+	}
+
+	private static Set<String> loadPrimaryKeyConstraintNames(
+			GridConnection connection,
+			String schema,
+			String table
+	) throws SQLException {
+		final Set<String> names = new HashSet<>();
+		final ResultSet rs = connection.executeQueryInternal(SQL_TABLE_CONSTRAINTS);
 		try {
-			while (rsPk.next()) {
-				if (schema.equalsIgnoreCase(rsPk.getString(1)) && table.equalsIgnoreCase(rsPk.getString(2))) {
-					pk = rsPk.getString(3);
-					break;
+			while (rs.next()) {
+				if (!schema.equalsIgnoreCase(rs.getString(1)) || !table.equalsIgnoreCase(rs.getString(2))) {
+					continue;
+				}
+				if (!CONSTRAINT_PRIMARY_KEY.equalsIgnoreCase(rs.getString(4))) {
+					continue;
+				}
+				final String cname = rs.getString(3);
+				if (cname != null && !cname.isBlank()) {
+					names.add(cname.toLowerCase(Locale.ROOT));
 				}
 			}
 		} finally {
-			final Statement stPk = rsPk.getStatement();
-			rsPk.close();
-			if (stPk != null) {
-				stPk.close();
+			closeQuietly(rs);
+		}
+		return names;
+	}
+
+	private static List<PkCol> loadOrderedPrimaryKeyColumns(
+			GridConnection connection,
+			String schema,
+			String table,
+			Set<String> pkConstraintNames
+	) throws SQLException {
+		final List<PkCol> cols = new ArrayList<>();
+		final ResultSet rs = connection.executeQueryInternal(SQL_KEY_COLUMN_USAGE);
+		try {
+			while (rs.next()) {
+				if (!schema.equalsIgnoreCase(rs.getString(1)) || !table.equalsIgnoreCase(rs.getString(2))) {
+					continue;
+				}
+				final String cname = rs.getString(5);
+				if (cname == null || !pkConstraintNames.contains(cname.toLowerCase(Locale.ROOT))) {
+					continue;
+				}
+				final String column = rs.getString(3);
+				final int ordinal = rs.getInt(4);
+				if (column != null && !column.isBlank()) {
+					cols.add(new PkCol(column, ordinal));
+				}
 			}
+		} finally {
+			closeQuietly(rs);
 		}
-		if (pk == null) {
-			return null;
+		cols.sort(Comparator.comparingInt(PkCol::ordinal));
+		return cols;
+	}
+
+	private static void closeQuietly(ResultSet rs) throws SQLException {
+		final Statement st = rs.getStatement();
+		rs.close();
+		if (st != null) {
+			st.close();
 		}
-		return new GridTableEditContext(schema, table, pk, -1);
 	}
 
 	public static GridColumnHints loadColumnHints(GridConnection connection, String schema, String table)
@@ -118,11 +188,7 @@ public final class GridJdbcCatalogSupport {
 				byName.put(col.toLowerCase(Locale.ROOT), new Hint(schema, table, col, nullable, type));
 			}
 		} finally {
-			final Statement stCol = rsCol.getStatement();
-			rsCol.close();
-			if (stCol != null) {
-				stCol.close();
-			}
+			closeQuietly(rsCol);
 		}
 		return new GridColumnHints(schema, table, byName);
 	}
@@ -158,5 +224,8 @@ public final class GridJdbcCatalogSupport {
 	}
 
 	public record Hint(String schema, String table, String column, boolean nullable, SqlType type) {
+	}
+
+	private record PkCol(String columnName, int ordinal) {
 	}
 }

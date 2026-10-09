@@ -121,11 +121,12 @@ public class OrchidUncleanReviveListAppendIT {
 			shipSurvivorTipGap(b, c);
 			waitTipsEqual(b, c, FAILOVER_TIMEOUT_MS);
 			waitSurvivorProposer(b, c, NODE_B, FAILOVER_TIMEOUT_MS);
+			waitSurvivorStores(engineB, engineC, TABLE, CATALOG_TIMEOUT_MS);
 
 			for (int i = 0; i < APPEND_ROUNDS_AFTER_KILL; i++) {
 				noteDualEligible(b, c, dualEligibleHits);
 				final SqlEngine writer = phaseRankedWriter(b, c, engineB, engineC);
-				if (writer == null) {
+				if (writer == null || !storeReady(writer, TABLE)) {
 					LockSupport.parkNanos(PARK_NANOS);
 					continue;
 				}
@@ -234,18 +235,42 @@ public class OrchidUncleanReviveListAppendIT {
 		return null;
 	}
 
+	/**
+	 * Wait until schema and store are open on every node.
+	 * <p>
+	 * {@link TableCatalog#exists} alone can be true while {@code creatingTables} is set and
+	 * {@code getStore} is still null — that race produced {@code Unknown table: list_append}
+	 * on post-kill appends.
+	 */
 	private static void waitCatalog(SqlEngine a, SqlEngine b, SqlEngine c, String table, long timeoutMs) {
 		final long deadline = System.currentTimeMillis() + timeoutMs;
 		while (System.currentTimeMillis() < deadline) {
-			if (a.catalog().exists(table) && b.catalog().exists(table) && c.catalog().exists(table)) {
+			if (storeReady(a, table) && storeReady(b, table) && storeReady(c, table)) {
 				return;
 			}
 			LockSupport.parkNanos(PARK_NANOS);
 		}
-		fail("catalog did not replicate table=" + table
-				+ " a=" + a.catalog().exists(table)
-				+ " b=" + b.catalog().exists(table)
-				+ " c=" + c.catalog().exists(table));
+		fail("catalog/store did not replicate table=" + table
+				+ " a.exists=" + a.catalog().exists(table) + " a.store=" + (a.catalog().getStore(table) != null)
+				+ " b.exists=" + b.catalog().exists(table) + " b.store=" + (b.catalog().getStore(table) != null)
+				+ " c.exists=" + c.catalog().exists(table) + " c.store=" + (c.catalog().getStore(table) != null));
+	}
+
+	private static boolean storeReady(SqlEngine engine, String table) {
+		return engine.catalog().exists(table) && engine.catalog().getStore(table) != null;
+	}
+
+	private static void waitSurvivorStores(SqlEngine b, SqlEngine c, String table, long timeoutMs) {
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			if (storeReady(b, table) && storeReady(c, table)) {
+				return;
+			}
+			LockSupport.parkNanos(PARK_NANOS);
+		}
+		fail("survivor stores not ready table=" + table
+				+ " b.exists=" + b.catalog().exists(table) + " b.store=" + (b.catalog().getStore(table) != null)
+				+ " c.exists=" + c.catalog().exists(table) + " c.store=" + (c.catalog().getStore(table) != null));
 	}
 
 	private static void waitThreeSyncedWithProposer(

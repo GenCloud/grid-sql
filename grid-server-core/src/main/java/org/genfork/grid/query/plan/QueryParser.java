@@ -48,6 +48,7 @@ import org.genfork.grid.antlr.SimplifiedSqlParser.JoinClauseContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.LikeContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.LimitClauseContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.NotExpressionContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.NumericPlusComparisonContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.OrExpressionContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.OrderItemContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.OrderListContext;
@@ -70,6 +71,7 @@ import org.genfork.grid.query.filters.impl.IsNotNullCondition;
 import org.genfork.grid.query.filters.impl.IsNullCondition;
 import org.genfork.grid.query.filters.impl.LogicalOperatorCondition;
 import org.genfork.grid.query.filters.impl.NotCondition;
+import org.genfork.grid.query.filters.impl.NumericPlusComparisonCondition;
 import org.genfork.grid.query.filters.impl.OrCondition;
 import org.genfork.grid.antlr.SimplifiedSqlParser.FunctionComparisonContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.FunctionCallContext;
@@ -185,7 +187,7 @@ public class QueryParser {
 		if (query.FROM() != null) {
 			final FromItemContext from = query.fromItem();
 			if (from.tableName() != null) {
-				tableName = from.tableName().getText();
+				tableName = SqlIdentParseUtil.tableNameText(from.tableName());
 			} else if (from.functionCall() != null) {
 				final String alias = SqlIdentParseUtil.fromItemAlias(from);
 				tableName = alias != null
@@ -399,6 +401,15 @@ public class QueryParser {
 
 			final LogicalOperatorCondition.Operator operator = convertOperator(op);
 			return new LogicalOperatorCondition(column, operator, value);
+		}
+
+		@Override
+		public FilterCondition visitNumericPlusComparison(NumericPlusComparisonContext ctx) {
+			final SimplifiedSqlParser.NumericColPlusContext plus = ctx.numericPlusAtom().numericColPlus();
+			final String column = simpleColumn(plus.columnName());
+			final Object addend = parseValue(plus.value());
+			final LogicalOperatorCondition.Operator operator = convertOperator(ctx.operator().getText());
+			return new NumericPlusComparisonCondition(column, addend, operator, parseValue(ctx.value()));
 		}
 
 		@Override

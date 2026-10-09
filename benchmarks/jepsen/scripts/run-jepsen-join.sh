@@ -142,6 +142,9 @@ release_ports() {
 }
 trap release_ports EXIT
 
+# shellcheck source=jepsen-client-version.sh
+source "$JEPSEN_DIR/scripts/jepsen-client-version.sh"
+jepsen_sync_project_clj "$ROOT"
 echo "Installing grid-sql-client..."
 (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
 

@@ -140,6 +140,22 @@ class GridJdbcMetaIT {
 		}
 	}
 
+	@Test
+	void resultSetConcurrencySupportsUpdatableForwardOnly() throws Exception {
+		final String url = "jdbc:grid://u:p@127.0.0.1:" + port + "/public";
+		try (Connection c = DriverManager.getConnection(url)) {
+			final DatabaseMetaData md = c.getMetaData();
+			assertTrue(md.supportsResultSetType(ResultSet.TYPE_FORWARD_ONLY));
+			assertTrue(md.supportsResultSetConcurrency(
+					ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
+			assertTrue(md.supportsResultSetConcurrency(
+					ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE));
+			assertTrue(md.ownDeletesAreVisible(ResultSet.TYPE_FORWARD_ONLY));
+			assertTrue(md.ownUpdatesAreVisible(ResultSet.TYPE_FORWARD_ONLY));
+			assertTrue(md.ownInsertsAreVisible(ResultSet.TYPE_FORWARD_ONLY));
+		}
+	}
+
 	private static int freePort() throws Exception {
 		try (ServerSocket ss = new ServerSocket(0)) {
 			ss.setReuseAddress(true);

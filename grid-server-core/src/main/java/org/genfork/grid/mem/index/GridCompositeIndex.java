@@ -38,8 +38,12 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+
 import org.apache.commons.lang3.ArrayUtils;
 import org.springframework.util.CollectionUtils;
+
+import com.google.common.annotations.VisibleForTesting;
+
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.TableSchema;
@@ -421,6 +425,19 @@ public class GridCompositeIndex {
 	}
 
 	/**
+	 * {@code true} when optimized plan marks ascending PK-leaf order for ORDER BY
+	 * ({@link FilterConditionData#useSameOrderAscendingIndex()}).
+	 */
+	@VisibleForTesting
+	public boolean isUseSameOrderAscendingIndex(String selectSql) {
+		if (selectSql == null || selectSql.isBlank()) {
+			return false;
+		}
+		final QueryData optimized = optimizedPlanCache.computeIfAbsent(selectSql.trim(), this::buildOptimizedQuery);
+		return optimized.filter() != null && optimized.filter().useSameOrderAscendingIndex();
+	}
+
+	/**
 	 * True when optimized filter needs no residual row match (every leaf is index-backed).
 	 * {@link AlwaysTrueCondition} (no WHERE) is fully indexed via PK {@code searchAll}.
 	 */
@@ -585,8 +602,12 @@ public class GridCompositeIndex {
 			if (queryData.filter() == null || queryData.filter().conditionTree() == null) {
 				return null;
 			}
-			final SortOrderData sortOrder = queryData.sortOrder() != null && queryData.sortOrder().length == 1 ? queryData.sortOrder()[0] : null;
-			final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(compositeIndexes, property2Index, queryData.filter().conditionTree(), sortOrder);
+			final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(
+					compositeIndexes,
+					property2Index,
+					queryData.filter().conditionTree(),
+					queryData.sortOrder(),
+					primaryKeyColumns);
 			final AbstractIndexOperation<byte[][], CompositeTreeKey> used = CompositeIndexProbeOps.findCompositeIndexInTree(optimized.conditionTree());
 			if (used == null) {
 				return null;
@@ -1090,7 +1111,10 @@ public class GridCompositeIndex {
 			return TableScanStrategy.INSTANCE.execute(queryPlan, operationResult, optimizedQuery.sortOrder(), paging);
 		}
 		final QueryOptimizer.ScanChoice choice = recordScanCost(queryPlan, optimizedQuery, operationResult);
-		return choice.strategy().execute(queryPlan, operationResult, optimizedQuery.sortOrder(), optimizedQuery.paging());
+		final boolean strategySatisfiesOrder = !(choice.strategy() instanceof TableScanStrategy);
+		// Unordered TableScan must not apply LIMIT before executor/sort; FilterThenSort/BPTree page safely.
+		final PagingData strategyPaging = hasSort && !strategySatisfiesOrder ? null : optimizedQuery.paging();
+		return choice.strategy().execute(queryPlan, operationResult, optimizedQuery.sortOrder(), strategyPaging);
 	}
 
 	/**
@@ -1106,7 +1130,14 @@ public class GridCompositeIndex {
 	}
 
 	private QueryOptimizer.ScanChoice recordScanCost(ExplainQuery.QueryPlan queryPlan, QueryData optimizedQuery, IndexOperationResult operationResult) {
-		final QueryOptimizer.ScanChoice choice = QueryOptimizer.chooseBestScanStrategy(optimizedQuery, property2Index, cachedOrderIndexFields, operationResult, currentTableRowStats());
+		final QueryOptimizer.ScanChoice choice = QueryOptimizer.chooseBestScanStrategy(
+				optimizedQuery,
+				property2Index,
+				cachedOrderIndexFields,
+				operationResult,
+				currentTableRowStats(),
+				this.schema,
+				this.rowResolver);
 		if (queryPlan != null) {
 			ExplainQuery.recordEstimatedCost(queryPlan, choice.estimatedCost());
 			final TableRowStats stats = currentTableRowStats();
@@ -1142,7 +1173,12 @@ public class GridCompositeIndex {
 			return queryData;
 		}
 		final FilterCondition bitmapPreferred = QueryOptimizer.preferBitmapPredicates(property2Index, conditionData.conditionTree());
-		final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(compositeIndexes, property2Index, bitmapPreferred, queryData.sortOrder() != null && queryData.sortOrder().length == 1 ? queryData.sortOrder()[0] : null);
+		final FilterConditionData optimized = QueryOptimizer.tryOptimizeForCompositeIndex(
+				compositeIndexes,
+				property2Index,
+				bitmapPreferred,
+				queryData.sortOrder(),
+				primaryKeyColumns);
 		return new QueryData(queryData.table(), queryData.fields(), optimized, queryData.paging(), queryData.sortOrder(), queryData.aggregate(), queryData.joins());
 	}
 
@@ -1335,17 +1371,20 @@ public class GridCompositeIndex {
 		}
 	}
 
+	/**
+	 * ORDER BY columns must exist on the table schema. External-order ArrayIndexType is an
+	 * accelerator only — missing entries are sorted via wire row compare in FilterThenSort.
+	 */
 	private void validateOrderIfNeeded(SortOrderData[] orderData) {
-		if (orderData == null) {
-			return;
-		}
-		if (CollectionUtils.isEmpty(cachedOrderIndexFields)) {
+		if (orderData == null || this.schema == null) {
 			return;
 		}
 		for (SortOrderData data : orderData) {
-			final String sortField = data.sortField();
-			if (!cachedOrderIndexFields.containsKey(sortField)) {
-				throw new ConditionValidationException("criteria.mismatch-property", new String[] {sortField});
+			if (data == null || data.sortField() == null) {
+				continue;
+			}
+			if (this.schema.column(data.sortField()) == null) {
+				throw new ConditionValidationException("criteria.mismatch-property", new String[]{data.sortField()});
 			}
 		}
 	}

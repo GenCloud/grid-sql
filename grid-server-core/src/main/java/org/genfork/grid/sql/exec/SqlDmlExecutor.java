@@ -34,10 +34,12 @@ import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.sql.SqlBuiltinEvalUtil;
+import org.genfork.grid.sql.SqlBuiltinExpr.CaseExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ClockExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
 import org.genfork.grid.sql.SqlBuiltinExpr.ExcludedRef;
+import org.genfork.grid.sql.SqlBuiltinExpr.NumericColPlus;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlSession;
@@ -51,6 +53,7 @@ import org.genfork.grid.sql.ast.DmlAst.OnConflict;
 import org.genfork.grid.sql.ast.DmlAst.SequenceCallExpr;
 import org.genfork.grid.sql.ast.DmlAst.TruncateSql;
 import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
+import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.tx.KeyWrapper;
 import org.genfork.grid.sql.tx.SqlTxBuffer;
@@ -85,34 +88,24 @@ public final class SqlDmlExecutor {
 		final String table = tables.resolveTable(session, s.table());
 		final TableStore store = tables.requireStore(table);
 		SqlTriggerFireOps.fireBeforeStatement(session, engine, table, TriggerEvent.INSERT);
-		final List<String> colNames = s.columns().isEmpty()
-				? store.schema().columns().stream().map(ColumnDef::name).toList()
-				: s.columns();
 		final OnConflict conflict = s.onConflictOrNull();
 		final List<byte[]> returned = new ArrayList<>();
 		long affected = 0L;
-		for (List<Object> lits : s.rows()) {
-			if (lits.size() != colNames.size()) {
-				throw new IllegalArgumentException("INSERT column/value count mismatch");
-			}
-			final Map<String, Object> named = new LinkedHashMap<>();
-			for (int i = 0; i < colNames.size(); i++) {
-				named.put(colNames.get(i), resolveInsertValue(session, lits.get(i)));
-			}
-			fillIdentityDefaults(session, store.schema(), named);
-			fillColumnDefaults(session, store.schema(), named);
-			final Object[] row = store.rowFromNamed(named);
-			assertFkParents(session, table, row);
-			final long rowAffected = applyInsertRow(session, table, store, row, conflict);
-			affected += rowAffected;
-			if (rowAffected > 0L && !s.returning().isEmpty()) {
-				final byte[] key = conflict == null
-						? store.keyBytesForPk(row[store.schema().pkColumn().ordinal()])
-						: SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
-				final byte[] value = SqlDmlLockOps.existingBytes(session, table, store, key);
-				if (value != null) {
-					returned.add(value);
+		if (s.isInsertSelect()) {
+			affected = insertFromSelect(session, s, table, store, conflict, returned);
+		} else {
+			final List<String> colNames = s.columns().isEmpty()
+					? store.schema().columns().stream().map(ColumnDef::name).toList()
+					: s.columns();
+			for (List<Object> lits : s.rows()) {
+				if (lits.size() != colNames.size()) {
+					throw new IllegalArgumentException("INSERT column/value count mismatch");
 				}
+				final Map<String, Object> named = new LinkedHashMap<>();
+				for (int i = 0; i < colNames.size(); i++) {
+					named.put(colNames.get(i), resolveInsertValue(session, lits.get(i)));
+				}
+				affected += applyNamedInsertRow(session, table, store, named, conflict, s.returning(), returned);
 			}
 		}
 		final SqlResult result = !s.returning().isEmpty()
@@ -120,6 +113,56 @@ public final class SqlDmlExecutor {
 				: SqlResult.affected(SqlStatementTag.INSERT, affected);
 		SqlTriggerFireOps.fireAfterStatement(session, engine, table, TriggerEvent.INSERT);
 		return result;
+	}
+
+	private long insertFromSelect(
+			SqlSession session,
+			InsertSql s,
+			String table,
+			TableStore store,
+			OnConflict conflict,
+			List<byte[]> returned
+	) {
+		final SelectSql source = s.selectSourceOrNull();
+		if (source == null) {
+			throw new IllegalArgumentException("INSERT SELECT missing source");
+		}
+		final SqlResult src = engine.dispatchBound(session, source);
+		long affected = 0L;
+		for (Object[] srcRow : src.rows()) {
+			final Map<String, Object> named = SqlInsertSelectUtil.namedFromSelectRow(
+					store.schema(),
+					s.columns(),
+					srcRow);
+			affected += applyNamedInsertRow(session, table, store, named, conflict, s.returning(), returned);
+		}
+		return affected;
+	}
+
+	private long applyNamedInsertRow(
+			SqlSession session,
+			String table,
+			TableStore store,
+			Map<String, Object> named,
+			OnConflict conflict,
+			List<String> returning,
+			List<byte[]> returned
+	) {
+		fillIdentityDefaults(session, store.schema(), named);
+		fillColumnDefaults(session, store.schema(), named);
+		final Object[] row = store.rowFromNamed(named);
+		assertFkParents(session, table, row);
+		final long rowAffected = applyInsertRow(session, table, store, row, conflict);
+		if (rowAffected > 0L && returning != null && !returning.isEmpty()) {
+			final byte[] key = conflict == null
+					? store.keyBytesForPk(row[store.schema().pkColumn().ordinal()])
+					: SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
+			final byte[] value = SqlDmlLockOps.existingBytes(session, table, store, key);
+			if (value != null) {
+				returned.add(value);
+			}
+		}
+		return rowAffected;
 	}
 
 	private Object resolveInsertValue(SqlSession session, Object raw) {
@@ -133,7 +176,8 @@ public final class SqlDmlExecutor {
 			return session.currval(seq);
 		}
 		if (raw instanceof ClockExpr || raw instanceof CoalesceExpr || raw instanceof ColumnRef
-				|| raw instanceof ExcludedRef) {
+				|| raw instanceof ExcludedRef || raw instanceof NumericColPlus
+				|| raw instanceof CaseExpr) {
 			return SqlBuiltinEvalUtil.resolve(
 					raw,
 					name -> {
@@ -489,8 +533,10 @@ public final class SqlDmlExecutor {
 						SqlTriggerFireOps.fireAfterStatement(session, engine, table, TriggerEvent.UPDATE);
 						return result;
 					}
+					final Map<String, Object> resolvedLits =
+							SqlDmlSetResolveUtil.resolveSets(session, store, base, s.setLiterals());
 					final TableStore.EncodedRow encoded =
-							store.encodeUpdatePlan(s.rmw(), base, s.setLiterals());
+							store.encodeUpdatePlan(s.rmw(), base, resolvedLits);
 					SqlTriggerFireOps.fireBeforeRow(
 							session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
 					final long affected = store.installEncodedUpsert(encoded);
@@ -539,8 +585,10 @@ public final class SqlDmlExecutor {
 			SqlDmlLockOps.ensureRowLocked(session, table, key);
 			final byte[] base = SqlDmlLockOps.baseBytes(session, table, store, key);
 			if (base != null) {
+				final Map<String, Object> resolvedLits =
+						SqlDmlSetResolveUtil.resolveSets(session, store, base, s.setLiterals());
 				final TableStore.EncodedRow encoded =
-						store.encodeUpdatePlan(s.rmw(), base, s.setLiterals());
+						store.encodeUpdatePlan(s.rmw(), base, resolvedLits);
 				SqlTriggerFireOps.fireBeforeRow(
 						session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
 				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
@@ -586,7 +634,8 @@ public final class SqlDmlExecutor {
 		if (base == null) {
 			return 0L;
 		}
-		final TableStore.EncodedRow encoded = store.encodeSetLiterals(key, base, sets);
+		final Map<String, Object> resolved = SqlDmlSetResolveUtil.resolveSets(session, store, base, sets);
+		final TableStore.EncodedRow encoded = store.encodeSetLiterals(key, base, resolved);
 		SqlTriggerFireOps.fireBeforeRow(
 				session, engine, table, TriggerEvent.UPDATE, base, encoded.valueBytes());
 		final long affected;
@@ -595,7 +644,7 @@ public final class SqlDmlExecutor {
 			SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
 			affected = 1L;
 		} else {
-			affected = store.updateSetLiteralsByKey(key, sets);
+			affected = store.updateSetLiteralsByKey(key, resolved);
 		}
 		if (affected > 0L) {
 			SqlTriggerFireOps.fireAfterRow(

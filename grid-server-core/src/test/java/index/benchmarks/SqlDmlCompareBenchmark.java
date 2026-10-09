@@ -54,6 +54,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class SqlDmlCompareBenchmark extends AbstractLatencyBenchmark {
 
 	private static final String TABLE = "dml_row";
+	private static final String NULL_TABLE = "dml_null";
+	private static final String BOOL_TABLE = "dml_bool";
 
 	private SqlEngine engine;
 	private TableStore store;
@@ -63,9 +65,18 @@ public class SqlDmlCompareBenchmark extends AbstractLatencyBenchmark {
 	public void setup() {
 		engine = SqlBenchHelper.createEngine(4);
 		engine.execute("CREATE TABLE " + TABLE + " (id INT PRIMARY KEY, v VARCHAR, n INT)");
+		engine.execute(
+				"CREATE TABLE " + NULL_TABLE + " (id INT PRIMARY KEY, ts TIMESTAMP)");
+		engine.execute(
+				"CREATE TABLE " + BOOL_TABLE + " (id INT PRIMARY KEY, flag BOOLEAN)");
 		store = SqlBenchHelper.store(engine, TABLE);
 		for (int i = 0; i < 500; i++) {
 			store.putIndexed(i, "x" + i, i);
+			engine.execute(
+					"INSERT INTO " + NULL_TABLE + " VALUES (" + i
+							+ ", TIMESTAMP '2026-01-01 00:00:00')");
+			engine.execute(
+					"INSERT INTO " + BOOL_TABLE + " VALUES (" + i + ", TRUE)");
 		}
 		engine.execute("UPDATE " + TABLE + " SET n = n + 1 WHERE id = 1");
 		engine.execute(joinInsert(seq.getAndIncrement()));
@@ -80,6 +91,12 @@ public class SqlDmlCompareBenchmark extends AbstractLatencyBenchmark {
 	public void tearDown() {
 		if (engine != null && engine.catalog().exists(TABLE)) {
 			engine.catalog().dropTable(TABLE);
+		}
+		if (engine != null && engine.catalog().exists(NULL_TABLE)) {
+			engine.catalog().dropTable(NULL_TABLE);
+		}
+		if (engine != null && engine.catalog().exists(BOOL_TABLE)) {
+			engine.catalog().dropTable(BOOL_TABLE);
 		}
 		engine = null;
 		store = null;
@@ -115,6 +132,37 @@ public class SqlDmlCompareBenchmark extends AbstractLatencyBenchmark {
 		final int id = ThreadLocalRandom.current().nextInt(0, 500);
 		bh.consume(engine.execute(
 				"UPDATE " + TABLE + " SET n = n + 1, v = 'm' WHERE id = " + id).rowsAffected());
+	}
+
+	@Benchmark
+	public void updateColumnCopy(Blackhole bh) {
+		final int id = ThreadLocalRandom.current().nextInt(0, 500);
+		bh.consume(engine.execute(
+				"UPDATE " + TABLE + " SET v = v WHERE id = " + id).rowsAffected());
+	}
+
+	@Benchmark
+	public void updateCaseColPlus(Blackhole bh) {
+		final int id = ThreadLocalRandom.current().nextInt(0, 500);
+		bh.consume(engine.execute(
+				"UPDATE " + TABLE + " SET n = CASE "
+						+ "WHEN n = 0 THEN 1 "
+						+ "WHEN (n + 1) >= 1000000 THEN 1000000 "
+						+ "ELSE (n + 1) END WHERE id = " + id).rowsAffected());
+	}
+
+	@Benchmark
+	public void updateSetNullLiteral(Blackhole bh) {
+		final int id = ThreadLocalRandom.current().nextInt(0, 500);
+		bh.consume(engine.execute(
+				"UPDATE " + NULL_TABLE + " SET ts = NULL WHERE id = " + id).rowsAffected());
+	}
+
+	@Benchmark
+	public void updateSetFalseLiteral(Blackhole bh) {
+		final int id = ThreadLocalRandom.current().nextInt(0, 500);
+		bh.consume(engine.execute(
+				"UPDATE " + BOOL_TABLE + " SET flag = FALSE WHERE id = " + id).rowsAffected());
 	}
 
 	@Benchmark

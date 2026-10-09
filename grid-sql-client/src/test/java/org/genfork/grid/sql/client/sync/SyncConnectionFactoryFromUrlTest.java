@@ -60,4 +60,5 @@ class SyncConnectionFactoryFromUrlTest {
 				"grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.0.0.1:15433");
 		assertNotSame(writerOnly, withReads);
 	}
+
 }

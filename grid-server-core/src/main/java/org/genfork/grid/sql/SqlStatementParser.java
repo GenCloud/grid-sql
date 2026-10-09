@@ -63,6 +63,7 @@ import org.genfork.grid.mem.index.IndexType;
 import org.genfork.grid.query.plan.UpdatePlan;
 import org.genfork.grid.query.util.SetOpKind;
 import org.genfork.grid.replication.codec.ModifyPayload;
+import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
 import org.genfork.grid.sql.ast.AdminAst.AlterUserPasswordSql;
 import org.genfork.grid.sql.ast.AdminAst.CreateRoleSql;
 import org.genfork.grid.sql.ast.AdminAst.CreateUserSql;
@@ -109,6 +110,7 @@ import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
 import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
 import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.ExistsSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.ExplainSql;
 import org.genfork.grid.sql.ast.SelectAst.FuncArg;
 import org.genfork.grid.sql.ast.SelectAst.FunctionFrom;
@@ -117,10 +119,13 @@ import org.genfork.grid.sql.ast.SelectAst.HavingPredicate;
 import org.genfork.grid.sql.ast.SelectAst.JoinEdge;
 import org.genfork.grid.sql.ast.SelectAst.JoinKind;
 import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
+import org.genfork.grid.sql.ast.SelectAst.LiteralSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.CteBinding;
 import org.genfork.grid.sql.ast.SelectAst.RecursiveCteSql;
 import org.genfork.grid.sql.ast.SelectAst.SelectItem;
 import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.sql.ast.SelectAst.SetOpSql;
+import org.genfork.grid.sql.ast.SelectAst.WithSelectSql;
 import org.genfork.grid.sql.ast.SelectAst.WhereSubquery;
 import org.genfork.grid.sql.ast.SelectAst.WindowSelectItem;
 import org.genfork.grid.sql.ast.Stmt;
@@ -144,6 +149,8 @@ import org.genfork.grid.sql.ast.TxAst.SavepointSql;
  * @since: 1.0
  */
 public final class SqlStatementParser {
+	private static final String DEFAULT_EXISTS_SELECT_LABEL = "exists";
+
 	private SqlStatementParser() {
 	}
 
@@ -320,8 +327,8 @@ public final class SqlStatementParser {
 			if (wq.RECURSIVE() != null) {
 				return parseRecursiveCte(wq, fullSql);
 			}
-			final QueryContext q = wq.query();
-			return parseQuery(q, SqlParseSupport.textOf(q));
+			// Surviving non-recursive WITH after expand = deferred complex CTE residual.
+			return parseWithSelect(wq, fullSql);
 		}
 		if (ex.explainStmt() != null) {
 			final SimplifiedSqlParser.ExplainStmtContext explainCtx = ex.explainStmt();
@@ -552,7 +559,11 @@ public final class SqlStatementParser {
 			throw new IllegalArgumentException("expression SELECT requires at least one select item");
 		}
 		for (SimplifiedSqlParser.SelectItemContext itemCtx : expr.selectItem()) {
-			if (itemCtx.functionCall() != null) {
+			if (itemCtx.EXISTS() != null) {
+				final ExistsSelectItem existsItem = parseExistsSelectItem(itemCtx);
+				selectItems.add(existsItem);
+				projection.add(existsItem.label());
+			} else if (itemCtx.functionCall() != null) {
 				final FunctionSelectItem fnItem = parseFunctionSelectItem(itemCtx);
 				selectItems.add(fnItem);
 				projection.add(fnItem.label());
@@ -566,6 +577,10 @@ public final class SqlStatementParser {
 				final FunctionSelectItem fnItem = parseClockSelectItem(itemCtx);
 				selectItems.add(fnItem);
 				projection.add(fnItem.label());
+			} else if (itemCtx.value() != null) {
+				final LiteralSelectItem litItem = parseLiteralSelectItem(itemCtx);
+				selectItems.add(litItem);
+				projection.add(litItem.label());
 			} else if (itemCtx.columnName() != null) {
 				throw new IllegalArgumentException(
 						"expression SELECT without FROM cannot reference columns: " + itemCtx.getText());
@@ -633,7 +648,7 @@ public final class SqlStatementParser {
 			table = fromFunction.aliasOrNull() != null ? fromFunction.aliasOrNull() : fromFunction.functionName();
 		} else {
 			fromFunction = null;
-			table = from.tableName().getText();
+			table = SqlIdentParseUtil.tableNameText(from.tableName());
 		}
 		final List<String> projection = new ArrayList<>();
 		final List<SelectItem> selectItems = new ArrayList<>();
@@ -672,7 +687,7 @@ public final class SqlStatementParser {
 						maxAgg = aggItem.maxAgg();
 					}
 				} else if (itemCtx.windowExpr() != null) {
-					final WindowSelectItem winItem = parseWindowItem(itemCtx.windowExpr(), namedWindows);
+					final WindowSelectItem winItem = parseWindowItem(itemCtx, namedWindows);
 					selectItems.add(winItem);
 					projection.add(winItem.label());
 					if (windowFunc == null) {
@@ -695,14 +710,21 @@ public final class SqlStatementParser {
 					final FunctionSelectItem fnItem = parseClockSelectItem(itemCtx);
 					selectItems.add(fnItem);
 					projection.add(fnItem.label());
+				} else if (itemCtx.EXISTS() != null) {
+					throw new IllegalArgumentException(
+							"EXISTS in SELECT list requires expression SELECT (no FROM)");
+				} else if (itemCtx.value() != null) {
+					final LiteralSelectItem litItem = parseLiteralSelectItem(itemCtx);
+					selectItems.add(litItem);
+					projection.add(litItem.label());
 				} else if (itemCtx.columnName() != null) {
 					final ColumnNameContext cn = itemCtx.columnName();
 					final String col = SqlIdentParseUtil.simpleColumn(cn);
 					final String tableQual = SqlIdentParseUtil.tableQualifier(cn);
 					final String alias = itemCtx.alias != null ? SqlIdentParseUtil.identText(itemCtx.alias) : null;
 					selectItems.add(new ColumnSelectItem(col, tableQual, alias));
-					// Projection stays on physical column for store.projectBytes; alias is label only.
-					projection.add(tableQual != null ? tableQual + "." + col : col);
+					// Physical bare name for store.projectBytes; qualifier lives on ColumnSelectItem.
+					projection.add(col);
 				}
 			}
 		} else {
@@ -892,9 +914,10 @@ public final class SqlStatementParser {
 	}
 
 	private static WindowSelectItem parseWindowItem(
-			SimplifiedSqlParser.WindowExprContext we,
+			SimplifiedSqlParser.SelectItemContext itemCtx,
 			Map<String, SimplifiedSqlParser.WindowSpecContext> namedWindows
 	) {
+		final SimplifiedSqlParser.WindowExprContext we = itemCtx.windowExpr();
 		String func;
 		String valueCol = null;
 		String label;
@@ -934,8 +957,12 @@ public final class SqlStatementParser {
 		} else {
 			throw new IllegalArgumentException("unsupported window expression");
 		}
+		if (itemCtx.alias != null) {
+			label = SqlIdentParseUtil.identText(itemCtx.alias);
+		}
 		List<String> partition = List.of();
 		String orderCol = null;
+		boolean orderDesc = false;
 		final SimplifiedSqlParser.OverClauseContext over = we.overClause();
 		if (over != null) {
 			SimplifiedSqlParser.WindowSpecContext spec = over.windowSpec();
@@ -953,10 +980,12 @@ public final class SqlStatementParser {
 				partition = List.copyOf(parts);
 			}
 			if (spec != null && spec.orderList() != null && !spec.orderList().orderItem().isEmpty()) {
-				orderCol = simpleColumn(spec.orderList().orderItem(0).columnName());
+				final SimplifiedSqlParser.OrderItemContext orderItem = spec.orderList().orderItem(0);
+				orderCol = simpleColumn(orderItem.columnName());
+				orderDesc = orderItem.DESC() != null;
 			}
 		}
-		return new WindowSelectItem(label, func, valueCol, partition, orderCol);
+		return new WindowSelectItem(label, func, valueCol, partition, orderCol, orderDesc);
 	}
 
 	private static CreateViewSql parseCreateView(SimplifiedSqlParser.CreateViewStmtContext ctx) {
@@ -1125,6 +1154,26 @@ public final class SqlStatementParser {
 		return sb.append(')').toString();
 	}
 
+	private static WithSelectSql parseWithSelect(
+			SimplifiedSqlParser.WithQueryContext wq,
+			String fullSql
+	) {
+		if (wq.cteDef() == null || wq.cteDef().isEmpty()) {
+			throw new IllegalArgumentException("WITH requires at least one CTE definition");
+		}
+		final List<CteBinding> ctes = new ArrayList<>();
+		for (SimplifiedSqlParser.CteDefContext cte : wq.cteDef()) {
+			final String name = cte.ID().getText();
+			final String body = SqlParseSupport.textOf(cte.query());
+			ctes.add(new CteBinding(name, body));
+		}
+		if (wq.query().unionTail() != null && !wq.query().unionTail().isEmpty()) {
+			throw new IllegalArgumentException("outer SELECT after WITH cannot be a set op");
+		}
+		final SelectSql outer = parseSelect(wq.query().selectQuery(), SqlParseSupport.textOf(wq.query()));
+		return new WithSelectSql(List.copyOf(ctes), outer, fullSql);
+	}
+
 	private static RecursiveCteSql parseRecursiveCte(
 			SimplifiedSqlParser.WithQueryContext wq,
 			String fullSql
@@ -1156,12 +1205,27 @@ public final class SqlStatementParser {
 	}
 
 	private static InsertSql parseInsert(InsertStmtContext ctx) {
-		final String table = ctx.tableName().getText();
+		final String table = SqlIdentParseUtil.tableNameText(ctx.tableName());
 		final List<String> cols = new ArrayList<>();
 		if (ctx.insertColumnList() != null) {
 			for (ColumnNameContext c : ctx.insertColumnList().columnName()) {
-				cols.add(c.getText());
+				cols.add(simpleColumn(c));
 			}
+		}
+		final boolean upsertKeyword = ctx.UPSERT() != null;
+		if (upsertKeyword && ctx.onConflictClause() != null) {
+			throw new IllegalArgumentException("UPSERT cannot combine with ON CONFLICT");
+		}
+		final OnConflict conflict = upsertKeyword
+				? new OnConflict(List.of(), ConflictAction.DO_UPSERT_VALUES, Map.of())
+				: parseOnConflict(ctx.onConflictClause());
+		final List<String> returning = parseReturning(ctx.returningClause());
+		if (ctx.query() != null) {
+			final Stmt source = parseQuery(ctx.query(), SqlParseSupport.textOf(ctx.query()));
+			if (!(source instanceof SelectSql selectSource)) {
+				throw new IllegalArgumentException("INSERT … SELECT requires a single SELECT (set ops not supported)");
+			}
+			return new InsertSql(table, cols, List.of(), conflict, returning, selectSource);
 		}
 		final List<List<Object>> rows = new ArrayList<>();
 		for (ValueTupleContext tuple : ctx.valueTuple()) {
@@ -1171,14 +1235,31 @@ public final class SqlStatementParser {
 			}
 			rows.add(vals);
 		}
-		final boolean upsertKeyword = ctx.UPSERT() != null;
-		if (upsertKeyword && ctx.onConflictClause() != null) {
-			throw new IllegalArgumentException("UPSERT cannot combine with ON CONFLICT");
+		return new InsertSql(table, cols, rows, conflict, returning, null);
+	}
+
+	private static ExistsSelectItem parseExistsSelectItem(SimplifiedSqlParser.SelectItemContext itemCtx) {
+		final SimplifiedSqlParser.SelectQueryContext sq = itemCtx.selectQuery();
+		if (sq == null) {
+			throw new IllegalArgumentException("EXISTS select item requires a subquery");
 		}
-		final OnConflict conflict = upsertKeyword
-				? new OnConflict(List.of(), ConflictAction.DO_UPSERT_VALUES, Map.of())
-				: parseOnConflict(ctx.onConflictClause());
-		return new InsertSql(table, cols, rows, conflict, parseReturning(ctx.returningClause()));
+		final String subSql = SqlParseSupport.textOf(sq);
+		final String alias = itemCtx.alias != null
+				? SqlIdentParseUtil.identText(itemCtx.alias)
+				: DEFAULT_EXISTS_SELECT_LABEL;
+		return new ExistsSelectItem(
+				alias,
+				itemCtx.NOT() != null,
+				parseSelect(sq, subSql),
+				subSql);
+	}
+
+	private static LiteralSelectItem parseLiteralSelectItem(SimplifiedSqlParser.SelectItemContext itemCtx) {
+		final Object lit = SqlParseSupport.literal(itemCtx.value());
+		final String alias = itemCtx.alias != null
+				? SqlIdentParseUtil.identText(itemCtx.alias)
+				: String.valueOf(lit);
+		return new LiteralSelectItem(alias, lit);
 	}
 
 	private static OnConflict parseOnConflict(SimplifiedSqlParser.OnConflictClauseContext ctx) {
@@ -1197,11 +1278,7 @@ public final class SqlStatementParser {
 		}
 		final Map<String, Object> sets = new LinkedHashMap<>();
 		for (UpdateAssignContext a : actionCtx.updateAssign()) {
-			final String col = a.columnName() != null ? simpleColumn(a.columnName()) : null;
-			if (a.updateRhs() != null) {
-				throw new IllegalArgumentException("ON CONFLICT DO UPDATE supports value SET only in v1");
-			}
-			sets.put(col, SqlParseSupport.literal(a.value()));
+			putLiteralAssign(sets, a, "ON CONFLICT DO UPDATE");
 		}
 		return new OnConflict(List.copyOf(targets), ConflictAction.DO_UPDATE, Map.copyOf(sets));
 	}
@@ -1226,11 +1303,7 @@ public final class SqlStatementParser {
 		if (ctx.whenMatchedClause() != null) {
 			matchedSets = new LinkedHashMap<>();
 			for (UpdateAssignContext a : ctx.whenMatchedClause().updateAssign()) {
-				final String col = a.columnName() != null ? simpleColumn(a.columnName()) : null;
-				if (a.updateRhs() != null) {
-					throw new IllegalArgumentException("MERGE WHEN MATCHED supports literal SET only in v1");
-				}
-				matchedSets.put(col, SqlParseSupport.literal(a.value()));
+				putLiteralAssign(matchedSets, a, "MERGE WHEN MATCHED");
 			}
 		}
 		List<String> insertCols = null;
@@ -1278,11 +1351,13 @@ public final class SqlStatementParser {
 		final List<UpdatePlan.FieldAssign> rmw = new ArrayList<>();
 		final Map<String, Object> lits = new LinkedHashMap<>();
 		for (UpdateAssignContext a : ctx.updateAssign()) {
-			final String col = a.columnName() != null ? simpleColumn(a.columnName()) : null;
+			final String col = simpleColumn(a.columnName(0));
 			if (a.updateRhs() != null) {
 				rmw.add(parseRmw(col, a.updateRhs()));
-			} else {
+			} else if (a.value() != null) {
 				lits.put(col, SqlParseSupport.literal(a.value()));
+			} else {
+				lits.put(col, new ColumnRef(simpleColumn(a.columnName(1))));
 			}
 		}
 		final String sourceTable = ctx.sourceTable == null ? null : ctx.sourceTable.getText();
@@ -1348,6 +1423,20 @@ public final class SqlStatementParser {
 		}
 		return null;
 	}
+	
+	/** Literal / column-copy / CASE SET (no RMW) into {@code sets}. */
+	private static void putLiteralAssign(Map<String, Object> sets, UpdateAssignContext a, String context) {
+		final String col = simpleColumn(a.columnName(0));
+		if (a.updateRhs() != null) {
+			throw new IllegalArgumentException(context + " supports value SET only in v1");
+		}
+		if (a.value() != null) {
+			sets.put(col, SqlParseSupport.literal(a.value()));
+		} else {
+			sets.put(col, new ColumnRef(simpleColumn(a.columnName(1))));
+		}
+	}
+
 	private static UpdatePlan.FieldAssign parseRmw(String col, UpdateRhsContext rhs) {
 		if (rhs.CONCAT() != null) {
 			return new UpdatePlan.FieldAssign(col, ModifyPayload.KIND_STRING_CONCAT, SqlParseSupport.stringLit(rhs.value(0)));
@@ -1359,8 +1448,11 @@ public final class SqlStatementParser {
 			}
 			return new UpdatePlan.FieldAssign(col, ModifyPayload.KIND_STRING_CONCAT, arg.toString());
 		}
-		if (rhs.value() != null && !rhs.value().isEmpty()) {
-			return new UpdatePlan.FieldAssign(col, ModifyPayload.KIND_NUMERIC_ADD, rhs.value(0).getText());
+		if (rhs.numericColPlus() != null) {
+			return new UpdatePlan.FieldAssign(
+					col,
+					ModifyPayload.KIND_NUMERIC_ADD,
+					rhs.numericColPlus().value().getText());
 		}
 		throw new IllegalArgumentException("Bad UPDATE RHS for " + col);
 	}

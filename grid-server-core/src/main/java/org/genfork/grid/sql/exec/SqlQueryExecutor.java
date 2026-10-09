@@ -18,7 +18,9 @@ package org.genfork.grid.sql.exec;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.FunctionKind;
 import org.genfork.grid.catalog.SqlType;
+import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableCatalog.FunctionDef;
+import org.genfork.grid.catalog.TableCatalog.ViewDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.query.distributed.DistributedKeyFanOut;
@@ -32,6 +34,7 @@ import org.genfork.grid.query.util.QueryChunkMerge;
 import org.genfork.grid.query.util.SetOpKind;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.WireFieldBytes;
+import org.genfork.grid.sql.SqlIdentParseUtil;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.sql.ast.SelectAst.*;
@@ -149,7 +152,7 @@ public final class SqlQueryExecutor {
 
 	private SqlResult selectResolved(SqlSession session, SelectSql s) {
 		if (s.isExprOnly()) {
-			return selectExprOnly(s);
+			return selectExprOnly(session, s);
 		}
 		if (s.forUpdate() && (s.aggregate() || s.hasWindow()
 				|| s.hasFromFunction() || SqlProjectionOps.hasFunctionProjection(s))) {
@@ -161,9 +164,18 @@ public final class SqlQueryExecutor {
 		if (s.hasFromFunction()) {
 			return selectFromTableUdf(session, s);
 		}
+		// Plain VIEW residual (JOIN/WINDOW body + outer WHERE) — evaluate body then filter.
+		if (!s.hasJoins() && s.table() != null && !s.table().isBlank()
+				&& !SqlInformationSchemaExecutor.matches(s.table())) {
+			final String resolved = tables.resolveTable(session, s.table());
+			final ViewDef view = tables.catalog().getView(resolved);
+			if (view != null && !view.materialized()) {
+				return SqlNamedSourceEvaluateUtil.selectFromPlainView(view, s);
+			}
+		}
 		if (SqlInformationSchemaExecutor.matches(s.table())) {
 			final SqlResult raw = SqlInformationSchemaExecutor.select(tables.catalog(), s);
-			List<Object[]> rows = applyWhere(s, raw.columns(), new ArrayList<>(raw.rows()));
+			List<Object[]> rows = SqlResultResidualUtil.applyWhere(s, raw.columns(), new ArrayList<>(raw.rows()), subqueryFiltersTls.get());
 			if (s.aggregate()) {
 				return selectInformationSchemaAggregate(s, rows);
 			}
@@ -313,16 +325,59 @@ public final class SqlQueryExecutor {
 	}
 
 	/**
-	 * Bare {@code SELECT fn(...)} — one synthetic row, no table scan.
+	 * Bare {@code SELECT fn(...)} / {@code SELECT EXISTS(...)} — one synthetic row, no table scan.
 	 */
-	private SqlResult selectExprOnly(SelectSql s) {
+	private SqlResult selectExprOnly(SqlSession session, SelectSql s) {
 		final List<SelectItem> items = s.selectItems();
 		if (items == null || items.isEmpty()) {
 			throw new IllegalArgumentException("expression SELECT requires select items");
 		}
+		if (SelectProjectionAssembler.hasExistsSelectItem(items)) {
+			return selectExprExists(session, items);
+		}
 		final List<SqlResult.ColumnMeta> metas = SelectProjectionAssembler.metasExprOnly(items);
 		final Object[] row = SelectProjectionAssembler.assembleExprOnly(items);
 		return SqlResult.resultSet(metas, List.<Object[]>of(row));
+	}
+
+	private SqlResult selectExprExists(SqlSession session, List<SelectItem> items) {
+		final List<SqlResult.ColumnMeta> metas = SelectProjectionAssembler.metasExprWithExists(items);
+		final Object[] row = new Object[items.size()];
+		for (int i = 0; i < items.size(); i++) {
+			final SelectItem item = items.get(i);
+			if (item instanceof ExistsSelectItem exists) {
+				final boolean found = probeExists(session, exists.subquery());
+				row[i] = exists.negated() ? !found : found;
+			} else if (item instanceof FunctionSelectItem) {
+				row[i] = SelectProjectionAssembler.assembleExprOnly(List.of(item))[0];
+			} else {
+				throw new IllegalArgumentException(
+						"expression SELECT without FROM supports UDF/EXISTS only, got: " + item);
+			}
+		}
+		return SqlResult.resultSet(metas, List.<Object[]>of(row));
+	}
+
+	/**
+	 * EXISTS early-stop via index/PK/TX overlay on the user subquery SQL (no synthetic SELECT).
+	 */
+	private boolean probeExists(SqlSession session, SelectSql subquery) {
+		if (subquery == null || subquery.table() == null || subquery.table().isBlank()) {
+			throw new IllegalArgumentException("EXISTS subquery requires a FROM table");
+		}
+		if (subquery.hasFromFunction()) {
+			throw new IllegalArgumentException("EXISTS subquery does not support FROM function in v1");
+		}
+		final String table = tables.resolveTable(session, subquery.table());
+		final TableStore store = tables.requireStore(table);
+		final FilterCondition residual = SqlResultResidualUtil.selectFilter(subquery.sql(), subqueryFiltersTls.get());
+		return SqlExistsProbeUtil.probe(
+				session,
+				table,
+				store,
+				subquery,
+				residual,
+				tables.distributedPeerKeyExecutors());
 	}
 
 
@@ -371,7 +426,7 @@ public final class SqlQueryExecutor {
 				}
 			}
 		}
-		final FilterCondition filter = selectFilter(s.sql());
+		final FilterCondition filter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 		final List<Object[]> rows = new ArrayList<>(blobs.size());
 		for (byte[] blob : blobs) {
 			if (blob == null || !filter.matches(blob, schema)) {
@@ -428,11 +483,10 @@ public final class SqlQueryExecutor {
 		final List<FilterCondition> out = new ArrayList<>(s.whereSubqueries().size());
 		for (WhereSubquery wq : s.whereSubqueries()) {
 			if (wq.existsProbe()) {
-				final SelectSql probe = SqlSelectSqlRender.withOffsetLimit(wq.subquery(), 0, 1);
-				final SqlResult sub = select(session, probe);
-				out.add(sub.rows().isEmpty()
-						? AlwaysFalseCondition.getInstance()
-						: AlwaysTrueCondition.getInstance());
+				final boolean found = probeExists(session, wq.subquery());
+				out.add(found
+						? AlwaysTrueCondition.getInstance()
+						: AlwaysFalseCondition.getInstance());
 				continue;
 			}
 			final SqlResult sub = select(session, wq.subquery());
@@ -556,7 +610,7 @@ public final class SqlQueryExecutor {
 				}
 			}
 
-			final FilterCondition dirtyFilter = selectFilter(s.sql());
+			final FilterCondition dirtyFilter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 			for (Map.Entry<KeyWrapper, SqlTxBuffer.DirtyEntry> e : tx.entriesForTable(table).entrySet()) {
 				if (seen.contains(e.getKey()) || e.getValue().op() != SqlTxBuffer.Op.UPSERT) {
 					continue;
@@ -645,7 +699,7 @@ public final class SqlQueryExecutor {
 		if (SqlWireAggOps.isCountStarGroupBy(s)) {
 			final String table = tables.resolveTable(session, s.table());
 			final TableStore store = tables.requireStore(table);
-			final FilterCondition filter = selectFilter(s.sql());
+			final FilterCondition filter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 			final List<byte[]> blobs = snapshotBlobs(session, store, table, filter);
 			final List<String> groupCols = s.groupByColumns();
 			final int[] gOrds = new int[groupCols.size()];
@@ -665,7 +719,7 @@ public final class SqlQueryExecutor {
 		if (SqlWireAggOps.isMinMaxNoGroup(s)) {
 			final String table = tables.resolveTable(session, s.table());
 			final TableStore store = tables.requireStore(table);
-			final FilterCondition filter = selectFilter(s.sql());
+			final FilterCondition filter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 			final List<byte[]> blobs = snapshotBlobs(session, store, table, filter);
 			final int colOrd = SqlProjectionOps.ordinalOf(store.schema().columns(), s.sumColumnOrNull());
 			final double v = SqlWireAggOps.minMaxFromBlobs(store.schema(), blobs, colOrd, s.minAgg());
@@ -682,12 +736,12 @@ public final class SqlQueryExecutor {
 			final JoinedWorking joined = materializeJoinWorking(session, s);
 			cols = joined.cols();
 			final List<SqlResult.ColumnMeta> fullMetas = SqlProjectionOps.starMetas(cols);
-			source = applyWhere(s, fullMetas, SqlJoinOps.decodeJoinedRows(joined.rows(), joined.sideSchemas()));
+			source = SqlResultResidualUtil.applyWhere(s, fullMetas, SqlJoinOps.decodeJoinedRows(joined.rows(), joined.sideSchemas()), subqueryFiltersTls.get());
 		} else {
 			final String table = tables.resolveTable(session, s.table());
 			final TableStore store = tables.requireStore(table);
 			cols = store.schema().columns();
-			final FilterCondition filter = selectFilter(s.sql());
+			final FilterCondition filter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 			source = snapshotRows(session, store, table, filter);
 		}
 
@@ -748,12 +802,12 @@ public final class SqlQueryExecutor {
 		if (s.hasJoins()) {
 			final JoinedWorking joined = materializeJoinWorking(session, s);
 			cols = joined.cols();
-			source = applyWhere(s, SqlProjectionOps.starMetas(cols), SqlJoinOps.decodeJoinedRows(joined.rows(), joined.sideSchemas()));
+			source = SqlResultResidualUtil.applyWhere(s, SqlProjectionOps.starMetas(cols), SqlJoinOps.decodeJoinedRows(joined.rows(), joined.sideSchemas()), subqueryFiltersTls.get());
 		} else {
 			final String table = tables.resolveTable(session, s.table());
 			final TableStore store = tables.requireStore(table);
 			cols = store.schema().columns();
-			final FilterCondition filter = selectFilter(s.sql());
+			final FilterCondition filter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 			source = snapshotRows(session, store, table, filter);
 		}
 
@@ -781,7 +835,8 @@ public final class SqlQueryExecutor {
 					win.func(),
 					win.partitionColumns(),
 					win.orderColOrNull(),
-					win.valueColumnOrNull()
+					win.valueColumnOrNull(),
+					win.orderDescending()
 			);
 			final List<Object[]> numbered = WindowOperator.apply(cols, working, spec);
 			final Map<WireFieldBytes, Object> byRow = new HashMap<>(Math.max(HASH_MAP_MIN_CAPACITY, numbered.size() * 2));
@@ -797,7 +852,7 @@ public final class SqlQueryExecutor {
 		final List<Object[]> projected = new ArrayList<>(source.size());
 		if (items.isEmpty() || (items.size() == 1 && items.getFirst() instanceof WindowSelectItem)) {
 			final WindowSelectItem only = windows.getFirst();
-			metas = List.of(SqlResult.ColumnMeta.of(only.label(), SqlType.DOUBLE));
+			metas = List.of(SqlResult.ColumnMeta.of(only.label(), WindowOperator.resultType(only.func())));
 			final Map<WireFieldBytes, Object> byRow = windowByRow.get(only.label());
 			for (Object[] row : source) {
 				projected.add(new Object[]{byRow.get(SqlWireAggOps.wireKeyOfRow(row))});
@@ -867,7 +922,7 @@ public final class SqlQueryExecutor {
 			}
 
 			if (!joined.whereAppliedOnWire()) {
-				projected = applyWhere(s, metas, projected);
+				projected = SqlResultResidualUtil.applyWhere(s, metas, projected, subqueryFiltersTls.get());
 			}
 			projected = SqlProjectionOps.applyDistinct(s, projected);
 			return SqlResult.resultSet(metas, SqlResultSortOps.applyOrderLimit(s, metas, projected));
@@ -902,7 +957,7 @@ public final class SqlQueryExecutor {
 		FilterCondition leftPushFilter = leftOnlyJoinFilter(s, left.schema());
 		boolean whereAppliedOnWire = !(leftPushFilter instanceof AlwaysTrueCondition);
 		final int earlyLimit = SqlSelectOrderOps.earlyLimitOrZero(s);
-		final FilterCondition joinWhereFilter = selectFilter(s.sql());
+		final FilterCondition joinWhereFilter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 
 		for (JoinEdge edge : edges) {
 			final String rightName = domains.resolve(session, edge.table());
@@ -1068,14 +1123,20 @@ public final class SqlQueryExecutor {
 	}
 
 	/**
-	 * Column defs for JOIN MV schema (left + each join side, no data).
+	 * Column defs for JOIN VIEW/MV schema inference (left + each join side, no data).
+	 * <p>
+	 * Uses catalog table schema or plain {@link ViewDef#columns()} — not {@code TableStore}.
 	 */
 	public List<ColumnDef> joinSchemaColumns(SqlSession session, SelectSql s) {
+		final TableCatalog catalog = tables.catalog();
 		final String leftName = domains.resolve(session, s.table());
-		List<ColumnDef> cols = new ArrayList<>(domains.requireStore(leftName).schema().columns());
+		List<ColumnDef> cols = new ArrayList<>(
+				SqlCatalogSourceColumnsUtil.columnsForCatalogKey(catalog, leftName));
 		for (JoinEdge edge : s.joins()) {
 			final String rightName = domains.resolve(session, edge.table());
-			cols = SqlJoinOps.concatColumns(cols, domains.requireStore(rightName).schema().columns());
+			cols = SqlJoinOps.concatColumns(
+					cols,
+					SqlCatalogSourceColumnsUtil.columnsForCatalogKey(catalog, rightName));
 		}
 		return cols;
 	}
@@ -1093,7 +1154,7 @@ public final class SqlQueryExecutor {
 
 
 	private FilterCondition leftOnlyJoinFilter(SelectSql s, TableSchema leftSchema) {
-		final FilterCondition filter = selectFilter(s.sql());
+		final FilterCondition filter = SqlResultResidualUtil.selectFilter(s.sql(), subqueryFiltersTls.get());
 		if (filter instanceof AlwaysTrueCondition) {
 			return filter;
 		}
@@ -1103,32 +1164,6 @@ public final class SqlQueryExecutor {
 		} catch (RuntimeException ignored) {
 			return AlwaysTrueCondition.getInstance();
 		}
-	}
-
-	private List<Object[]> applyWhere(SelectSql s, List<SqlResult.ColumnMeta> metas, List<Object[]> rows) {
-		final FilterCondition filter = selectFilter(s.sql());
-		if (filter instanceof AlwaysTrueCondition) {
-			return rows;
-		}
-
-		final List<Object[]> out = new ArrayList<>(rows.size());
-		for (Object[] row : rows) {
-			if (filter.matchesColumns(name -> SqlProjectionOps.columnValue(metas, row, name))) {
-				out.add(row);
-			}
-		}
-		return out;
-	}
-
-	private FilterCondition selectFilter(String selectSql) {
-		final List<FilterCondition> resolved = subqueryFiltersTls.get();
-		final QueryData qd = QueryParser.parseAndBuildCondition(
-				null, selectSql, Collections.emptyMap(), resolved);
-		if (qd.filter() == null || qd.filter().conditionTree() == null) {
-			return AlwaysTrueCondition.getInstance();
-		}
-
-		return qd.filter().conditionTree();
 	}
 
 
@@ -1180,7 +1215,8 @@ public final class SqlQueryExecutor {
 			} else {
 				final Object[] projected = new Object[projection.size()];
 				for (int i = 0; i < projection.size(); i++) {
-					projected[i] = full[store.schema().requireColumn(projection.get(i)).ordinal()];
+					projected[i] = full[store.schema().requireColumn(
+							SqlIdentParseUtil.physicalProjectionName(projection.get(i))).ordinal()];
 				}
 
 				rows = Collections.singletonList(projected);

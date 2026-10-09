@@ -16,6 +16,7 @@
 package org.genfork.grid.sql;
 
 import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
+import org.genfork.grid.sql.ast.SelectAst.ExistsSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.FuncArg;
 import org.genfork.grid.sql.ast.SelectAst.FunctionFrom;
 import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
@@ -138,7 +139,17 @@ public final class SqlPreparedBinder {
 						s.onConflictOrNull().action(),
 						bindMap(s.onConflictOrNull().updateSets(), binds)
 				);
-		return new InsertSql(s.table(), s.columns(), List.copyOf(rows), conflict, s.returning());
+		final SelectSql selectSource = s.selectSourceOrNull();
+		if (selectSource != null && hasPlaceholder(selectSource.sql())) {
+			throw new UnsupportedOperationException("INSERT SELECT still has placeholders");
+		}
+		return new InsertSql(
+				s.table(),
+				s.columns(),
+				List.copyOf(rows),
+				conflict,
+				s.returning(),
+				selectSource);
 	}
 
 	private static UpdateSql bindUpdate(UpdateSql s, Object[] binds) {
@@ -225,6 +236,12 @@ public final class SqlPreparedBinder {
 		for (SelectItem item : items) {
 			if (item instanceof FunctionSelectItem fn) {
 				out.add(new FunctionSelectItem(fn.label(), fn.functionName(), bindFuncArgs(fn.args(), binds)));
+			} else if (item instanceof ExistsSelectItem exists) {
+				if (hasPlaceholder(exists.subquerySql())
+						|| exists.subquery() != null && hasPlaceholder(exists.subquery().sql())) {
+					throw new UnsupportedOperationException("EXISTS select item still has placeholders");
+				}
+				out.add(exists);
 			} else {
 				out.add(item);
 			}

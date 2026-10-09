@@ -16,7 +16,7 @@ Parsing is strict. There is no error recovery and no "best effort" execution of 
 | Tables | `CREATE TABLE [IF NOT EXISTS]`, `DROP TABLE [IF EXISTS]`, `ALTER TABLE … ADD COLUMN [IF NOT EXISTS]`, `ALTER TABLE … ADD [CONSTRAINT c] CHECK (…)`, `ALTER TABLE … ADD [CONSTRAINT c] PRIMARY KEY (…)`, `ALTER TABLE … ADD [CONSTRAINT c] FOREIGN KEY (…) REFERENCES …`, `ALTER TABLE … DROP COLUMN`, `ALTER TABLE … DROP CONSTRAINT` |
 | Indexes | `CREATE [UNIQUE\|BITMAP] INDEX [IF NOT EXISTS]`, `DROP INDEX [IF EXISTS] name [ON table]` |
 | Schemas | `CREATE SCHEMA [IF NOT EXISTS] [AUTHORIZATION user]`, `DROP SCHEMA [IF EXISTS] name [RESTRICT]`, `SET SCHEMA name` | `AUTHORIZATION` ignored (no owner); `RESTRICT` default; `CASCADE` rejected. Unqualified names → session schema only; cross-schema needs explicit `schema.table`; non-`public` catalog/replication key = `schema.table` |
-| Views | `CREATE VIEW … AS <query>`, `CREATE MATERIALIZED VIEW … AS <query>`, `REFRESH MATERIALIZED VIEW`, `DROP VIEW [IF EXISTS]` |
+| Views | `CREATE VIEW … AS <query>`, `CREATE MATERIALIZED VIEW … AS <query>`, `REFRESH MATERIALIZED VIEW`, `DROP VIEW [IF EXISTS]` | Plain VIEW: inline when safe; else evaluate body then residual `WHERE`/`ORDER`/`LIMIT`. Outer `JOIN`/agg on complex VIEW rejected. MV: table store; window/`COALESCE`/JOIN projection supported; `WITH` body OK |
 | Sequences | `CREATE SEQUENCE [IF NOT EXISTS] s [START WITH n] [INCREMENT BY n] [RECLAIM]`, `DROP SEQUENCE`, `SELECT NEXTVAL('s')`, `SELECT CURRVAL('s')` |
 | Functions | `CREATE FUNCTION f(args) RETURNS type AS CLASS 'fqcn' METHOD 'name'`, `DROP FUNCTION` |
 | Triggers | `CREATE TRIGGER t (BEFORE\|AFTER) (INSERT\|UPDATE\|DELETE) ON tbl FOR EACH (ROW\|STATEMENT) [WHEN 'expr'] AS 'sql'`, `DROP TRIGGER` |
@@ -40,7 +40,7 @@ DDL inside an open transaction is rejected — the catalog does not take part in
 | `ORDER BY` | `col [ASC\|DESC], …` | Columns only, no expressions or ordinals |
 | Paging | `LIMIT n`, `LIMIT offset, count`, `LIMIT n OFFSET m` | — |
 | Row locks | `FOR UPDATE`, `FOR UPDATE SKIP LOCKED` | Writer node only; a read replica rejects it |
-| No `FROM` | `SELECT fn(args)`, `SELECT NEXTVAL('s')` | Only a function or sequence call — `SELECT 1` is not a valid statement |
+| No `FROM` | `SELECT fn(args)`, `SELECT NEXTVAL('s')`, `SELECT EXISTS (SELECT …)`, `SELECT NOT EXISTS (SELECT …)`, literal `SELECT 1` | Function / sequence / scalar EXISTS / literal; JOOQ `SELECT 1 AS one` inside EXISTS accepted |
 
 Window functions: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG(col)`, `LEAD(col)`, and `SUM`/`MIN`/`MAX`/`AVG(col)` with `OVER (…)` or `OVER w`.
 
@@ -58,7 +58,7 @@ Window functions: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG(col)`, `LEAD(co
 
 Two consequences worth knowing before you write a filter:
 
-- **No arithmetic in expressions.** `WHERE price * qty > 100` and `SELECT a + b` are not in the grammar. Compute on the application side, or keep the value in its own column.
+- **No general arithmetic in expressions.** `WHERE price * qty > 100` and `SELECT a + b` are not in the grammar. The only numeric arithmetic form is `col + literal` in SET RMW and in CASE (`WHEN (col + lit) op lit`, `THEN`/`ELSE col + lit`). Compute other expressions on the application side, or keep the value in its own column.
 - **Numeric literals are signed.** A leading minus is part of the grammar (`'-'? INT` / decimal), and binds may supply negative INT/LONG. Wire order for fixed-width INT/LONG index and residual compare is signed (`Integer.compare` / `Long.compare`).
 - **`CAST` applies to a value, not a column.** `CAST('42' AS BIGINT)` is accepted; `CAST(col AS BIGINT)` is not.
 
@@ -68,7 +68,7 @@ Positional `?` parameters are materialized into SQL literals before parsing, so 
 
 | Statement | Accepted | Restriction |
 |-----------|----------|-------------|
-| `INSERT` / `UPSERT` | `VALUES (…), (…)`, optional column list, `ON CONFLICT`, `RETURNING` | `VALUES` tuples only — no `INSERT … SELECT`; omitted columns take column `DEFAULT` when declared |
+| `INSERT` / `UPSERT` | `VALUES (…), (…)`, `INSERT … SELECT …`, optional column list, `ON CONFLICT`, `RETURNING` | Same apply-row / conflict / TX path for VALUES and SELECT; set-op SELECT sources rejected; omitted columns take column `DEFAULT` when declared |
 | `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET col = value, …` | Values may be literals, `EXCLUDED.col`, `COALESCE(…)`, or clock builtins; the optional column list names the primary key or a unique index |
 | `UPDATE` | `SET` assignments, optional `FROM source`, mandatory `WHERE`, optional `RETURNING` | See the assignment table below; missing PK → 0 rows, no empty seed (use `UPSERT` to insert) |
 | `DELETE` | Mandatory `WHERE` | No unconditional delete, no `RETURNING` |
@@ -81,12 +81,15 @@ Positional `?` parameters are materialized into SQL literals before parsing, so 
 
 | Form | Meaning |
 |------|---------|
-| `col = value` | Literal / builtin / `EXCLUDED.col` (ON CONFLICT) |
+| `col = value` | Literal incl. `NULL` / `TRUE` / `FALSE` / `?` / builtin / `EXCLUDED.col` (ON CONFLICT) / row-aware `CASE` (literals win over keyword-as-ident column copy) |
+| `col = other_col` | Copy another column from the same row |
 | `col = col + value` | Numeric read-modify-write |
 | `col = col \|\| value` | String concatenation, repeatable: `col \|\| a \|\| b` |
 | `col = CONCAT(col, value)` | Same concatenation, function form |
 
-Read-modify-write forms are limited to those three. Subtraction, multiplication and division are not in the grammar — express a decrement as a literal `SET` of the recomputed value inside a transaction, where the record lock protects the read-then-write.
+`CASE WHEN … THEN … [ELSE …] END` in SET may use column comparisons in `WHEN`, `(col + lit) op lit` compares, and `THEN`/`ELSE` may be a literal or `col + lit`. General `*`, `/`, `col+col`, and `SELECT a + b` remain unsupported.
+
+Read-modify-write forms are limited to concat / numeric add / column copy / CASE as above. Subtraction, multiplication and division are not in the grammar — express a decrement as a literal `SET` of the recomputed value inside a transaction, where the record lock protects the read-then-write.
 
 A statement that mixes read-modify-write with literal assignments requires primary-key equality in `WHERE`, and is applied as one merge: a single write of the final row bytes, not two sequential updates. `UPDATE … FROM` accepts literal assignments only and requires exactly one column equality as its condition.
 
@@ -103,7 +106,7 @@ A statement that mixes read-modify-write with literal assignments requires prima
 | `ALTER TABLE` | `ADD COLUMN [IF NOT EXISTS]`, `ADD CHECK`, `ADD PRIMARY KEY`, `ADD FOREIGN KEY`, `DROP COLUMN`, `DROP CONSTRAINT` (FK/CHECK) | No type change, no rename; PRIMARY KEY cannot be dropped alone — replace via `ADD PRIMARY KEY` |
 | Privileges | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL` on a schema or a table | `GRANT ROLE r TO user` for membership; no `REVOKE ROLE` |
 
-Identifiers are unquoted words of ASCII letters, digits and underscore, matched case-insensitively; a name may be qualified as `schema.object`. Double-quoted identifiers are not part of the grammar, so a column cannot be named after a keyword. Strings use single quotes with `''` as the escape. Line (`--`) and block (`/* … */`) comments are skipped by the lexer.
+Identifiers are words of ASCII letters, digits and underscore, matched case-insensitively; a name may be qualified as `schema.object`. Optional double quotes (`"key"`) are accepted and stripped to the bare CI name (JOOQ reserved-word escape) — not PostgreSQL case-sensitive identifiers. Keyword names may also appear unquoted via the keyword-as-ident list. Strings use single quotes with `''` as the escape. Line (`--`) and block (`/* … */`) comments are skipped by the lexer.
 
 ## Cutover note (fork-plus-0)
 
@@ -113,7 +116,6 @@ Prefer `UPSERT` / `INSERT … ON CONFLICT … DO UPDATE SET col = EXCLUDED.col` 
 
 | Missing | Alternative |
 |---------|-------------|
-| `INSERT … SELECT` | `SELECT` on the client, then `UPSERT` with binds |
 | Correlated subqueries of arbitrary shape | `IN (subquery)`, `EXISTS (subquery)`, scalar comparison |
 | Arbitrary expressions in projection / `WHERE` / `GROUP BY` / `ORDER BY` | `COALESCE` / clock builtins where listed; otherwise compute in the application |
 | `DECIMAL` / `NUMERIC` | `BIGINT` in minor units — see [types](types.md) |

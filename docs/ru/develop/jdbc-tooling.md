@@ -104,6 +104,18 @@ mvn -pl grid-sql-client -am package -DskipTests
 jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.0.0.1:15433,127.0.0.1:15434
 ```
 
+## DDL и autocommit (DBeaver)
+
+Grid **отклоняет DDL внутри открытой транзакции** (`DDL not allowed inside an open transaction`). Каталог не участвует в откате TX — это контракт сервера, не баг драйвера.
+
+В DBeaver по умолчанию часто `Auto-commit = OFF` (`Connection.setAutoCommit(false)` → драйвер сразу открывает TX). Тогда `DROP TABLE` / `CREATE TABLE` падают с SQLState `25001`.
+
+| Действие | Как |
+|----------|-----|
+| DDL из SQL Editor | Включите **Auto-commit** на соединении (или выполните `COMMIT`, затем DDL) |
+| DML в TX | Auto-commit OFF — нормально |
+| Скрипт Flyway / app | Уже autocommit / вне TX |
+
 ## Что работает
 
 - Дерево схемы: каталог, таблицы, колонки, индексы.
@@ -115,7 +127,7 @@ jdbc:grid://u:p@127.0.0.1:15432/public?readPreference=REPLICA&readEndpoints=127.
 - SQL Editor: разовые `SELECT` и DML в пределах упрощённого диалекта.
 - **Многооператорные скрипты** (через `;`): ANTLR `script` → `BATCH_EXEC` (DBeaver script без Bad SQL).
 - Транзакции, в том числе точки сохранения. Параллельные TX = N JDBC `Connection` с одной фабрики (multiplex), не один TX на сокет.
-- Прокручиваемый `ResultSet` и Data Editor — для одиночной таблицы с первичным ключом (materialize для IDE).
+- Прокручиваемый `ResultSet` и Data Editor — для одиночной таблицы с первичным ключом (materialize для IDE). При **составном PK** UPDATE/DELETE в Data Editor строит WHERE только по **ведущей колонке PK**, не по полному составному ключу.
 - `Statement.cancel()` отменяет незавершённый SyncAwait и отправляет по протоколу кадр `CANCEL`.
 - `Statement.setQueryTimeout` → бюджет SyncAwait; timezone через `setClientInfo("timezone", …)` / unwrap `SyncConnection`.
 - Unwrap: `SyncConnection`, `ServerMeta`, `SyncConnectionFactory`; `pin` / `unpin` на `GridConnection`.

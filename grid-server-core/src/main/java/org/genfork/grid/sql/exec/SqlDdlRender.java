@@ -15,7 +15,11 @@
  */
 package org.genfork.grid.sql.exec;
 
+import org.genfork.grid.catalog.CatalogDdlConstraintRenderUtil;
+import org.genfork.grid.catalog.CatalogDdlJournalUtil;
 import org.genfork.grid.catalog.CatalogPersistUtil;
+import org.genfork.grid.catalog.CheckDef;
+import org.genfork.grid.catalog.FkDef;
 import org.genfork.grid.mem.index.IndexType;
 import org.genfork.grid.sql.ast.DdlAst.AlterTableSql;
 import org.genfork.grid.sql.ast.DdlAst.ColumnSpec;
@@ -28,14 +32,14 @@ import org.genfork.grid.sql.ast.DdlAst.DropIndexSql;
 import org.genfork.grid.sql.ast.DdlAst.DropSchemaSql;
 import org.genfork.grid.sql.ast.DdlAst.DropSequenceSql;
 import org.genfork.grid.sql.ast.DdlAst.DropTableSql;
-import org.genfork.grid.sql.ast.DdlAst.FkSpec;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 
 /**
  * Rebuilds persist/replicate DDL text from ANTLR-typed {@code Stmt} records
- * with a schema-qualified table name (no string/regex rewrite of original SQL).
+ * with schema-qualified table / FK parent catalog keys (no string/regex rewrite of original SQL).
  *
  * @author: GenCloud
  * @date: 2025/11
@@ -45,7 +49,17 @@ public final class SqlDdlRender {
 	private SqlDdlRender() {
 	}
 
-	public static String createTable(CreateTableSql s, String resolvedTable) {
+	/**
+	 * Persist CREATE TABLE; FK parents must be session-resolved {@link FkDef} (catalogKey form).
+	 */
+	public static String createTable(
+			CreateTableSql s,
+			String resolvedTable,
+			List<FkDef> resolvedForeignKeys,
+			List<CheckDef> resolvedChecks
+	) {
+		Objects.requireNonNull(s, "s");
+		Objects.requireNonNull(resolvedTable, "resolvedTable");
 		final StringBuilder sb = new StringBuilder("CREATE TABLE ");
 		if (s.ifNotExists()) {
 			sb.append("IF NOT EXISTS ");
@@ -84,32 +98,16 @@ public final class SqlDdlRender {
 			appendCols(sb, s.tablePk());
 			sb.append(')');
 		}
-		if (s.foreignKeys() != null) {
-			for (FkSpec fk : s.foreignKeys()) {
+		if (resolvedForeignKeys != null) {
+			for (FkDef fk : resolvedForeignKeys) {
 				sb.append(", ");
-				if (fk.nameOrNull() != null && !fk.nameOrNull().isBlank()) {
-					sb.append("CONSTRAINT ").append(fk.nameOrNull()).append(' ');
-				}
-				sb.append("FOREIGN KEY (");
-				appendCols(sb, fk.childColumns());
-				sb.append(") REFERENCES ").append(fk.parentTable()).append(" (");
-				appendCols(sb, fk.parentColumns());
-				sb.append(')');
-				if (fk.onDeleteOrNull() != null) {
-					sb.append(" ON DELETE ").append(fk.onDeleteOrNull().toUpperCase(Locale.ROOT));
-				}
-				if (fk.onUpdateOrNull() != null) {
-					sb.append(" ON UPDATE ").append(fk.onUpdateOrNull().toUpperCase(Locale.ROOT));
-				}
+				CatalogDdlConstraintRenderUtil.appendForeignKeyClause(sb, fk);
 			}
 		}
-		if (s.checks() != null) {
-			for (CheckSpec check : s.checks()) {
+		if (resolvedChecks != null) {
+			for (CheckDef check : resolvedChecks) {
 				sb.append(", ");
-				if (check.nameOrNull() != null && !check.nameOrNull().isBlank()) {
-					sb.append("CONSTRAINT ").append(check.nameOrNull()).append(' ');
-				}
-				sb.append("CHECK (").append(check.expressionSql()).append(')');
+				CatalogDdlConstraintRenderUtil.appendCheckClause(sb, check);
 			}
 		}
 		sb.append(')');
@@ -211,27 +209,19 @@ public final class SqlDdlRender {
 		return sb.toString();
 	}
 
-	public static String alterTable(AlterTableSql s, String resolvedTable) {
+	/**
+	 * Persist ALTER TABLE; when adding FK, pass session-resolved {@code resolvedAddFk}.
+	 */
+	public static String alterTable(AlterTableSql s, String resolvedTable, FkDef resolvedAddFkOrNull) {
+		Objects.requireNonNull(s, "s");
+		Objects.requireNonNull(resolvedTable, "resolvedTable");
 		final StringBuilder sb = new StringBuilder("ALTER TABLE ").append(resolvedTable).append(' ');
 		if (s.dropConstraintName() != null) {
 			sb.append("DROP CONSTRAINT ").append(s.dropConstraintName());
 		} else if (s.addForeignKey() != null) {
-			final FkSpec fk = s.addForeignKey();
+			Objects.requireNonNull(resolvedAddFkOrNull, "resolvedAddFkOrNull");
 			sb.append("ADD ");
-			if (fk.nameOrNull() != null && !fk.nameOrNull().isBlank()) {
-				sb.append("CONSTRAINT ").append(fk.nameOrNull()).append(' ');
-			}
-			sb.append("FOREIGN KEY (");
-			appendCols(sb, fk.childColumns());
-			sb.append(") REFERENCES ").append(fk.parentTable()).append(" (");
-			appendCols(sb, fk.parentColumns());
-			sb.append(')');
-			if (fk.onDeleteOrNull() != null) {
-				sb.append(" ON DELETE ").append(fk.onDeleteOrNull().toUpperCase(Locale.ROOT));
-			}
-			if (fk.onUpdateOrNull() != null) {
-				sb.append(" ON UPDATE ").append(fk.onUpdateOrNull().toUpperCase(Locale.ROOT));
-			}
+			CatalogDdlConstraintRenderUtil.appendForeignKeyClause(sb, resolvedAddFkOrNull);
 		} else if (s.addPrimaryKeyColumns() != null) {
 			sb.append("ADD ");
 			if (s.addConstraintNameOrNull() != null && !s.addConstraintNameOrNull().isBlank()) {
@@ -268,7 +258,7 @@ public final class SqlDdlRender {
 	}
 
 	public static String createView(String resolvedTable, String selectSql) {
-		return "CREATE VIEW " + resolvedTable + " AS " + selectSql;
+		return "CREATE VIEW " + resolvedTable + " AS " + CatalogDdlJournalUtil.flattenNewlines(selectSql);
 	}
 
 	public static String dropView(String resolvedTable, boolean ifExists) {
@@ -281,7 +271,8 @@ public final class SqlDdlRender {
 	}
 
 	public static String createMaterializedView(String resolvedTable, String selectSql) {
-		return "CREATE MATERIALIZED VIEW " + resolvedTable + " AS " + selectSql;
+		return "CREATE MATERIALIZED VIEW " + resolvedTable
+				+ " AS " + CatalogDdlJournalUtil.flattenNewlines(selectSql);
 	}
 
 	public static String refreshMaterializedView(String resolvedTable) {

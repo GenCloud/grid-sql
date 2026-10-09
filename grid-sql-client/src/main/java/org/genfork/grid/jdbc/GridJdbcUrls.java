@@ -30,6 +30,8 @@ public final class GridJdbcUrls {
 	public static final String GRID_SCHEME_PREFIX = "grid://";
 	public static final String JDBC_GRID_PREFIX = JDBC_PREFIX + GRID_SCHEME_PREFIX;
 
+	private static final String ERR_URL_REQUIRED = "url required";
+
 	private GridJdbcUrls() {
 	}
 
@@ -47,7 +49,7 @@ public final class GridJdbcUrls {
 	 */
 	public static String toGridUrl(String url) {
 		if (url == null) {
-			throw new IllegalArgumentException("url required");
+			throw new IllegalArgumentException(ERR_URL_REQUIRED);
 		}
 		final String trimmed = url.trim();
 		if (trimmed.regionMatches(true, 0, JDBC_PREFIX, 0, JDBC_PREFIX.length())) {

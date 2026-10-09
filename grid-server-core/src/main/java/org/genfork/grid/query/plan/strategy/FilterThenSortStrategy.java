@@ -28,14 +28,16 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.function.Function;
 
+import org.genfork.grid.catalog.ColumnDef;
+import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.ArrayDataType;
 import org.genfork.grid.mem.index.ArrayIndexType;
 import org.genfork.grid.mem.index.IndexPointerRef;
@@ -46,8 +48,13 @@ import org.genfork.grid.query.plan.PagingData;
 import org.genfork.grid.query.plan.SortOrderData;
 import org.genfork.grid.query.plan.SortOrderData.OrderDirection;
 import org.genfork.grid.query.storage.TmpFileManager;
+import org.genfork.grid.serial.LogicalFieldCursor;
+import org.genfork.grid.serial.WireFieldCompare;
+import org.genfork.grid.serial.WireSpan;
 
 /**
+ * Filter then ORDER BY: external-order {@link ArrayIndexType} when present, else wire-row compare.
+ *
  * @author: GenCloud
  * @date: 2025/09
  * @since: 1.0
@@ -61,9 +68,21 @@ public class FilterThenSortStrategy implements QueryScanStrategy {
 	private static final int EXTERNAL_SORT_CHUNK_SIZE = 50_000;
 
 	private final Map<String, ArrayIndexType> cachedOrderIndexFields;
+	private final TableSchema schema;
+	private final Function<byte[], byte[]> rowResolver;
 
 	public FilterThenSortStrategy(Map<String, ArrayIndexType> cachedOrderIndexFields) {
+		this(cachedOrderIndexFields, null, null);
+	}
+
+	public FilterThenSortStrategy(
+			Map<String, ArrayIndexType> cachedOrderIndexFields,
+			TableSchema schema,
+			Function<byte[], byte[]> rowResolver
+	) {
 		this.cachedOrderIndexFields = cachedOrderIndexFields;
+		this.schema = schema;
+		this.rowResolver = rowResolver;
 	}
 
 	@Override
@@ -75,8 +94,17 @@ public class FilterThenSortStrategy implements QueryScanStrategy {
 		final long resultSize = filteredPointers == null ? 0L : filteredPointers.size();
 		operationResult.setSize(resultSize);
 
-		final int pageSize = pagingData.limit();
-		final int pageOffset = Math.max(0, pagingData.offset());
+		final int pageSize = pagingData == null ? -1 : pagingData.limit();
+		final int pageOffset = pagingData == null ? 0 : Math.max(0, pagingData.offset());
+		if (pagingData != null && pageSize == 0) {
+			return List.of();
+		}
+
+		// No external-order accelerator: sort by wire field bytes from row blobs (SPI-adjacent).
+		if (!canUseExternalOrderCompare(sortOrderData)) {
+			return wireRowSort(queryPlan, filteredPointers, sortOrderData, pageOffset, pageSize);
+		}
+
 		final int topNeed = pageSize > 0 ? pageOffset + pageSize : -1;
 		if (topNeed > 0 && topNeed <= TOP_K_MAX_NEED && resultSize > topNeed) {
 			return topKSort(queryPlan, filteredPointers, sortOrderData, pagingData, topNeed);
@@ -87,6 +115,133 @@ public class FilterThenSortStrategy implements QueryScanStrategy {
 		}
 
 		return externalSort(queryPlan, filteredPointers, sortOrderData, pagingData);
+	}
+
+	private boolean canUseExternalOrderCompare(SortOrderData[] sortOrderData) {
+		if (sortOrderData == null || sortOrderData.length == 0 || cachedOrderIndexFields == null
+				|| cachedOrderIndexFields.isEmpty()) {
+			return false;
+		}
+		for (SortOrderData data : sortOrderData) {
+			if (data == null || data.sortField() == null
+					|| !cachedOrderIndexFields.containsKey(data.sortField())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Decorate-sort ORDER BY: O(n) blob+cursor once, then O(n log n) span compares (no alloc).
+	 */
+	private List<byte[]> wireRowSort(
+			ExplainQuery.QueryPlan queryPlan,
+			Set<IndexPointerRef> filteredPointers,
+			SortOrderData[] orderData,
+			int pageOffset,
+			int pageSize
+	) {
+		ExplainQuery.QueryPlanNode indexNode = null;
+		if (queryPlan != null) {
+			indexNode = ExplainQuery.startNode(queryPlan, "Wire Row Sort",
+					"decorate ORDER BY for " + Arrays.toString(orderData));
+		}
+		if (filteredPointers == null || filteredPointers.isEmpty()) {
+			if (indexNode != null) {
+				ExplainQuery.endNode(indexNode, 0, 0);
+				queryPlan.completeCurrentNode();
+			}
+			return List.of();
+		}
+
+		final int[] ordinals = resolveSortOrdinals(orderData);
+		final boolean[] descending = resolveSortDescending(orderData);
+		final WireSortRow[] rows = new WireSortRow[filteredPointers.size()];
+		int n = 0;
+		for (IndexPointerRef ptr : filteredPointers) {
+			if (ptr == null || ptr.isFree()) {
+				continue;
+			}
+			rows[n++] = decorateWireSortRow(ptr, ordinals);
+		}
+		final WireSortRow[] toSort = n == rows.length ? rows : Arrays.copyOf(rows, n);
+		Arrays.sort(toSort, new WireSortRowComparator(descending));
+
+		final int limit = pageSize > 0 ? pageSize : Integer.MAX_VALUE;
+		final List<byte[]> result = new ArrayList<>(IndexPointerRef.listCapacity(limit));
+		int skipped = 0;
+		for (WireSortRow row : toSort) {
+			if (skipped < pageOffset) {
+				skipped++;
+				continue;
+			}
+			if (result.size() >= limit) {
+				break;
+			}
+			final byte[] key = row.ptr().resolveKey();
+			if (key != null) {
+				result.add(key);
+			}
+		}
+		if (indexNode != null) {
+			ExplainQuery.endNode(indexNode, n, result.size());
+			queryPlan.completeCurrentNode();
+		}
+		return result;
+	}
+
+	private int[] resolveSortOrdinals(SortOrderData[] orderData) {
+		if (orderData == null || orderData.length == 0) {
+			return new int[0];
+		}
+		final int[] ordinals = new int[orderData.length];
+		for (int i = 0; i < orderData.length; i++) {
+			ordinals[i] = -1;
+			if (orderData[i] == null || orderData[i].sortField() == null || schema == null) {
+				continue;
+			}
+			final ColumnDef col = schema.column(orderData[i].sortField());
+			if (col != null) {
+				ordinals[i] = col.ordinal();
+			}
+		}
+		return ordinals;
+	}
+
+	private static boolean[] resolveSortDescending(SortOrderData[] orderData) {
+		if (orderData == null || orderData.length == 0) {
+			return new boolean[0];
+		}
+		final boolean[] descending = new boolean[orderData.length];
+		for (int i = 0; i < orderData.length; i++) {
+			descending[i] = orderData[i] != null
+					&& orderData[i].direction() == OrderDirection.DESC;
+		}
+		return descending;
+	}
+
+	private WireSortRow decorateWireSortRow(IndexPointerRef ptr, int[] ordinals) {
+		final WireSpan[] keys = new WireSpan[ordinals.length];
+		if (schema == null || rowResolver == null || ordinals.length == 0) {
+			Arrays.fill(keys, WireSpan.nullSpan());
+			return new WireSortRow(ptr, keys);
+		}
+		final byte[] rowKey = ptr.resolveKey();
+		final byte[] blob = rowKey == null ? null : rowResolver.apply(rowKey);
+		if (blob == null) {
+			Arrays.fill(keys, WireSpan.nullSpan());
+			return new WireSortRow(ptr, keys);
+		}
+		final LogicalFieldCursor cursor = LogicalFieldCursor.open(schema, blob);
+		for (int i = 0; i < ordinals.length; i++) {
+			if (ordinals[i] < 0) {
+				keys[i] = WireSpan.nullSpan();
+			} else {
+				final WireSpan span = cursor.indexKeySpan(ordinals[i]);
+				keys[i] = span == null ? WireSpan.nullSpan() : span;
+			}
+		}
+		return new WireSortRow(ptr, keys);
 	}
 
 	/**
@@ -400,6 +555,43 @@ public class FilterThenSortStrategy implements QueryScanStrategy {
 		}
 	}
 
+	/**
+	 * Decorate entry: PK pointer + ORDER BY wire spans rooted in the row blob for sort lifetime.
+	 */
+	private record WireSortRow(IndexPointerRef ptr, WireSpan[] keys) {
+	}
+
+	private static final class WireSortRowComparator implements Comparator<WireSortRow> {
+		private final boolean[] descending;
+
+		WireSortRowComparator(boolean[] descending) {
+			this.descending = descending == null ? new boolean[0] : descending;
+		}
+
+		@Override
+		public int compare(WireSortRow left, WireSortRow right) {
+			if (left == right) {
+				return 0;
+			}
+			if (left == null) {
+				return -1;
+			}
+			if (right == null) {
+				return 1;
+			}
+			final WireSpan[] leftKeys = left.keys();
+			final WireSpan[] rightKeys = right.keys();
+			final int cols = Math.min(leftKeys.length, rightKeys.length);
+			for (int i = 0; i < cols; i++) {
+				final int cmp = WireFieldCompare.compare(leftKeys[i], rightKeys[i]);
+				if (cmp != 0) {
+					return i < descending.length && descending[i] ? -cmp : cmp;
+				}
+			}
+			return Long.compare(left.ptr().getPointer(), right.ptr().getPointer());
+		}
+	}
+
 	private static class CompositeIndexValuesComparator implements Comparator<Long> {
 		private ChainDelayedComparator chainComparator;
 
@@ -410,7 +602,6 @@ public class FilterThenSortStrategy implements QueryScanStrategy {
 						? null
 						: cachedOrderIndexFields.get(data.sortField());
 				if (tuple == null) {
-					// Sort field is not an external-order column — skip FilterThenSort key extract.
 					continue;
 				}
 

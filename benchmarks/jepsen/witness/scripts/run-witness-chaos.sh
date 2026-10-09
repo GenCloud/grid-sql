@@ -194,6 +194,9 @@ if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   exit 2
 fi
 
+# shellcheck source=../../scripts/jepsen-client-version.sh
+source "$JEPSEN_DIR/scripts/jepsen-client-version.sh"
+jepsen_sync_project_clj "$ROOT"
 echo "Installing grid-sql-client..."
 (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
 

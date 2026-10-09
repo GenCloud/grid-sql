@@ -1194,22 +1194,26 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 
 	@Override
 	public boolean supportsResultSetConcurrency(int type, int concurrency) {
-		return type == ResultSet.TYPE_FORWARD_ONLY && concurrency == ResultSet.CONCUR_READ_ONLY;
+		if (type != ResultSet.TYPE_FORWARD_ONLY) {
+			return false;
+		}
+		return concurrency == ResultSet.CONCUR_READ_ONLY
+				|| concurrency == ResultSet.CONCUR_UPDATABLE;
 	}
 
 	@Override
 	public boolean ownUpdatesAreVisible(int type) {
-		return false;
+		return type == ResultSet.TYPE_FORWARD_ONLY;
 	}
 
 	@Override
 	public boolean ownDeletesAreVisible(int type) {
-		return false;
+		return type == ResultSet.TYPE_FORWARD_ONLY;
 	}
 
 	@Override
 	public boolean ownInsertsAreVisible(int type) {
-		return false;
+		return type == ResultSet.TYPE_FORWARD_ONLY;
 	}
 
 	@Override

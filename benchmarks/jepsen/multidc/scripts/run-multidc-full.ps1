@@ -153,6 +153,9 @@ function Ensure-Image {
   } finally { Pop-Location }
 }
 function Ensure-SqlClient {
+  . (Join-Path $JEPSEN_DIR "scripts\jepsen-env.ps1")
+  Initialize-JepsenHostEnv
+  [void](Sync-JepsenProjectClj -RepoRoot $ROOT)
   Write-Host "Installing grid-sql-client..."
   Push-Location $ROOT
   try { mvn -B -pl grid-sql-client -am install "-DskipTests"; if ($LASTEXITCODE -ne 0) { throw "mvn install failed" } } finally { Pop-Location }

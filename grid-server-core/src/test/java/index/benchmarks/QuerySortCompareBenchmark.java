@@ -63,17 +63,22 @@ import java.util.concurrent.TimeUnit;
 public class QuerySortCompareBenchmark extends AbstractLatencyBenchmark {
 
 	private static final String TABLE = "query_row";
+	private static final String TABLE_WIRE = "query_row_wire";
 
 	@Param({"100000"})
 	public int count;
 
 	private SqlEngine engine;
 	private TableStore store;
+	private TableStore storeWire;
 	private Connection h2;
 	private String gridSqlLimit;
 	private String gridSqlOrder;
+	private String gridSqlPkOrder;
+	private String gridSqlWireOrder;
 	private String h2SqlLimit;
 	private String h2SqlOrder;
+	private String h2SqlPkOrder;
 	private int probeBucket;
 
 	@Setup
@@ -81,7 +86,9 @@ public class QuerySortCompareBenchmark extends AbstractLatencyBenchmark {
 		QueryParser.clearPlanCache();
 		engine = SqlBenchHelper.createEngine(4);
 		SqlBenchHelper.ensureIndexedTable(engine, SqlBenchHelper.queryRowSchema(TABLE));
+		SqlBenchHelper.ensureIndexedTable(engine, SqlBenchHelper.queryRowNoExternalOrderSchema(TABLE_WIRE));
 		store = SqlBenchHelper.store(engine, TABLE);
+		storeWire = SqlBenchHelper.store(engine, TABLE_WIRE);
 
 		// H2 JDBC = OSS twin harness only (not product API).
 		// Bypass DriverManager: ignite-core registers IgniteJdbcThinDriver via ServiceLoader;
@@ -108,6 +115,7 @@ public class QuerySortCompareBenchmark extends AbstractLatencyBenchmark {
 			final int score = ThreadLocalRandom.current().nextInt(0, 1_000_000);
 			final String id = String.valueOf(i);
 			SqlBenchHelper.putIndexedRow(engine, TABLE, id, bucket, score);
+			SqlBenchHelper.putIndexedRow(engine, TABLE_WIRE, id, bucket, score);
 			insert.setString(1, id);
 			insert.setInt(2, bucket);
 			insert.setInt(3, score);
@@ -119,17 +127,26 @@ public class QuerySortCompareBenchmark extends AbstractLatencyBenchmark {
 		gridSqlLimit = "SELECT * FROM " + TABLE + " WHERE bucket = " + probeBucket + " LIMIT 0, 100";
 		gridSqlOrder = "SELECT * FROM " + TABLE + " WHERE bucket = " + probeBucket
 				+ " ORDER BY score ASC LIMIT 0, 100";
+		gridSqlPkOrder = "SELECT * FROM " + TABLE + " ORDER BY id ASC LIMIT 0, 100";
+		gridSqlWireOrder = "SELECT * FROM " + TABLE_WIRE + " WHERE bucket = " + probeBucket
+				+ " ORDER BY score ASC LIMIT 0, 100";
 		h2SqlLimit = "SELECT id, bucket, score FROM query_row WHERE bucket = " + probeBucket + " LIMIT 100";
 		h2SqlOrder = "SELECT id, bucket, score FROM query_row WHERE bucket = " + probeBucket
 				+ " ORDER BY score ASC LIMIT 100";
+		h2SqlPkOrder = "SELECT id, bucket, score FROM query_row ORDER BY id ASC LIMIT 100";
 		store.selectKeys(gridSqlLimit);
 		store.selectKeys(gridSqlOrder);
+		store.selectKeys(gridSqlPkOrder);
+		storeWire.selectKeys(gridSqlWireOrder);
 	}
 
 	@TearDown
 	public void tearDown() throws Exception {
 		if (engine != null && engine.catalog().exists(TABLE)) {
 			engine.catalog().dropTable(TABLE);
+		}
+		if (engine != null && engine.catalog().exists(TABLE_WIRE)) {
+			engine.catalog().dropTable(TABLE_WIRE);
 		}
 		if (h2 != null) {
 			try (Statement st = h2.createStatement()) {
@@ -158,6 +175,19 @@ public class QuerySortCompareBenchmark extends AbstractLatencyBenchmark {
 	}
 
 	@Benchmark
+	public void gridPkOrderLimit(Blackhole bh) {
+		final List<byte[]> keys = store.selectKeys(gridSqlPkOrder);
+		bh.consume(keys);
+	}
+
+	/** ORDER BY score without EXTERNAL ORDER — wire decorate-sort path. */
+	@Benchmark
+	public void gridWireOrderLimit(Blackhole bh) {
+		final List<byte[]> keys = storeWire.selectKeys(gridSqlWireOrder);
+		bh.consume(keys);
+	}
+
+	@Benchmark
 	public void h2FilterLimit(Blackhole bh) throws Exception {
 		try (Statement st = h2.createStatement();
 		     ResultSet rs = st.executeQuery(h2SqlLimit)) {
@@ -173,6 +203,18 @@ public class QuerySortCompareBenchmark extends AbstractLatencyBenchmark {
 	public void h2FilterOrderLimit(Blackhole bh) throws Exception {
 		try (Statement st = h2.createStatement();
 		     ResultSet rs = st.executeQuery(h2SqlOrder)) {
+			while (rs.next()) {
+				bh.consume(rs.getString(1));
+				bh.consume(rs.getInt(2));
+				bh.consume(rs.getInt(3));
+			}
+		}
+	}
+
+	@Benchmark
+	public void h2PkOrderLimit(Blackhole bh) throws Exception {
+		try (Statement st = h2.createStatement();
+		     ResultSet rs = st.executeQuery(h2SqlPkOrder)) {
 			while (rs.next()) {
 				bh.consume(rs.getString(1));
 				bh.consume(rs.getInt(2));

@@ -42,6 +42,25 @@ public final class WireFieldCompare {
 		return ARRAYS.compare(left, right);
 	}
 
+	/**
+	 * Zero-copy ordering over wire field spans (same rules as {@link #compare(byte[], byte[])}).
+	 * <p>
+	 * {@link WireSpan#nullSpan()} / null-wire bytes compare via {@link ArraysComparator} range
+	 * (same as owned {@link SqlWireUtil#getNullPtr()}); Java-{@code null} spans match
+	 * {@code ArraysComparator} null-array ordering.
+	 */
+	public static int compare(WireSpan left, WireSpan right) {
+		if (left == null) {
+			return right == null ? 0 : 1;
+		}
+		if (right == null) {
+			return -1;
+		}
+		return ARRAYS.compare(
+				left.blob(), left.offset(), left.length(),
+				right.blob(), right.offset(), right.length());
+	}
+
 	public static boolean equals(byte[] left, byte[] right) {
 		return ArrayVectors.bytesEqual(left, right);
 	}

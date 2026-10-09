@@ -15,7 +15,7 @@ Grid встраивается в Spring Boot двумя разными спос�
 
 ```powershell
 mvn -o -pl grid-sql-server-starter -am package -DskipTests
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=primary
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=primary
 ```
 
 Точка входа — `org.genfork.grid.sql.server.GridSqlServerStarter`. Если Spring не нужен вообще (запуск из IDE, минимальный стенд), есть `org.genfork.grid.sql.SqlServerMain` без контекста Boot.

@@ -17,7 +17,7 @@
 
 ```bash
 mvn -pl grid-sql-server-starter -am package -DskipTests
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=capacity
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=capacity
 ```
 
 Профиль `capacity` слушает SQL на порту **15432**, запись на диск включена, репликация выключена (**открытый AUTH** — пользователей ещё нет).

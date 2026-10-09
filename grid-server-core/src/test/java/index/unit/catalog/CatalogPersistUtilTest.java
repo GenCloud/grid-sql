@@ -57,4 +57,33 @@ public class CatalogPersistUtilTest {
 		final List<String> lines = CatalogDdlJournalUtil.sanitizeLines(List.of(bad, "CREATE SCHEMA IF NOT EXISTS auth_server"));
 		assertEquals("CREATE SCHEMA IF NOT EXISTS auth_server", lines.get(1));
 	}
+
+	@Test
+	void journalCoalescesMultilineCreateViewBody() {
+		final List<String> physical = List.of(
+				"CREATE VIEW shared_game_server.olympiad_rankers_class AS SELECT participant.player_id,",
+				"       participant.server_id,",
+				"       player.character_name AS player_name",
+				"FROM olympiad_participants participant",
+				"JOIN player_data player ON player.id = participant.player_id",
+				"CREATE TABLE shared_game_server.other (id INT PRIMARY KEY)");
+		final List<String> sanitized = CatalogDdlJournalUtil.sanitizeLines(physical);
+		assertEquals(2, sanitized.size());
+		assertEquals(
+				"CREATE VIEW shared_game_server.olympiad_rankers_class AS SELECT participant.player_id,"
+						+ " participant.server_id,"
+						+ " player.character_name AS player_name"
+						+ " FROM olympiad_participants participant"
+						+ " JOIN player_data player ON player.id = participant.player_id",
+				sanitized.get(0));
+		assertEquals("CREATE TABLE shared_game_server.other (id INT PRIMARY KEY)", sanitized.get(1));
+	}
+
+	@Test
+	void flattenNewlinesKeepsTokensSeparated() {
+		assertEquals(
+				"SELECT participant.player_id FROM olympiad_participants",
+				CatalogDdlJournalUtil.flattenNewlines(
+						"SELECT participant.player_id\nFROM olympiad_participants"));
+	}
 }

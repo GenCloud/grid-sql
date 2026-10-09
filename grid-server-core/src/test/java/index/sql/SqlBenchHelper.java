@@ -63,6 +63,21 @@ public final class SqlBenchHelper {
 				.build();
 	}
 
+	/**
+	 * Same columns/indexes as {@link #queryRowSchema} but <em>without</em> EXTERNAL ORDER —
+	 * forces FilterThenSort wire decorate-sort for {@code ORDER BY score}.
+	 */
+	public static TableSchema queryRowNoExternalOrderSchema(String table) {
+		return TableSchema.builder(table)
+				.primaryKey("id", SqlType.VARCHAR)
+				.column("bucket", SqlType.INT)
+				.column("score", SqlType.INT)
+				.index(IndexDef.of("idx_bucket", IndexType.LAX, "bucket"))
+				.index(IndexDef.of("idx_score", IndexType.LAX, "score"))
+				.index(IndexDef.of("idx_bucket_score", IndexType.LAX, "bucket", "score"))
+				.build();
+	}
+
 	/** Hazelcast IMDG twin layout: id + bucket LAX index. */
 	public static TableSchema hzRowSchema(String table) {
 		return TableSchema.builder(table)

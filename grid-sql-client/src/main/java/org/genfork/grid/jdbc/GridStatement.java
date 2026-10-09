@@ -213,7 +213,8 @@ public class GridStatement implements Statement {
 							break;
 						}
 					}
-					edit = new GridTableEditContext(edit.schema(), edit.table(), edit.pkColumn(), pkIdx);
+					edit = new GridTableEditContext(
+							edit.schema(), edit.table(), edit.pkColumn(), pkIdx, edit.pkColumns());
 					hints = GridJdbcCatalogSupport.loadColumnHints(connection, edit.schema(), edit.table());
 				}
 			}
@@ -367,12 +368,16 @@ public class GridStatement implements Statement {
 
 	@Override
 	public int getResultSetConcurrency() {
+		final GridResultSet rs = currentResult;
+		if (rs != null && !rs.isClosed()) {
+			return rs.getConcurrency();
+		}
 		return ResultSet.CONCUR_READ_ONLY;
 	}
 
 	@Override
 	public int getResultSetType() {
-		return ResultSet.TYPE_SCROLL_INSENSITIVE;
+		return ResultSet.TYPE_FORWARD_ONLY;
 	}
 
 	@Override

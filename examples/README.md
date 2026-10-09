@@ -10,7 +10,7 @@ A live SQL port:
 
 ```powershell
 mvn -pl grid-sql-server-starter -am package -DskipTests
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=capacity
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=capacity
 # → grid://grid:grid@127.0.0.1:15432/public
 # → jdbc:grid://grid:grid@127.0.0.1:15432/public
 ```

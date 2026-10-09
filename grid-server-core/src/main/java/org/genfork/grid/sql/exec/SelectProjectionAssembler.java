@@ -23,7 +23,9 @@ import org.genfork.grid.sql.SqlBuiltinNames;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.ExistsSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.LiteralSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.SelectItem;
 import org.genfork.grid.sql.ast.SelectAst.WindowSelectItem;
 import org.genfork.grid.catalog.TableCatalog.FunctionDef;
@@ -151,11 +153,25 @@ public final class SelectProjectionAssembler {
 					final FunctionDef def = SqlUdfLookup.require(fn.functionName());
 					metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));
 				}
+			} else if (item instanceof WindowSelectItem win) {
+				metas.add(SqlResult.ColumnMeta.of(item.label(), WindowOperator.resultType(win.func())));
 			} else {
 				metas.add(SqlResult.ColumnMeta.of(item.label(), SqlType.DOUBLE));
 			}
 		}
 		return metas;
+	}
+
+	public static boolean hasExistsSelectItem(List<SelectItem> items) {
+		if (items == null || items.isEmpty()) {
+			return false;
+		}
+		for (SelectItem item : items) {
+			if (item instanceof ExistsSelectItem) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static List<SqlResult.ColumnMeta> metasExprOnly(List<SelectItem> items) {
@@ -164,9 +180,13 @@ public final class SelectProjectionAssembler {
 		}
 		final List<SqlResult.ColumnMeta> metas = new ArrayList<>(items.size());
 		for (SelectItem item : items) {
+			if (item instanceof LiteralSelectItem) {
+				metas.add(SqlResult.ColumnMeta.of(item.label(), SqlType.BIGINT));
+				continue;
+			}
 			if (!(item instanceof FunctionSelectItem fn)) {
 				throw new IllegalArgumentException(
-						"expression SELECT without FROM supports UDF calls only, got: " + item);
+						"expression SELECT without FROM supports UDF/literal only, got: " + item);
 			}
 			if (SqlBuiltinNames.isBuiltin(fn.functionName())) {
 				metas.add(SqlResult.ColumnMeta.of(
@@ -174,6 +194,31 @@ public final class SelectProjectionAssembler {
 			} else {
 				final FunctionDef def = SqlUdfLookup.require(fn.functionName());
 				metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));
+			}
+		}
+		return metas;
+	}
+
+	/** Metas for expression SELECT that may mix UDF and scalar EXISTS. */
+	public static List<SqlResult.ColumnMeta> metasExprWithExists(List<SelectItem> items) {
+		if (items == null || items.isEmpty()) {
+			throw new IllegalArgumentException("expression SELECT requires select items");
+		}
+		final List<SqlResult.ColumnMeta> metas = new ArrayList<>(items.size());
+		for (SelectItem item : items) {
+			if (item instanceof ExistsSelectItem) {
+				metas.add(SqlResult.ColumnMeta.of(item.label(), SqlType.BOOLEAN));
+			} else if (item instanceof FunctionSelectItem fn) {
+				if (SqlBuiltinNames.isBuiltin(fn.functionName())) {
+					metas.add(SqlResult.ColumnMeta.of(
+							item.label(), SqlBuiltinEvalUtil.builtinReturnType(fn.functionName())));
+				} else {
+					final FunctionDef def = SqlUdfLookup.require(fn.functionName());
+					metas.add(SqlResult.ColumnMeta.of(item.label(), def.returnType()));
+				}
+			} else {
+				throw new IllegalArgumentException(
+						"expression SELECT without FROM supports UDF/EXISTS only, got: " + item);
 			}
 		}
 		return metas;
@@ -189,9 +234,13 @@ public final class SelectProjectionAssembler {
 		final Object[] out = new Object[items.size()];
 		for (int i = 0; i < items.size(); i++) {
 			final SelectItem item = items.get(i);
+			if (item instanceof LiteralSelectItem lit) {
+				out[i] = lit.value();
+				continue;
+			}
 			if (!(item instanceof FunctionSelectItem fn)) {
 				throw new IllegalArgumentException(
-						"expression SELECT without FROM supports UDF calls only, got: " + item);
+						"expression SELECT without FROM supports UDF/literal only, got: " + item);
 			}
 			out[i] = evalUdf(fn, name -> {
 				throw new IllegalArgumentException(
@@ -215,6 +264,8 @@ public final class SelectProjectionAssembler {
 			final SelectItem item = items.get(i);
 			if (item instanceof ColumnSelectItem col) {
 				out[i] = fullRow[indexOf(columns, col.column())];
+			} else if (item instanceof LiteralSelectItem lit) {
+				out[i] = lit.value();
 			} else if (item instanceof AggregateSelectItem || item instanceof WindowSelectItem) {
 				out[i] = computed == null ? null : computed.get(item.label());
 			} else if (item instanceof FunctionSelectItem fn) {
@@ -261,6 +312,8 @@ public final class SelectProjectionAssembler {
 				} else {
 					out[i] = fullRow[store.schema().requireColumn(col.column()).ordinal()];
 				}
+			} else if (item instanceof LiteralSelectItem lit) {
+				out[i] = lit.value();
 			} else if (item instanceof AggregateSelectItem || item instanceof WindowSelectItem) {
 				out[i] = computed == null ? null : computed.get(item.label());
 			} else if (item instanceof FunctionSelectItem fn) {

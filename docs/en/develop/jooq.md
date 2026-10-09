@@ -34,7 +34,7 @@ TCP caps / idle / `maxTxContexts` live **only** in `SyncConnectionFactory` / `Re
 <dependency>
   <groupId>org.genfork</groupId>
   <artifactId>grid-jooq</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
@@ -42,7 +42,7 @@ jOOQ version comes from Spring Boot **3.5.14** BOM (`jooq.version` **3.19.x**, c
 
 ## API
 
-- `GridSQL` — `SQLDialect.DEFAULT` + Settings (unquoted names, `?` binds). Surface: EQ JOIN (INNER/LEFT/…), ORDER+LIMIT, INSERT/UPSERT/ON CONFLICT, UPDATE/DELETE with WHERE.
+- `GridSQL` — `SQLDialect.DEFAULT` + Settings (unquoted names, `?` binds). Surface: EQ JOIN (INNER/LEFT/…), ORDER+LIMIT, INSERT/UPSERT/`INSERT … SELECT`/ON CONFLICT, UPDATE/DELETE with WHERE, scalar `SELECT 1` / `EXISTS` (incl. JOOQ `SELECT 1 AS one` inside EXISTS). Quoted identifiers from codegen fold case-insensitively.
   Prefer `UPSERT` or a plain `ON CONFLICT` string — jOOQ `onConflict` under DEFAULT may emit `ON DUPLICATE KEY` (rejected by SimplifiedSql).
 - `GridDSL` — render-only, `Connection`, `DataSource` (prefer `GridDataSource`), `ConnectionProvider`, `jdbc:grid://` URL.
 - `GridConnectionProvider` — sync JDBC acquire/release for jOOQ.

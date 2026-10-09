@@ -15,6 +15,7 @@
  */
 package index.benchmarks;
 
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -33,6 +34,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.sql.SqlNamedQueryExpand;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
 
@@ -43,9 +45,11 @@ import index.sql.udf.UpsertItemUdf;
 
 /**
  * JMH for SQL features: WITH/CTE, VIEW, window, aggregates, UNION/INTERSECT/EXCEPT, RECURSIVE, UDF, TVF.
+ * <p>
+ * Includes expand identity / simple inline / complex residual / MV refresh tracks for VIEW defer path.
  *
  * @author: GenCloud
- * @date: 2026/12
+ * @date: 2026/10
  * @since: 1.0
  */
 @BenchmarkMode(Mode.AverageTime)
@@ -63,10 +67,22 @@ public class SqlFeaturesBenchmark extends AbstractLatencyBenchmark {
 	private static final int TREE_NODES = 64;
 	private static final byte[] LOCK_KEY = new byte[]{1};
 	private static final String LOCK_TABLE = "bench_lock";
+	private static final String EXPAND_IDENTITY_SQL =
+			"SELECT id FROM feat WHERE id = 42 LIMIT 1";
+	private static final String SIMPLE_VIEW_BODY =
+			"SELECT id, bucket, score FROM feat WHERE score > 10";
+	private static final String SIMPLE_VIEW_OUTER =
+			"SELECT id FROM feat_v WHERE id < 100";
+	private static final String COMPLEX_VIEW_BODY =
+			"SELECT id, RANK() OVER (ORDER BY score DESC) AS rnk FROM feat";
+	private static final String COMPLEX_VIEW_OUTER =
+			"SELECT id FROM feat_ranked WHERE rnk <= 50";
+	private static final String MV_REFRESH_SQL = "REFRESH MATERIALIZED VIEW feat_mv";
 
 	private SqlEngine engine;
 	private String withSql;
 	private String viewSql;
+	private String complexViewSql;
 	private String minSql;
 	private String havingSql;
 	private String distinctSql;
@@ -80,6 +96,9 @@ public class SqlFeaturesBenchmark extends AbstractLatencyBenchmark {
 	private String udfSql;
 	private String tvfSql;
 	private String mutatingUdfSql;
+	private Map<String, String> emptyViews;
+	private Map<String, String> simpleViewCatalog;
+	private Map<String, String> complexViewCatalog;
 	private AtomicInteger returningIds;
 	private AtomicInteger checkIds;
 	private AtomicInteger mutatingUdfIds;
@@ -99,6 +118,8 @@ public class SqlFeaturesBenchmark extends AbstractLatencyBenchmark {
 			engine.execute("INSERT INTO feat VALUES (" + i + ", " + (i % BUCKET_MOD) + ", " + (i % 100) + ")");
 		}
 		engine.execute("CREATE VIEW feat_v AS SELECT id, bucket, score FROM feat WHERE score > 10");
+		engine.execute(
+				"CREATE VIEW feat_ranked AS SELECT id, RANK() OVER (ORDER BY score DESC) AS rnk FROM feat");
 		engine.execute("CREATE MATERIALIZED VIEW feat_mv AS SELECT id, score FROM feat WHERE score > 50");
 		engine.execute(
 				"CREATE FUNCTION double_v(x INT) RETURNS INT AS CLASS '"
@@ -121,8 +142,13 @@ public class SqlFeaturesBenchmark extends AbstractLatencyBenchmark {
 			engine.execute("INSERT INTO emp VALUES (" + i + ", " + (i / 2) + ")");
 		}
 
+		emptyViews = Map.of();
+		simpleViewCatalog = Map.of("feat_v", SIMPLE_VIEW_BODY);
+		complexViewCatalog = Map.of("feat_ranked", COMPLEX_VIEW_BODY);
+
 		withSql = "WITH c AS (SELECT id, score FROM feat WHERE score > 20) SELECT id FROM c WHERE id < 100";
 		viewSql = "SELECT id FROM feat_v WHERE id < 100";
+		complexViewSql = "SELECT id FROM feat_ranked WHERE rnk <= 50";
 		minSql = "SELECT MIN(score) FROM feat";
 		havingSql = "SELECT COUNT(*) FROM feat GROUP BY bucket HAVING bucket < 4";
 		distinctSql = "SELECT DISTINCT bucket FROM feat";
@@ -143,12 +169,14 @@ public class SqlFeaturesBenchmark extends AbstractLatencyBenchmark {
 
 		engine.execute(withSql);
 		engine.execute(viewSql);
+		engine.execute(complexViewSql);
 		engine.execute(minSql);
 		engine.execute(havingSql);
 		engine.execute(distinctSql);
 		engine.execute(windowSql);
 		engine.execute(namedWindowSql);
 		engine.execute(mvSelectSql);
+		engine.execute(MV_REFRESH_SQL);
 		engine.execute(unionSql);
 		engine.execute(intersectSql);
 		engine.execute(exceptSql);
@@ -172,6 +200,31 @@ public class SqlFeaturesBenchmark extends AbstractLatencyBenchmark {
 	@Benchmark
 	public void selectFromView(Blackhole bh) {
 		bh.consume(engine.execute(viewSql).rows().size());
+	}
+
+	@Benchmark
+	public void expandIdentity(Blackhole bh) {
+		bh.consume(SqlNamedQueryExpand.expand(EXPAND_IDENTITY_SQL, emptyViews));
+	}
+
+	@Benchmark
+	public void expandSimpleViewInline(Blackhole bh) {
+		bh.consume(SqlNamedQueryExpand.expand(SIMPLE_VIEW_OUTER, simpleViewCatalog));
+	}
+
+	@Benchmark
+	public void expandComplexViewDefer(Blackhole bh) {
+		bh.consume(SqlNamedQueryExpand.expand(COMPLEX_VIEW_OUTER, complexViewCatalog));
+	}
+
+	@Benchmark
+	public void complexViewResidual(Blackhole bh) {
+		bh.consume(engine.execute(complexViewSql).rows().size());
+	}
+
+	@Benchmark
+	public void materializedViewRefresh(Blackhole bh) {
+		bh.consume(engine.execute(MV_REFRESH_SQL).rowsAffected());
 	}
 
 	@Benchmark

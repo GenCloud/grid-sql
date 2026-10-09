@@ -4,7 +4,7 @@ DDL changes the catalog: `TableCatalog` and `TableSchema`. Parsing is ANTLR (`Si
 
 One rule to remember up front: **DDL inside an open transaction is rejected**. `COMMIT` or `ROLLBACK` first, then change the schema. The catalog does not take part in rollback, so it never enters the transactional buffer.
 
-Object names are unquoted words — ASCII letters, digits and underscore, matched case-insensitively, optionally qualified as `schema.object`. There are no double-quoted identifiers, so a column cannot carry a keyword as its name. The full accepted syntax is in the [support matrix](support-matrix.md).
+Object names are ASCII letters, digits and underscore, matched case-insensitively, optionally qualified as `schema.object`. Optional double quotes (`"key"`) are stripped to the bare CI name (JOOQ reserved-word escape, not PostgreSQL case-sensitive ids). Keyword column names may also be unquoted. The full accepted syntax is in the [support matrix](support-matrix.md).
 
 ## CREATE TABLE
 
@@ -150,7 +150,7 @@ For existing rows an added column reads as `NULL` — no data rewrite is needed.
 DROP TABLE IF EXISTS orders;
 ```
 
-Removes the schema, map/journal data and the table's secondary indexes. Does **not** delete sealed files (`.gmap` / `.sbpt` / `.sbm`) on the hot path: explicit retire (`purgeDomainArtifacts`) is separate, outside load DROP.
+Removes the schema, map/journal data and the table's secondary indexes. Also clears hydrate memo and KEYS index-ckpt sidecars (`onTableDropped`) so recreate does not soft-match stale seq. Does **not** delete sealed files (`.gmap` / `.sbpt` / `.sbm`) on DROP — explicit retire (`ReplicationCoordinator.purgeDomainArtifacts`) is separate; sealed purge on every DROP crushed READ_ONLY capacity stamps.
 
 ## Schemas
 
@@ -197,7 +197,7 @@ REFRESH MATERIALIZED VIEW daily_totals;
 DROP VIEW IF EXISTS active_orders;
 ```
 
-A plain view is inlined into the query. A materialized view stores the result and is updated by `REFRESH`; there is no automatic refresh. View identity is schema + local object name (same QName rules as tables); `information_schema.tables` exposes those fields without reverse-parsing a dotted string.
+A plain view is **inlined** into the query when the body is a simple single-table SELECT (predicates merge). When the body already has `JOIN` / `GROUP BY` / window or aggregate projection and the outer query adds `WHERE` / `ORDER BY` / `LIMIT`, the engine **evaluates the view body then applies residual** clauses (post-window filter — no predicate pushdown past `RANK()`). Outer `JOIN` / `GROUP BY` / aggregate on such a complex view remains unsupported. A materialized view stores the result as a table and is updated by `REFRESH`; there is no automatic refresh. View identity is schema + local object name (same QName rules as tables); `information_schema.tables` exposes those fields without reverse-parsing a dotted string.
 
 ## Functions and triggers
 
@@ -252,7 +252,7 @@ The privilege set is `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`. The target i
 | `DROP SCHEMA … CASCADE` | Cascading schema drop is not supported; omit CASCADE or use RESTRICT |
 | Partial indexes, expression indexes | Only columns are indexed |
 | `ALTER TABLE … DROP CONSTRAINT` for PRIMARY KEY | PK cannot be dropped alone — replace via `ADD PRIMARY KEY`; `DROP CONSTRAINT` removes FK/CHECK |
-| A double-quoted identifier | Names are unquoted words only |
+| Case-sensitive quoted identifiers | Quotes are stripped; names stay case-insensitive |
 
 A parse error or a catalog validation error means the statement did not apply at all. There is no such thing as partially applied DDL.
 

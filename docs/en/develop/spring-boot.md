@@ -15,7 +15,7 @@ Auto-configuration lives in `grid-server-core`: `GridAutoConfiguration` (core an
 
 ```powershell
 mvn -o -pl grid-sql-server-starter -am package -DskipTests
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=primary
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=primary
 ```
 
 The entry point is `org.genfork.grid.sql.server.GridSqlServerStarter`. If you do not need Spring at all (running from an IDE, a minimal bench), there is `org.genfork.grid.sql.SqlServerMain` without a Boot context.

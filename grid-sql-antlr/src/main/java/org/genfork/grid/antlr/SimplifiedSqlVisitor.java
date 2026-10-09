@@ -413,6 +413,12 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitUpdateRhs(SimplifiedSqlParser.UpdateRhsContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#numericColPlus}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitNumericColPlus(SimplifiedSqlParser.NumericColPlusContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#createTableStmt}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -722,6 +728,13 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitComparisonSubquery(SimplifiedSqlParser.ComparisonSubqueryContext ctx);
 	/**
+	 * Visit a parse tree produced by the {@code NumericPlusComparison}
+	 * labeled alternative in {@link SimplifiedSqlParser#predicate}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitNumericPlusComparison(SimplifiedSqlParser.NumericPlusComparisonContext ctx);
+	/**
 	 * Visit a parse tree produced by the {@code FunctionComparison}
 	 * labeled alternative in {@link SimplifiedSqlParser#predicate}.
 	 * @param ctx the parse tree
@@ -785,6 +798,12 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitIsNotNull(SimplifiedSqlParser.IsNotNullContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#numericPlusAtom}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitNumericPlusAtom(SimplifiedSqlParser.NumericPlusAtomContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#trueFalseExpression}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -838,6 +857,12 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitCaseExpr(SimplifiedSqlParser.CaseExprContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#caseScalar}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitCaseScalar(SimplifiedSqlParser.CaseScalarContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#orderList}.
 	 * @param ctx the parse tree

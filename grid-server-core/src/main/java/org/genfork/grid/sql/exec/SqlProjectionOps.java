@@ -20,6 +20,7 @@ import java.util.List;
 
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.SqlType;
+import org.genfork.grid.sql.SqlIdentParseUtil;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
@@ -27,6 +28,7 @@ import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.FuncArg;
 import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
+import org.genfork.grid.sql.ast.SelectAst.LiteralSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.SelectItem;
 import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.store.TableStore;
@@ -69,7 +71,7 @@ public final class SqlProjectionOps {
 			return false;
 		}
 		for (SelectItem item : s.selectItems()) {
-			if (item instanceof FunctionSelectItem) {
+			if (item instanceof FunctionSelectItem || item instanceof LiteralSelectItem) {
 				return true;
 			}
 		}
@@ -285,7 +287,8 @@ public final class SqlProjectionOps {
 
 		final List<SqlResult.ColumnMeta> metas = new ArrayList<>(projection.size());
 		for (String col : projection) {
-			final ColumnDef cdef = store.schema().requireColumn(col);
+			final ColumnDef cdef = store.schema().requireColumn(
+					SqlIdentParseUtil.physicalProjectionName(col));
 			metas.add(SqlResult.ColumnMeta.ofCatalog(
 					cdef.name(), cdef.type(), cdef.nullable(), table, schema));
 		}

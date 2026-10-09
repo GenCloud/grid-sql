@@ -52,6 +52,7 @@ import org.genfork.grid.sql.ast.DmlAst.MergeSql;
 import org.genfork.grid.sql.ast.AdminAst.PinSql;
 import org.genfork.grid.sql.ast.TxAst.PrepareSql;
 import org.genfork.grid.sql.ast.SelectAst.RecursiveCteSql;
+import org.genfork.grid.sql.ast.SelectAst.WithSelectSql;
 import org.genfork.grid.sql.ast.DdlAst.RefreshMaterializedViewSql;
 import org.genfork.grid.sql.ast.TxAst.ReleaseSavepointSql;
 import org.genfork.grid.sql.ast.AdminAst.RevokeSql;
@@ -130,6 +131,7 @@ public final class SqlStatementTagger {
 			case SelectSql ignored -> SqlStatementTag.SELECT;
 			case SetOpSql ignored -> SqlStatementTag.SELECT;
 			case RecursiveCteSql ignored -> SqlStatementTag.SELECT;
+			case WithSelectSql ignored -> SqlStatementTag.SELECT;
 			case ExplainSql ignored -> SqlStatementTag.EXPLAIN;
 			case PinSql ignored -> SqlStatementTag.PIN;
 			case UnpinSql ignored -> SqlStatementTag.UNPIN;

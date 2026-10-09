@@ -19,7 +19,7 @@ Depend on `grid-sql-client` alone; the engine is not pulled into the application
 <dependency>
   <groupId>org.genfork</groupId>
   <artifactId>grid-sql-client</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 

@@ -58,7 +58,7 @@ if [[ ! -d "$JMETER_HOME" ]]; then
   fi
 fi
 
-JAR="$MODULE/target/grid-sql-jmeter-1.0-SNAPSHOT.jar"
+JAR="$MODULE/target/grid-sql-jmeter-1.1.0.jar"
 DEP_DIR="$MODULE/target/dependency"
 REPORT_DIR="$WORK/${STAMP}-reports"
 mkdir -p "$REPORT_DIR"
@@ -104,7 +104,7 @@ if [[ "$DRY_SMOKE" == "1" ]]; then
   "errorRate": null,
   "jmeterHome": "$JMETER_HOME",
   "jmx": "grid-sql-jmeter/grid-sql-load.jmx",
-  "samplerJar": "grid-sql-jmeter/target/grid-sql-jmeter-1.0-SNAPSHOT.jar",
+  "samplerJar": "grid-sql-jmeter/target/grid-sql-jmeter-1.1.0.jar",
   "classpathEntries": $CP_COUNT,
   "reports": {
     "uiListeners": ["Aggregate Report", "Summary Report", "Graph Results", "Response Time Graph"],

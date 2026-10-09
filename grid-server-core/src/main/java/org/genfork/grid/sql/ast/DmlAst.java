@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.genfork.grid.query.plan.UpdatePlan;
+import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 
 /**
  * INSERT / UPDATE / DELETE / MERGE / ANALYZE AST types.
@@ -32,9 +33,10 @@ public final class DmlAst {
 	}
 
 	/**
-	 * {@code INSERT … [ON CONFLICT …]}.
+	 * {@code INSERT … [ON CONFLICT …]} from {@code VALUES} or {@code SELECT}.
 	 *
-	 * @param onConflictOrNull null = plain INSERT (reject duplicate PK)
+	 * @param onConflictOrNull   null = plain INSERT (reject duplicate PK)
+	 * @param selectSourceOrNull non-null = {@code INSERT … SELECT} (rows must be empty)
 	 *
 	 * @author: GenCloud
 	 * @date: 2025/11
@@ -45,10 +47,25 @@ public final class DmlAst {
 			List<String> columns,
 			List<List<Object>> rows,
 			OnConflict onConflictOrNull,
-			List<String> returning
+			List<String> returning,
+			SelectSql selectSourceOrNull
 	) implements Stmt {
 		public InsertSql(String table, List<String> columns, List<List<Object>> rows) {
-			this(table, columns, rows, null, List.of());
+			this(table, columns, rows, null, List.of(), null);
+		}
+
+		public InsertSql(
+				String table,
+				List<String> columns,
+				List<List<Object>> rows,
+				OnConflict onConflictOrNull,
+				List<String> returning
+		) {
+			this(table, columns, rows, onConflictOrNull, returning, null);
+		}
+
+		public boolean isInsertSelect() {
+			return selectSourceOrNull != null;
 		}
 	}
 

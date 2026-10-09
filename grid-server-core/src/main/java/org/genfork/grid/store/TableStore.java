@@ -58,6 +58,7 @@ import org.genfork.grid.query.plan.UpdatePlan;
 import org.genfork.grid.query.plan.TableRowStats;
 import org.genfork.grid.replication.MutationRecorder;
 import org.genfork.grid.replication.ReplicaAccessGate;
+import org.genfork.grid.sql.SqlIdentParseUtil;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.replication.codec.ModifyPayload;
 import org.genfork.grid.serial.BlobFieldModifier;
@@ -463,6 +464,14 @@ public final class TableStore {
 		return index.isAlwaysTrueNoOrderSelect(selectSql);
 	}
 
+	/**
+	 * {@code true} when SELECT plan uses ascending PK-leaf order for ORDER BY.
+	 */
+	@VisibleForTesting
+	public boolean isUseSameOrderAscendingIndex(String selectSql) {
+		return index.isUseSameOrderAscendingIndex(selectSql);
+	}
+
 	/** {@code true} when PRIMARY KEY is an in-RAM B+ tree (Portal pull eligible). */
 	public boolean isRamPrimaryKeyBptree() {
 		return index.isRamPrimaryKeyBptree();
@@ -763,7 +772,7 @@ public final class TableStore {
 		}
 		final int[] ords = new int[projection.size()];
 		for (int i = 0; i < projection.size(); i++) {
-			ords[i] = schema.requireColumn(projection.get(i)).ordinal();
+			ords[i] = schema.requireColumn(SqlIdentParseUtil.physicalProjectionName(projection.get(i))).ordinal();
 		}
 		return ords;
 	}

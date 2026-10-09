@@ -15,7 +15,7 @@
 
 ```bash
 mvn -pl grid-sql-server-starter -am package -DskipTests
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=capacity
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=capacity
 ```
 
 Профиль `capacity` слушает SQL на порту **15432** с `fsync: true` и выключенной репликацией. Из IDE тот же профиль запускается классом `org.genfork.grid.sql.SqlServerMain`.
@@ -51,8 +51,8 @@ SQL разбирается только средствами ANTLR (`SimplifiedS
 ## Пара узлов в режиме HA
 
 ```bash
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=primary
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar --spring.profiles.active=replica
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=primary
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=replica
 ```
 
 Порты: SQL **15432** / **15433**, репликация **5615** / **5616**. URL с несколькими хостами и закрепление на пишущем узле: [подключение клиентов](connect-clients.md).

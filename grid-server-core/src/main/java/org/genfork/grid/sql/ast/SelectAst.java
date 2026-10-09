@@ -138,8 +138,44 @@ public final class SelectAst {
 	 * @date: 2025/11
 	 * @since: 1.0
 	 */
-	public sealed interface SelectItem permits ColumnSelectItem, AggregateSelectItem, WindowSelectItem, FunctionSelectItem {
+	public sealed interface SelectItem permits
+			ColumnSelectItem,
+			AggregateSelectItem,
+			WindowSelectItem,
+			FunctionSelectItem,
+			ExistsSelectItem,
+			LiteralSelectItem {
 		String label();
+	}
+
+	/**
+	 * Literal projection ({@code SELECT 1 AS one}) — JOOQ EXISTS probe shape.
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/10
+     * @since: 1.1
+	 */
+	public record LiteralSelectItem(String label, Object value) implements SelectItem {
+	}
+
+	/**
+	 * Scalar {@code EXISTS}/{@code NOT EXISTS} in an expression SELECT list (JOOQ {@code fetchExists}).
+	 *
+	 * @param label        output column label ({@code AS} or default {@code exists})
+	 * @param negated      {@code true} for {@code NOT EXISTS}
+	 * @param subquery     nested select plan
+	 * @param subquerySql  nested select text
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/10
+     * @since: 1.1
+	 */
+	public record ExistsSelectItem(
+			String label,
+			boolean negated,
+			SelectSql subquery,
+			String subquerySql
+	) implements SelectItem {
 	}
 
 	/** One UDF argument: column reference or literal. */
@@ -210,8 +246,20 @@ public final class SelectAst {
 			String valueColumnOrNull,
 			/** PARTITION BY columns (empty = none); composite wire key in window ops. */
 			List<String> partitionColumns,
-			String orderColOrNull
+			String orderColOrNull,
+			/** {@code true} when {@code ORDER BY col DESC}. */
+			boolean orderDescending
 	) implements SelectItem {
+		public WindowSelectItem(
+				String label,
+				String func,
+				String valueColumnOrNull,
+				List<String> partitionColumns,
+				String orderColOrNull
+		) {
+			this(label, func, valueColumnOrNull, partitionColumns, orderColOrNull, false);
+		}
+
 		public WindowSelectItem(
 				String label,
 				String func,
@@ -226,7 +274,8 @@ public final class SelectAst {
 					partitionOrNull == null || partitionOrNull.isBlank()
 							? List.of()
 							: List.of(partitionOrNull),
-					orderColOrNull
+					orderColOrNull,
+					false
 			);
 		}
 
@@ -399,5 +448,40 @@ public final class SelectAst {
 			SelectSql outer,
 			String sql
 	) implements Stmt {
+	}
+
+	/**
+	 * Non-recursive {@code WITH cte AS (…) SELECT …} that could not be text-inlined
+	 * (JOIN/WINDOW/agg body + outer residual WHERE).
+	 * <p>
+	 * CTE bodies are defining SELECT text; outer is the residual consumer.
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/10
+	 * @since: 1.1
+	 */
+	public record WithSelectSql(
+			List<CteBinding> ctes,
+			SelectSql outer,
+			String sql
+	) implements Stmt {
+	}
+
+	/**
+	 * One non-recursive CTE binding ({@code name AS (body)}).
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/10
+	 * @since: 1.1
+	 */
+	public record CteBinding(String name, String bodySql) {
+		public CteBinding {
+			if (name == null || name.isBlank()) {
+				throw new IllegalArgumentException("CTE name required");
+			}
+			if (bodySql == null || bodySql.isBlank()) {
+				throw new IllegalArgumentException("CTE body required");
+			}
+		}
 	}
 }

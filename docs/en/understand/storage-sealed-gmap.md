@@ -62,6 +62,8 @@ When the key is not in `GridScalableMap`, the read does not stop and does not st
 
 **An index miss does not become a full scan.** If the sealed index did not find the key, the answer is empty (`sealedPartitionScan = 0`); no sweep over all partitions follows. If you ever observe that metric climbing, treat it as a defect rather than as a tuning problem.
 
+**DELETE vs sealed mmap.** After a committed delete, the working set keeps a **tombstone** (empty `byte[]`) for the key so a later miss does not reload a stale payload from still-mapped `.gmap` generations. Without that marker, LAZY hydrate could resurrect a deleted row from disk until the next seal drops the old node file.
+
 To dump domain contents for diagnostics: `SealedGridMapService.dumpDomain`.
 
 ## How files are mapped into memory

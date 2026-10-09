@@ -16,14 +16,15 @@
 package org.genfork.grid.sql.exec;
 
 import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
 import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.ExistsSelectItem;
 import org.genfork.grid.sql.ast.SelectAst.FuncArg;
 import org.genfork.grid.sql.ast.SelectAst.FunctionFrom;
 import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
-import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
 import org.genfork.grid.sql.ast.SelectAst.JoinEdge;
 import org.genfork.grid.sql.ast.SelectAst.JoinKind;
+import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
 import org.genfork.grid.sql.ast.SelectAst.SelectItem;
 import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.sql.ast.SelectAst.WindowSelectItem;
@@ -227,67 +228,6 @@ public final class SqlSelectSqlRender {
 		);
 	}
 
-	/**
-	 * Copy with forced OFFSET/LIMIT (EXISTS early-stop probe).
-	 */
-	public static SelectSql withOffsetLimit(SelectSql s, int offset, Integer limitOrNull) {
-		final SelectSql copy = new SelectSql(
-				s.sql(),
-				s.table(),
-				s.projection(),
-				s.selectItems(),
-				s.pkColumnOrNull(),
-				s.pkValueOrNull(),
-				s.joins(),
-				s.aggregate(),
-				s.countStar(),
-				s.sumColumnOrNull(),
-				s.avg(),
-				s.groupByColumns(),
-				offset,
-				limitOrNull,
-				s.distinct(),
-				s.havingOrNull(),
-				s.minAgg(),
-				s.maxAgg(),
-				s.windowFuncOrNull(),
-				s.windowPartitionColumns(),
-				s.windowOrderColOrNull(),
-				s.whereSubqueries(),
-				s.fromFunctionOrNull(),
-				s.forUpdate(),
-				s.skipLocked()
-		);
-		return new SelectSql(
-				render(copy),
-				copy.table(),
-				copy.projection(),
-				copy.selectItems(),
-				copy.pkColumnOrNull(),
-				copy.pkValueOrNull(),
-				copy.joins(),
-				copy.aggregate(),
-				copy.countStar(),
-				copy.sumColumnOrNull(),
-				copy.avg(),
-				copy.groupByColumns(),
-				copy.offset(),
-				copy.limitOrNull(),
-				copy.distinct(),
-				copy.havingOrNull(),
-				copy.minAgg(),
-				copy.maxAgg(),
-				copy.windowFuncOrNull(),
-				copy.windowPartitionColumns(),
-				copy.windowOrderColOrNull(),
-				copy.whereSubqueries(),
-				copy.fromFunctionOrNull(),
-				copy.forUpdate(),
-				copy.skipLocked()
-		);
-	}
-
-	
 	private static void appendFrom(StringBuilder sb, SelectSql s) {
 		if (s.fromFunctionOrNull() != null) {
 			final FunctionFrom from = s.fromFunctionOrNull();
@@ -360,7 +300,7 @@ public final class SqlSelectSqlRender {
 			return col.column();
 		}
 		if (item instanceof AggregateSelectItem || item instanceof WindowSelectItem
-				|| item instanceof FunctionSelectItem) {
+				|| item instanceof FunctionSelectItem || item instanceof ExistsSelectItem) {
 			return item.label();
 		}
 		return item.label();

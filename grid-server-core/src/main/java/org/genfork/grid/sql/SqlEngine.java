@@ -78,6 +78,8 @@ import org.genfork.grid.sql.ast.AdminAst.PinSql;
 import org.genfork.grid.sql.ast.TxAst.PrepareSql;
 import org.genfork.grid.sql.ast.TxAst.ReleaseSavepointSql;
 import org.genfork.grid.sql.ast.SelectAst.RecursiveCteSql;
+import org.genfork.grid.sql.ast.SelectAst.WithSelectSql;
+import org.genfork.grid.sql.exec.SqlNamedSourceEvaluateUtil;
 import org.genfork.grid.sql.ast.DdlAst.RefreshMaterializedViewSql;
 import org.genfork.grid.sql.ast.TxAst.RollbackSql;
 import org.genfork.grid.sql.ast.TxAst.RollbackToSavepointSql;
@@ -425,6 +427,9 @@ public final class SqlEngine {
 			}
 		} else if (stmt instanceof InsertSql value) {
 			ensureTablePrivilege(session, value.table(), SqlPrivilege.INSERT);
+			if (value.selectSourceOrNull() != null) {
+				ensurePrivilege(session, value.selectSourceOrNull());
+			}
 		} else if (stmt instanceof UpdateSql value) {
 			ensureTablePrivilege(session, value.table(), SqlPrivilege.UPDATE);
 			if (value.sourceTableOrNull() != null) {
@@ -651,6 +656,7 @@ public final class SqlEngine {
 				}
 				yield query.select(session, s);
 			}
+			case WithSelectSql s -> SqlNamedSourceEvaluateUtil.selectWith(s);
 			case SetOpSql s -> query.selectSetOp(session, s);
 			case RecursiveCteSql s -> RecursiveCteExecutor.execute(session, query, tables, s, recursiveCteMaxDepth);
 			case ExplainSql s -> {

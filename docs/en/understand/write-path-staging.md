@@ -33,6 +33,8 @@ INSERT / UPDATE / DELETE
 
 **Contract two: the map before the index queue.** A reader that resolves a key through an index and then fetches the row relies on the row already being there. Do not reorder that without a dedicated task.
 
+**DELETE:** the journal records a `DELETE` for the key; the map installs a tombstone so sealed mmap cannot resurrect the row on a later miss — see [sealed GridMap](storage-sealed-gmap.md).
+
 ## What the write queue does
 
 Queue depth is one of the few write-path numbers an operator can act on:

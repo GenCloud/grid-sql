@@ -26,6 +26,7 @@ public sealed interface Stmt permits
 		SelectAst.SelectSql,
 		SelectAst.SetOpSql,
 		SelectAst.RecursiveCteSql,
+		SelectAst.WithSelectSql,
 		SelectAst.ExplainSql,
 		DmlAst.InsertSql,
 		DmlAst.MergeSql,

@@ -55,7 +55,7 @@ pwsh ./scripts/run-perf-gate.ps1
 
 ```bash
 mvn -pl grid-sql-server-starter -am package
-java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.0-SNAPSHOT.jar
+java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar
 
 # узлы для Jepsen
 mvn -pl grid-sql-jepsen-starter -am package
@@ -66,7 +66,6 @@ mvn -pl grid-sql-jepsen-starter -am package
 ## Рядом
 
 - [Обзор архитектуры](../understand/architecture-overview.md)
-- [Журнал дефектов](bug-journal.md)
 - [Ёмкость и пороги](../performance/capacity-slo.md)
 - [Чтение с реплик](../configure-and-operate/operations/replica-reads.md) и [смена пишущего узла](../configure-and-operate/operations/ha-promote.md)
 

@@ -95,6 +95,8 @@ public final class SqlInformationSchemaExecutor {
 	public static final String PK_NAME_PREFIX = "pk_";
 	public static final String GRANTEE_TYPE_USER = "USER";
 	public static final String GRANTEE_TYPE_ROLE = "ROLE";
+	/** JDBC / jOOQ tooling name for {@link SqlType#BYTES} (enum name {@code BYTES} is not a SQL token). */
+	private static final String DATA_TYPE_BYTEA = "BYTEA";
 
 	private static final String MSG_UNKNOWN_VIEW = "Unknown information_schema view: ";
 
@@ -248,21 +250,50 @@ public final class SqlInformationSchemaExecutor {
 	private static List<Object[]> columnsRows(TableCatalog catalog) {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
-			final String[] parts = new String[]{schema.schemaName(), schema.tableName()};
-			for (ColumnDef col : schema.columns()) {
-				rows.add(new Object[]{
-						parts[0],
-						parts[1],
-						col.name(),
-						Integer.valueOf(col.ordinal() + 1),
-						null,
-						col.nullable() ? YES : NO,
-						col.type().name(),
-						col.identity() ? YES : NO
-				});
+			appendColumnRows(rows, schema.schemaName(), schema.tableName(), schema.columns());
+		}
+		// Plain VIEW projection (MV columns already come from backing TableSchema above).
+		for (String viewName : catalog.viewNames()) {
+			final ViewDef view = catalog.getView(viewName);
+			if (view == null || view.materialized() || view.columns().isEmpty()) {
+				continue;
 			}
+			appendColumnRows(rows, view.schemaName(), view.objectName(), view.columns());
 		}
 		return rows;
+	}
+
+	private static void appendColumnRows(
+			List<Object[]> rows,
+			String schemaName,
+			String tableName,
+			List<ColumnDef> columns
+	) {
+		for (ColumnDef col : columns) {
+			rows.add(new Object[]{
+					schemaName,
+					tableName,
+					col.name(),
+					Integer.valueOf(col.ordinal() + 1),
+					null,
+					col.nullable() ? YES : NO,
+					informationSchemaDataType(col.type()),
+					col.identity() ? YES : NO
+			});
+		}
+	}
+
+	/**
+	 * SQL type token exposed to JDBC {@code information_schema.columns.data_type}.
+	 * <p>
+	 * Must round-trip through {@code SqlType#fromToken} / Grid JDBC mapping so jOOQ
+	 * codegen sees {@code Types.VARBINARY} for binary columns (not {@code Types.OTHER}).
+	 */
+	private static String informationSchemaDataType(SqlType type) {
+		if (type == SqlType.BYTES) {
+			return DATA_TYPE_BYTEA;
+		}
+		return type.name();
 	}
 
 	private static List<Object[]> statisticsRows(TableCatalog catalog) {
@@ -293,16 +324,18 @@ public final class SqlInformationSchemaExecutor {
 		final List<Object[]> rows = new ArrayList<>();
 		for (TableSchema schema : catalog.schemas()) {
 			final String[] parts = new String[]{schema.schemaName(), schema.tableName()};
-			final ColumnDef pk = schema.pkColumn();
 			final String cname = PK_NAME_PREFIX + parts[1];
-			rows.add(new Object[]{
-					parts[0],
-					cname,
-					parts[0],
-					parts[1],
-					pk.name(),
-					Integer.valueOf(1)
-			});
+			int pkOrd = 1;
+			for (ColumnDef pkCol : schema.pkColumns()) {
+				rows.add(new Object[]{
+						parts[0],
+						cname,
+						parts[0],
+						parts[1],
+						pkCol.name(),
+						Integer.valueOf(pkOrd++)
+				});
+			}
 			for (FkDef fk : schema.foreignKeys()) {
 				int ord = 1;
 				for (String col : fk.childColumns()) {

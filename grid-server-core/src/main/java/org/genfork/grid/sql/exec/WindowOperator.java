@@ -16,6 +16,7 @@
 package org.genfork.grid.sql.exec;
 
 import org.genfork.grid.catalog.ColumnDef;
+import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.serial.WireFieldBytes;
 import org.genfork.grid.store.TableStore;
 
@@ -38,7 +39,22 @@ import java.util.Map;
  * @since: 1.0
  */
 public final class WindowOperator {
+	private static final String RANK = "RANK";
+	private static final String DENSE_RANK = "DENSE_RANK";
+	private static final String ROW_NUMBER = "ROW_NUMBER";
+
 	private WindowOperator() {
+	}
+
+	/**
+	 * Result column type for a window function name ({@code RANK}/{@code ROW_NUMBER} → BIGINT).
+	 */
+	public static SqlType resultType(String func) {
+		final String upper = func == null ? "" : func.toUpperCase(Locale.ROOT);
+		if (RANK.equals(upper) || DENSE_RANK.equals(upper) || ROW_NUMBER.equals(upper)) {
+			return SqlType.BIGINT;
+		}
+		return SqlType.DOUBLE;
 	}
 
 	/**
@@ -48,13 +64,19 @@ public final class WindowOperator {
 	 * @param partitionColumns       optional PARTITION BY columns (composite wire key)
 	 * @param orderColOrNull         optional ORDER BY column (first key)
 	 * @param valueColOrNull         value column for LAG/LEAD/partition aggs
+	 * @param orderDescending        {@code true} when {@code ORDER BY col DESC}
 	 */
 	public record Spec(
 			String func,
 			List<String> partitionColumns,
 			String orderColOrNull,
-			String valueColOrNull
+			String valueColOrNull,
+			boolean orderDescending
 	) {
+		public Spec(String func, List<String> partitionColumns, String orderColOrNull, String valueColOrNull) {
+			this(func, partitionColumns, orderColOrNull, valueColOrNull, false);
+		}
+
 		public Spec(String func, String partitionColOrNull, String orderColOrNull, String valueColOrNull) {
 			this(
 					func,
@@ -62,7 +84,8 @@ public final class WindowOperator {
 							? List.of()
 							: List.of(partitionColOrNull),
 					orderColOrNull,
-					valueColOrNull
+					valueColOrNull,
+					false
 			);
 		}
 	}
@@ -96,7 +119,11 @@ public final class WindowOperator {
 		for (List<Object[]> part : partitions.values()) {
 			final List<Object[]> sorted = new ArrayList<>(part);
 			if (orderOrd >= 0) {
-				sorted.sort((a, b) -> compareValues(a[orderOrd], b[orderOrd]));
+				final boolean desc = spec.orderDescending();
+				sorted.sort((a, b) -> {
+					final int cmp = compareValues(a[orderOrd], b[orderOrd]);
+					return desc ? -cmp : cmp;
+				});
 			}
 			switch (func) {
 				case "ROW_NUMBER" -> applyRowNumber(sorted, out);
@@ -138,22 +165,22 @@ public final class WindowOperator {
 	}
 
 	private static void applyRowNumber(List<Object[]> sorted, List<Object[]> out) {
-		int rowNum = 0;
+		long rowNum = 0L;
 		for (Object[] row : sorted) {
 			rowNum++;
-			out.add(append(row, (double) rowNum));
+			out.add(append(row, Long.valueOf(rowNum)));
 		}
 	}
 
 	private static void applyRank(List<Object[]> sorted, int orderOrd, List<Object[]> out, boolean dense) {
 		Object prevOrder = null;
-		int rank = 0;
-		int rowNum = 0;
-		int denseRank = 0;
+		long rank = 0L;
+		long rowNum = 0L;
+		long denseRank = 0L;
 		for (Object[] row : sorted) {
 			rowNum++;
 			final Object orderVal = orderOrd >= 0 ? row[orderOrd] : null;
-			final boolean newGroup = rank == 0 || compareValues(prevOrder, orderVal) != 0;
+			final boolean newGroup = rank == 0L || compareValues(prevOrder, orderVal) != 0;
 			if (newGroup) {
 				if (dense) {
 					denseRank++;
@@ -163,7 +190,7 @@ public final class WindowOperator {
 				}
 				prevOrder = orderVal;
 			}
-			out.add(append(row, (double) rank));
+			out.add(append(row, Long.valueOf(rank)));
 		}
 	}
 

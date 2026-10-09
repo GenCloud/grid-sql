@@ -20,7 +20,7 @@ The JDBC client (`org.genfork.grid.jdbc`) is the stable sync entry in the same m
 <dependency>
   <groupId>org.genfork</groupId>
   <artifactId>grid-sql-client</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
@@ -199,6 +199,21 @@ grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:1
 ```
 
 Read-your-writes through a replica without a round trip to the writer is not guaranteed. When the allowed lag is exceeded the replica answers `REPLICA_READ_STALE` and the client switches endpoint. Full coverage of policies, failures and risks — [replica reads](../configure-and-operate/operations/replica-reads.md).
+
+### Force writer for tooling (`SqlClientRouteContext`)
+
+When the URL has `readEndpoints` / `readPreference=REPLICA`, autocommit `SELECT`/`EXPLAIN` may hit a replica. Migrations and DDL tooling (Flyway, schema scripts) that must talk only to the proposer pin the current thread:
+
+```java
+try (AutoCloseable ignored = SqlClientRouteContext.forcePrimary()) {
+    // SELECT / EXPLAIN / any statement on this thread → writer, not READ_REPLICA pool
+    flyway.migrate();
+}
+// or: SqlClientRouteContext.runWithPrimary(() -> …);
+// or: SqlClientRouteContext.callWithPrimary(() -> …);
+```
+
+Thread-local; nested `forcePrimary()` restores the previous pin on close. Outside the scope, URL routing applies again.
 
 ## Streaming large result sets
 

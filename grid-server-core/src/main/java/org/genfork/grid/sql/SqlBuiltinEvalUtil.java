@@ -24,11 +24,14 @@ import java.util.Map;
 import java.util.function.Function;
 
 import org.genfork.grid.catalog.SqlType;
+import org.genfork.grid.sql.SqlBuiltinExpr.CaseBranch;
+import org.genfork.grid.sql.SqlBuiltinExpr.CaseExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ClockExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ClockKind;
 import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
 import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
 import org.genfork.grid.sql.SqlBuiltinExpr.ExcludedRef;
+import org.genfork.grid.sql.SqlBuiltinExpr.NumericColPlus;
 import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
 import org.genfork.grid.sql.ast.SelectAst.FuncArg;
 import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
@@ -92,7 +95,8 @@ public final class SqlBuiltinEvalUtil {
 
 	/**
 	 * Resolve a DML value that may be a literal or builtin marker
-	 * ({@link ClockExpr}, {@link CoalesceExpr}, {@link ColumnRef}, {@link ExcludedRef}).
+	 * ({@link ClockExpr}, {@link CoalesceExpr}, {@link ColumnRef}, {@link ExcludedRef},
+	 * {@link NumericColPlus}, {@link CaseExpr}).
 	 *
 	 * @param excludedValue maps EXCLUDED.col → proposed INSERT value; {@code null} when not in
 	 *                      ON CONFLICT DO UPDATE
@@ -114,6 +118,12 @@ public final class SqlBuiltinEvalUtil {
 		if (expr instanceof ColumnRef ref) {
 			return columnValue.apply(ref.column());
 		}
+		if (expr instanceof NumericColPlus plus) {
+			return addNumeric(columnValue.apply(plus.column()), plus.addend());
+		}
+		if (expr instanceof CaseExpr caseExpr) {
+			return resolveCase(caseExpr, columnValue, excludedValue, zone, targetTypeOrNull);
+		}
 		if (expr instanceof ExcludedRef ref) {
 			if (excludedValue == null) {
 				throw new IllegalArgumentException("EXCLUDED only valid in ON CONFLICT DO UPDATE");
@@ -130,6 +140,46 @@ public final class SqlBuiltinEvalUtil {
 			return null;
 		}
 		return expr;
+	}
+
+	private static Object resolveCase(
+			CaseExpr caseExpr,
+			Function<String, Object> columnValue,
+			Function<String, Object> excludedValue,
+			ZoneId zone,
+			SqlType targetTypeOrNull
+	) {
+		for (CaseBranch branch : caseExpr.branches()) {
+			if (branch.when().matchesColumns(columnValue)) {
+				return resolve(branch.thenValue(), columnValue, excludedValue, zone, targetTypeOrNull);
+			}
+		}
+		return resolve(caseExpr.elseValueOrNull(), columnValue, excludedValue, zone, targetTypeOrNull);
+	}
+
+	/** Numeric {@code left + right} preserving integral width when both are integral. */
+	public static Object addNumeric(Object left, Object right) {
+		if (left == null || right == null) {
+			throw new IllegalArgumentException("numeric + requires non-null operands");
+		}
+		if (!(left instanceof Number leftNum) || !(right instanceof Number rightNum)) {
+			throw new IllegalArgumentException(
+					"numeric + requires numbers, got " + left.getClass().getSimpleName()
+							+ " and " + right.getClass().getSimpleName());
+		}
+		if (isIntegral(leftNum) && isIntegral(rightNum)) {
+			final long sum = leftNum.longValue() + rightNum.longValue();
+			if (left instanceof Integer && right instanceof Integer
+					&& sum >= Integer.MIN_VALUE && sum <= Integer.MAX_VALUE) {
+				return (int) sum;
+			}
+			return sum;
+		}
+		return leftNum.doubleValue() + rightNum.doubleValue();
+	}
+
+	private static boolean isIntegral(Number n) {
+		return n instanceof Byte || n instanceof Short || n instanceof Integer || n instanceof Long;
 	}
 
 	public static Object materializeClock(ClockKind kind, ZoneId zone, SqlType asTypeOrNull) {

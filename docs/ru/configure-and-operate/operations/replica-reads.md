@@ -37,7 +37,11 @@ flowchart TB
 - **READ** (обычный SELECT / EXPLAIN без блокировок) → реплика с наименьшим числом незавершённых запросов
 - **WRITE** / TX / DDL / PREPARE / `FOR UPDATE` → пишущий
 
-Поддерживается несколько `readEndpoints`. Собирать две фабрики вручную не нужно. Серверный допуск (`SqlStatementTag`) отклоняет недопустимые операции на сессиях `READ_REPLICA`.
+Поддерживается несколько `readEndpoints`. Собирать две фабрики вручную не нужно.
+
+Чтобы закрепить текущий поток на пишущем (Flyway / DDL на URL с репликами) — `SqlClientRouteContext.forcePrimary()` / `runWithPrimary` / `callWithPrimary`: [Java-клиент](../../develop/java-client.md).
+
+Серверный допуск (`SqlStatementTag`) отклоняет недопустимые операции на сессиях `READ_REPLICA`.
 
 ## Конфиг сервера
 

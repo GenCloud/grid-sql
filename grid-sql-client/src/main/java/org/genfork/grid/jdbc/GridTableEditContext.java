@@ -15,25 +15,41 @@
  */
 package org.genfork.grid.jdbc;
 
+import java.util.List;
+
 /**
  * Optional single-table edit context for scrollable / updatable JDBC result sets (DBeaver Data Editor).
+ * <p>
+ * {@link #pkColumn()} is the leading PRIMARY KEY column ({@code ordinal_position = 1}).
+ * {@code deleteRow}/{@code updateRow} use that leading column in WHERE — documented partial-PK
+ * mode for composite keys (matches {@code DELETE … WHERE pk1=?} Data Editor Save).
  *
  * @author: GenCloud
  * @date: 2026/09
  * @since: 1.0
  */
-public record GridTableEditContext(String schema, String table, String pkColumn, int pkIndex) {
-    public GridTableEditContext(String schema, String table, String pkColumn, int pkIndex) {
-        this.schema = schema == null || schema.isBlank() ? "public" : schema;
-        this.table = table;
-        this.pkColumn = pkColumn;
-        this.pkIndex = pkIndex;
-    }
+public record GridTableEditContext(
+		String schema,
+		String table,
+		String pkColumn,
+		int pkIndex,
+		List<String> pkColumns
+) {
+	public GridTableEditContext {
+		schema = schema == null || schema.isBlank() ? "public" : schema;
+		pkColumns = pkColumns == null || pkColumns.isEmpty()
+				? (pkColumn == null ? List.of() : List.of(pkColumn))
+				: List.copyOf(pkColumns);
+	}
 
-    /**
-     * Always {@code schema.table} — {@code public} is a normal schema (no bare-name special case).
-     */
-    public String qualifiedTable() {
-        return schema + "." + table;
-    }
+	public GridTableEditContext(String schema, String table, String pkColumn, int pkIndex) {
+		this(schema, table, pkColumn, pkIndex, pkColumn == null ? List.of() : List.of(pkColumn));
+	}
+
+	/**
+	 * Always {@code schema.table} — {@code public} is a normal schema (no bare-name special case).
+	 */
+	public String qualifiedTable() {
+		return schema + "." + table;
+	}
 }

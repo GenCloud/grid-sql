@@ -41,36 +41,44 @@ public class ArraysComparator implements Comparator<byte[]> {
 		if (o1 == o2) {
 			return 0;
 		}
-
 		if (o1 == null) {
 			return 1;
 		}
-
 		if (o2 == null) {
 			return -1;
 		}
+		return compare(o1, 0, o1.length, o2, 0, o2.length);
+	}
 
-		final int len1 = o1.length;
-		final int len2 = o2.length;
-		if (len1 == 4 && len2 == 4) {
-			return Integer.compare(Bits.getInt(o1, 0), Bits.getInt(o2, 0));
+	/**
+	 * Same signed INT/LONG / unsigned variable rules as {@link #compare(byte[], byte[])},
+	 * over {@code a[aOff .. aOff+aLen)} vs {@code b[bOff .. bOff+bLen)}.
+	 */
+	public int compare(byte[] a, int aOff, int aLen, byte[] b, int bOff, int bLen) {
+		if (a == null) {
+			return b == null ? 0 : 1;
 		}
-		if (len1 == 8 && len2 == 8) {
-			return Long.compare(Bits.getLong(o1, 0), Bits.getLong(o2, 0));
+		if (b == null) {
+			return -1;
+		}
+		if (aLen == 4 && bLen == 4) {
+			return Integer.compare(Bits.getInt(a, aOff), Bits.getInt(b, bOff));
+		}
+		if (aLen == 8 && bLen == 8) {
+			return Long.compare(Bits.getLong(a, aOff), Bits.getLong(b, bOff));
 		}
 
-		final int lenDiff = len1 - len2;
+		final int lenDiff = aLen - bLen;
 		if (lenDiff != 0) {
 			return lenDiff;
 		}
 
-		for (int i = 0; i < len1; i++) {
-			final int diff = (o1[i] & 0xFF) - (o2[i] & 0xFF);
+		for (int i = 0; i < aLen; i++) {
+			final int diff = (a[aOff + i] & 0xFF) - (b[bOff + i] & 0xFF);
 			if (diff != 0) {
 				return diff;
 			}
 		}
-
 		return 0;
 	}
 }

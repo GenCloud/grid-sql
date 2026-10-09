@@ -150,10 +150,7 @@ Grid — распределённая SQL-база данных: скорост�
 
 ### Внутреннее
 
-Заметки для участников разработки ([оглавление](internal/README.md)):
-
 - [Правила разработки](internal/development.md)
 - [ORCHID TLA](internal/orchid-tla.md)
-- [Журнал дефектов](internal/bug-journal.md)
 - [EncodeBuffers](internal/encode-buffers.md)
 - [GridFs](internal/grid-fs.md)

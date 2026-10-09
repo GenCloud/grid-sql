@@ -93,6 +93,7 @@ There is no need to index the primary key separately. It determines the shard. E
 | EQ on the leading column of a composite secondary index `(a, b)` | Prefix path on `(a, …)`; if a separate single-column / bitmap index on `a` exists and there is no `ORDER BY` on `b`, the plan may prefer the narrow index |
 | EQ only on a non-leading column | Composite `(a, b)` does not apply |
 | `ORDER BY` on the second composite column with EQ on the first | Keeps the ordered composite leaf |
+| `ORDER BY` on the PK ascending (no matching secondary order index) | May stream / sort from the PK leaf without requiring an external order index |
 
 Fixed-width INT/LONG compare in the index and in residual filters is **signed** (`Integer.compare` / `Long.compare`), matching signed literals in the grammar. Details: [SQL support matrix](support-matrix.md).
 
