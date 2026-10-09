@@ -7,8 +7,9 @@
                  [elle "0.2.1"]
                  [clj-http "3.12.3"]
                  [cheshire "5.12.0"]
+                 ;; Version synced from root pom.xml by jepsen-client-version.sh / Sync-JepsenProjectClj
                  ;; Prerequisite: mvn -pl grid-sql-client -am install -DskipTests
-                 [org.genfork/grid-sql-client "1.0"]]
+                 [org.genfork/grid-sql-client "1.1.0"]]
   :main jamoa-jepsen.core
   :jvm-opts ["-Djava.awt.headless=true" "--enable-preview"]
   :profiles {:uberjar {:aot :all}})

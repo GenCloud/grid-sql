@@ -145,6 +145,9 @@ echo LEIN_EXIT=`$?
 
 Write-Host "Installing grid-sql-client ..."
 $root = (Resolve-Path (Join-Path $JEPSEN_DIR "../..")).Path
+. (Join-Path $PSScriptRoot "jepsen-env.ps1")
+Initialize-JepsenHostEnv
+[void](Sync-JepsenProjectClj -RepoRoot $root)
 Push-Location $root
 try {
   mvn -B -pl grid-sql-client -am install "-DskipTests"

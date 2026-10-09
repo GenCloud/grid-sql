@@ -154,6 +154,9 @@ else
   "$JEPSEN_DIR/scripts/build-jepsen-image.sh"
 fi
 
+# shellcheck source=../../scripts/jepsen-client-version.sh
+source "$JEPSEN_DIR/scripts/jepsen-client-version.sh"
+jepsen_sync_project_clj "$ROOT"
 echo "Installing grid-sql-client..."
 ( cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests )
 

@@ -125,8 +125,11 @@ function Ensure-Control {
 }
 
 function Install-SqlClient {
-  if ($Fast -and (Test-Path (Join-Path $env:JEPSEN_M2 "repository\org\genfork\grid-sql-client\1.0\grid-sql-client-1.0.jar"))) {
-    Write-Host "Fast: skip mvn install grid-sql-client (jar present in local m2)"
+  . (Join-Path $PSScriptRoot "jepsen-env.ps1")
+  Initialize-JepsenHostEnv
+  $ver = Sync-JepsenProjectClj -RepoRoot $ROOT
+  if ($Fast -and (Test-JepsenSqlClientInstalled -Version $ver -M2Home $env:JEPSEN_M2)) {
+    Write-Host "Fast: skip mvn install grid-sql-client (jar $ver present in local m2)"
     return
   }
   Write-Host "Installing grid-sql-client to local Maven repo..."

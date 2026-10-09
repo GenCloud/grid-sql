@@ -448,12 +448,18 @@ jobs:
 
       - name: Install grid-sql-client (Linux)
         if: runner.os == 'Linux'
-        run: mvn -B -ntp -pl grid-sql-client -am install -DskipTests
+        run: |
+          set -euo pipefail
+          bash benchmarks/jepsen/scripts/jepsen-client-version.sh sync
+          mvn -B -ntp -pl grid-sql-client -am install -DskipTests
 
       - name: Install grid-sql-client (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          . .\benchmarks\jepsen\scripts\jepsen-env.ps1
+          Initialize-JepsenHostEnv
+          [void](Sync-JepsenProjectClj)
           $mvn = if (Get-Command mvn.cmd -EA SilentlyContinue) { "mvn.cmd" } else { "mvn" }
           & $mvn -B -ntp -pl grid-sql-client -am install "-DskipTests"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

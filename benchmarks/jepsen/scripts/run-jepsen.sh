@@ -100,6 +100,9 @@ ensure_cluster() {
 }
 
 install_sql_client() {
+  # shellcheck source=jepsen-client-version.sh
+  source "$JEPSEN_DIR/scripts/jepsen-client-version.sh"
+  jepsen_sync_project_clj "$ROOT"
   echo "Installing grid-sql-client to local Maven repo (Jepsen classpath)..."
   (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
 }

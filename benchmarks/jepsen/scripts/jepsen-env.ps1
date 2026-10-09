@@ -86,6 +86,75 @@ function Get-JepsenUserHome {
   return (Get-Location).Path
 }
 
+function Get-GridSqlProjectVersion {
+  param([string]$RepoRoot = "")
+  if (-not $RepoRoot) {
+    $RepoRoot = Get-JepsenRepoRoot
+  }
+  $pom = Join-Path $RepoRoot "pom.xml"
+  if (-not (Test-Path -LiteralPath $pom)) {
+    throw "root pom.xml missing: $pom"
+  }
+  $text = [IO.File]::ReadAllText($pom)
+  # Project version is the first <version> after <artifactId>grid-sql</artifactId>
+  # (Spring Boot parent version lives later inside <parent>).
+  $m = [regex]::Match(
+    $text,
+    '<artifactId>\s*grid-sql\s*</artifactId>\s*<version>\s*([^<]+?)\s*</version>',
+    [Text.RegularExpressions.RegexOptions]::Singleline)
+  if (-not $m.Success) {
+    throw "could not parse grid-sql project version from $pom"
+  }
+  return $m.Groups[1].Value.Trim()
+}
+
+function Sync-JepsenProjectClj {
+  param([string]$RepoRoot = "")
+  if (-not $RepoRoot) {
+    $RepoRoot = Get-JepsenRepoRoot
+  }
+  $ver = Get-GridSqlProjectVersion -RepoRoot $RepoRoot
+  $clj = Join-Path $RepoRoot (Join-Path "benchmarks" (Join-Path "jepsen" (Join-Path "clojure" "project.clj")))
+  if (-not (Test-Path -LiteralPath $clj)) {
+    throw "missing Jepsen project.clj: $clj"
+  }
+  $text = [IO.File]::ReadAllText($clj)
+  $pattern = 'org\.genfork/grid-sql-client "[^"]*"'
+  $replacement = "org.genfork/grid-sql-client `"$ver`""
+  $updated = [regex]::Replace($text, $pattern, $replacement)
+  if ($updated -notmatch [regex]::Escape("org.genfork/grid-sql-client `"$ver`"")) {
+    throw "failed to write grid-sql-client `"$ver`" into $clj"
+  }
+  if ($updated -ne $text) {
+    [IO.File]::WriteAllText($clj, $updated, [Text.UTF8Encoding]::new($false))
+  }
+  Write-Host "Synced Jepsen project.clj → org.genfork/grid-sql-client `"$ver`" (from root pom.xml)"
+  return $ver
+}
+
+function Test-JepsenSqlClientInstalled {
+  param(
+    [string]$Version = "",
+    [string]$M2Home = ""
+  )
+  if (-not $Version) {
+    $Version = Get-GridSqlProjectVersion
+  }
+  if (-not $M2Home) {
+    $M2Home = $env:JEPSEN_M2
+  }
+  if (-not $M2Home) {
+    $M2Home = Join-Path (Get-JepsenUserHome) ".m2"
+  }
+  $jar = Join-Path $M2Home (
+    Join-Path "repository" (
+      Join-Path "org" (
+        Join-Path "genfork" (
+          Join-Path "grid-sql-client" (
+            Join-Path $Version ("grid-sql-client-" + $Version + ".jar"))))))
+  return (Test-Path -LiteralPath $jar)
+}
+
 function Initialize-JepsenHostEnv {
   $homeDir = Get-JepsenUserHome
   if (-not $env:HOME -or $env:HOME.Trim().Length -eq 0) {
@@ -102,6 +171,8 @@ function Initialize-JepsenHostEnv {
   if (-not $env:MSYS2_ARG_CONV_EXCL) {
     $env:MSYS2_ARG_CONV_EXCL = "*"
   }
+  # Keep Leiningen coord aligned with Maven project.version (no hardcoded client version).
+  Sync-JepsenProjectClj | Out-Null
 }
 
 function Invoke-JepsenBash {

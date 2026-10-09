@@ -97,6 +97,9 @@ echo LEIN_EXIT=`$?
 
 $script:ExitCode = 1
 try {
+  . (Join-Path $PSScriptRoot "jepsen-env.ps1")
+  Initialize-JepsenHostEnv
+  [void](Sync-JepsenProjectClj -RepoRoot $ROOT)
   Push-Location $ROOT
   mvn -B -pl grid-sql-client,grid-sql-jepsen-starter -am install "-DskipTests"
   if ($LASTEXITCODE -ne 0) { throw "mvn install failed" }
