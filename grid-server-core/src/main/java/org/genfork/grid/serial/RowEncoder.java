@@ -135,18 +135,21 @@ public final class RowEncoder {
 		}
 		return switch (type) {
 			case INT -> {
+				SqlTypeCoercion.rejectTemporalForNumeric(raw, SqlType.INT);
 				if (raw instanceof Number n) {
 					yield n.intValue();
 				}
 				yield Integer.parseInt(String.valueOf(raw));
 			}
 			case BIGINT -> {
+				SqlTypeCoercion.rejectTemporalForNumeric(raw, SqlType.BIGINT);
 				if (raw instanceof Number n) {
 					yield n.longValue();
 				}
 				yield Long.parseLong(String.valueOf(raw));
 			}
 			case DOUBLE -> {
+				SqlTypeCoercion.rejectTemporalForNumeric(raw, SqlType.DOUBLE);
 				if (raw instanceof Number n) {
 					yield n.doubleValue();
 				}
@@ -160,12 +163,7 @@ public final class RowEncoder {
 			}
 			case VARCHAR -> String.valueOf(raw);
 			case TIMESTAMP -> SqlTypeCoercion.toTimestampString(raw);
-			case BYTES -> {
-				if (raw instanceof byte[] b) {
-					yield b;
-				}
-				yield String.valueOf(raw).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			}
+			case BYTES -> SqlTypeCoercion.toBytes(raw);
 			case UUID -> SqlTypeCoercion.toUuid(raw);
 			case DATE -> SqlTypeCoercion.toDate(raw);
 			case TIME -> SqlTypeCoercion.toTime(raw);

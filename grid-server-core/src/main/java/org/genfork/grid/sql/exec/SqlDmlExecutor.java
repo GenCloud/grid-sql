@@ -30,8 +30,10 @@ import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableAnalyzeStats;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.catalog.TriggerEvent;
+import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.serial.LogicalFieldCursor;
+import org.genfork.grid.serial.PrimaryKeyCodec;
 import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.sql.SqlBuiltinEvalUtil;
 import org.genfork.grid.sql.SqlBuiltinExpr.CaseExpr;
@@ -716,7 +718,8 @@ public final class SqlDmlExecutor {
 			OnConflict conflict
 	) {
 		if (conflict == null) {
-			final TableStore.EncodedRow encoded = store.encodeUpsert(row, true);
+			final boolean rejectExistingPk = plainInsertRejectExistingPk(session, table, store, row);
+			final TableStore.EncodedRow encoded = store.encodeUpsert(row, rejectExistingPk);
 			SqlTriggerFireOps.fireBeforeRow(
 					session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
 			final long affected;
@@ -737,40 +740,76 @@ public final class SqlDmlExecutor {
 			}
 			return affected;
 		}
-		// Resolve conflict before encodeUpsert — UNIQUE on target columns must not reject DO UPDATE hit.
-		final byte[] conflictKey = SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
-		final byte[] existing;
-		if (conflictKey != null) {
-			SqlDmlLockOps.ensureConflictKeyLocked(session, table, conflictKey);
-			existing = SqlDmlLockOps.existingBytes(session, table, store, conflictKey);
-		} else {
-			existing = null;
-		}
-		if (existing != null) {
-			if (conflict.action() == ConflictAction.DO_NOTHING) {
-				return 0L;
+		// Serialize concurrent ON CONFLICT on the same UNIQUE target (arbiter), then probe / insert.
+		final byte[] arbiterKey = SqlMergeMatchOps.conflictArbiterLockKey(store, row, conflict);
+		SqlDmlLockOps.acquireConflictArbiter(session, table, arbiterKey);
+		try {
+			final byte[] conflictKey = SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
+			final byte[] existing;
+			if (conflictKey != null) {
+				SqlDmlLockOps.ensureConflictKeyLocked(session, table, conflictKey);
+				existing = SqlDmlLockOps.existingBytes(session, table, store, conflictKey);
+			} else {
+				existing = null;
 			}
-			if (conflict.action() == ConflictAction.DO_UPSERT_VALUES) {
-				final TableStore.EncodedRow encoded = store.encodeUpsert(row, false);
-				SqlTriggerFireOps.fireBeforeRow(
+			if (existing != null) {
+				return applyConflictHit(session, table, store, conflictKey, existing, row, conflict);
+			}
+			try {
+				return insertConflictMissRow(session, table, store, row);
+			} catch (NonUniqueValueException ex) {
+				return recoverConflictAfterUniqueRace(session, table, store, row, conflict, ex);
+			}
+		} finally {
+			SqlDmlLockOps.releaseConflictArbiterAutocommit(session, table, arbiterKey);
+		}
+	}
+
+	/**
+	 * ON CONFLICT target already matched an existing row.
+	 */
+	private long applyConflictHit(
+			SqlSession session,
+			String table,
+			TableStore store,
+			byte[] conflictKey,
+			byte[] existing,
+			Object[] row,
+			OnConflict conflict
+	) {
+		if (conflict.action() == ConflictAction.DO_NOTHING) {
+			return 0L;
+		}
+		if (conflict.action() == ConflictAction.DO_UPSERT_VALUES) {
+			final TableStore.EncodedRow encoded = store.encodeUpsert(row, false);
+			SqlTriggerFireOps.fireBeforeRow(
+					session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
+			final long affected;
+			if (session.inTransaction()) {
+				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
+				affected = 1L;
+			} else {
+				affected = store.upsert(row, false);
+			}
+			if (affected > 0L) {
+				SqlTriggerFireOps.fireAfterRow(
 						session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
-				final long affected;
-				if (session.inTransaction()) {
-					SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
-					affected = 1L;
-				} else {
-					affected = store.upsert(row, false);
-				}
-				if (affected > 0L) {
-					SqlTriggerFireOps.fireAfterRow(
-							session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
-				}
-				return affected;
 			}
-			return applyConflictUpdate(
-					session, table, store, conflictKey, existing, row, conflict.updateSets());
+			return affected;
 		}
-		// Miss: insert new row (STRICT unique still enforced; conflict target has no match).
+		return applyConflictUpdate(
+				session, table, store, conflictKey, existing, row, conflict.updateSets());
+	}
+
+	/**
+	 * Conflict target miss — insert proposed row (STRICT unique still enforced).
+	 */
+	private long insertConflictMissRow(
+			SqlSession session,
+			String table,
+			TableStore store,
+			Object[] row
+	) {
 		final TableStore.EncodedRow encoded = store.encodeUpsert(row, false);
 		SqlTriggerFireOps.fireBeforeRow(
 				session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
@@ -786,6 +825,49 @@ public final class SqlDmlExecutor {
 					session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
 		}
 		return affected;
+	}
+
+	/**
+	 * Concurrent INSERT … ON CONFLICT: another session won the unique arbiter after our miss probe.
+	 * Re-resolve the target and apply DO UPDATE / DO NOTHING / UPSERT-VALUES.
+	 */
+	private long recoverConflictAfterUniqueRace(
+			SqlSession session,
+			String table,
+			TableStore store,
+			Object[] row,
+			OnConflict conflict,
+			NonUniqueValueException cause
+	) {
+		final byte[] retryKey = SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
+		if (retryKey == null) {
+			throw cause;
+		}
+		SqlDmlLockOps.ensureConflictKeyLocked(session, table, retryKey);
+		final byte[] retryExisting = SqlDmlLockOps.existingBytes(session, table, store, retryKey);
+		if (retryExisting == null) {
+			throw cause;
+		}
+		return applyConflictHit(session, table, store, retryKey, retryExisting, row, conflict);
+	}
+
+	/**
+	 * Plain INSERT: autocommit rejects committed PK; open TX uses dirty overlay (DELETE tombstone visible).
+	 * <p>
+	 * PK bytes from the full row ({@link PrimaryKeyCodec#encodeRow}) — composite keys must not use a
+	 * scalar first-column value.
+	 */
+	private static boolean plainInsertRejectExistingPk(
+			SqlSession session,
+			String table,
+			TableStore store,
+			Object[] row
+	) {
+		if (!session.inTransaction()) {
+			return true;
+		}
+		final byte[] key = PrimaryKeyCodec.encodeRow(store.schema(), row);
+		return SqlDmlLockOps.existingBytes(session, table, store, key) != null;
 	}
 
 	private long applyConflictUpdate(

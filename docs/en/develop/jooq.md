@@ -24,7 +24,7 @@ Apps / jOOQ / DBeaver
                  └─ Connection.close → park idle channel; DataSource.close → release retain
 ```
 
-TCP caps / idle / `maxTxContexts` live **only** in `SyncConnectionFactory` / `RemoteConnectionFactory` (client default **256**; server channel hard-cap **8**, Boot does not raise from YAML). There is **no** JDBC-level pool registry. Do **not** replace this with Hikari `maximumPoolSize=N`.
+TCP caps / idle / `maxTxContexts` live **only** in `SyncConnectionFactory` / `RemoteConnectionFactory` (client default **256**; server channel hard-cap **8**, configurable via `grid.sql-server.max-tx-contexts`). There is **no** JDBC-level pool registry. Do **not** replace this with Hikari `maximumPoolSize=N`.
 
 `grid-jooq` consumes only `javax.sql` / `java.sql` + `GridSQL` / `GridDSL` — no Sync*/Remote* imports.
 
@@ -42,9 +42,12 @@ jOOQ version comes from Spring Boot **3.5.14** BOM (`jooq.version` **3.19.x**, c
 
 ## API
 
-- `GridSQL` — `SQLDialect.DEFAULT` + Settings (unquoted names, `?` binds). Surface: EQ JOIN (INNER/LEFT/…), ORDER+LIMIT, INSERT/UPSERT/`INSERT … SELECT`/ON CONFLICT, UPDATE/DELETE with WHERE, scalar `SELECT 1` / `EXISTS` (incl. JOOQ `SELECT 1 AS one` inside EXISTS). Quoted identifiers from codegen fold case-insensitively.
-  Prefer `UPSERT` or a plain `ON CONFLICT` string — jOOQ `onConflict` under DEFAULT may emit `ON DUPLICATE KEY` (rejected by SimplifiedSql).
-- `GridDSL` — render-only, `Connection`, `DataSource` (prefer `GridDataSource`), `ConnectionProvider`, `jdbc:grid://` URL.
+- `GridSQL.installProduct(Configuration)` — host `SQLDialect.DEFAULT` + Settings; **fail-fast** on SQLITE/POSTGRES/MYSQL/…. Does **not** register VisitListener / ExecuteListener SQL rewrites.
+- Logical dialect = `GridDialect` (`org.genfork.grid.jooq.dialect`); there is no OSS `SQLDialect.GRID` enum constant.
+- `GridDSL` — `DSLContext` factory plus Grid QueryParts:
+  - `GridDSL.insertInto(dsl, table).set(…).onConflict(…).doUpdate().set(…)` → `ON CONFLICT … DO UPDATE` (not `ON DUPLICATE KEY`)
+  - `onConflictDoNothing` / `insertReturning` / `truncate`
+- Forbidden on the product path: `SQLDialect.SQLITE|POSTGRES|MYSQL`, VisitListener/ExecuteListener strip-rewrite as a “dialect”.
 - `GridConnectionProvider` — sync JDBC acquire/release for jOOQ.
 - JDBC edge (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` maps exceptions only.
 
@@ -72,9 +75,12 @@ Grid supplies `information_schema` + JDBC meta (tables/columns/PK/FK/indexes). L
 ```java
 try (GridDataSource ds = new GridDataSource("jdbc:grid://u:p@127.0.0.1:15432/public")) {
   DSLContext dsl = GridDSL.using(ds);
-  dsl.insertInto(table("accounts"))
-     .columns(field("id"), field("balance"))
-     .values(1, 100)
+  GridDSL.insertInto(dsl, table("accounts"))
+     .set(field("id"), 1)
+     .set(field("balance"), 100)
+     .onConflict(field("id"))
+     .doUpdate()
+     .set(field("balance"), 100)
      .execute();
 }
 ```

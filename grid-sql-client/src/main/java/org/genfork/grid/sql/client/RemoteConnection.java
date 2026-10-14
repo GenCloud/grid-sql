@@ -28,6 +28,7 @@ import reactor.core.publisher.Mono;
 
 import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.client.reactive.ReactiveBatchExchange;
+import org.genfork.grid.sql.netty.SqlWire;
 import org.genfork.grid.sql.client.reactive.ReactiveExecExchange;
 import org.genfork.grid.sql.client.transport.PendingExchange;
 import org.genfork.grid.sql.client.transport.TransportConnection;
@@ -171,6 +172,21 @@ public final class RemoteConnection implements Connection {
 	}
 
 	@Override
+	public Flux<Result> executeBatchBound(List<BatchStatement> statements) {
+		final List<BatchStatement> list = statements == null ? List.of() : List.copyOf(statements);
+		if (list.isEmpty()) {
+			return Flux.empty();
+		}
+		return Flux.usingWhen(
+				acquireAutocommitSession(),
+				sessionId -> applyTimeout(batchBoundRaw(sessionId, BatchStatement.toWire(list))),
+				this::releaseAutocommitSession,
+				(sessionId, _) -> releaseAutocommitSession(sessionId),
+				this::releaseAutocommitSession
+		);
+	}
+
+	@Override
 	public Mono<Void> close() {
 		return Mono.fromRunnable(transport::park);
 	}
@@ -196,6 +212,14 @@ public final class RemoteConnection implements Connection {
 		return Mono.defer(() -> {
 			if (!transport.isOpen()) {
 				return Mono.error(new IllegalStateException(ERR_NOT_CONNECTED));
+			}
+			/*
+			 * Prefer idle autocommit sessions — they already occupy server channel slots.
+			 * TX begin / SESSION_OPEN must reuse them under the hard-cap (default 8/TCP).
+			 */
+			final Integer idle = transport.pollAutocommitIdle();
+			if (idle != null) {
+				return Mono.just(idle);
 			}
 			if (!transport.sessionOpenBudgetAvailable()) {
 				return Mono.error(new IllegalStateException(
@@ -240,6 +264,14 @@ public final class RemoteConnection implements Connection {
 			return Flux.empty();
 		}
 		return applyTimeout(batchRaw(sessionId, list));
+	}
+
+	Flux<Result> execBatchBound(int sessionId, List<BatchStatement> statements) {
+		final List<BatchStatement> list = statements == null ? List.of() : List.copyOf(statements);
+		if (list.isEmpty()) {
+			return Flux.empty();
+		}
+		return applyTimeout(batchBoundRaw(sessionId, BatchStatement.toWire(list)));
 	}
 
 	Flux<Result> execAutocommit(String sql, Object[] binds) {
@@ -327,6 +359,20 @@ public final class RemoteConnection implements Connection {
 				return Flux.error(new IllegalStateException(ERR_NOT_CONNECTED));
 			}
 			final PreparedBatch prepared = transport.prepareReactiveBatch(sessionId, sqls);
+			final ReactiveBatchExchange exchange = prepared.reactiveExchange();
+			transport.noteActiveStart();
+			return exchange.flux()
+					.doOnSubscribe(_ -> transport.writePrepared(prepared))
+					.doFinally(_ -> transport.noteActiveEnd());
+		});
+	}
+
+	private Flux<Result> batchBoundRaw(int sessionId, List<SqlWire.BatchStatement> statements) {
+		return Flux.defer(() -> {
+			if (!transport.isOpen()) {
+				return Flux.error(new IllegalStateException(ERR_NOT_CONNECTED));
+			}
+			final PreparedBatch prepared = transport.prepareReactiveBatchStatements(sessionId, statements);
 			final ReactiveBatchExchange exchange = prepared.reactiveExchange();
 			transport.noteActiveStart();
 			return exchange.flux()

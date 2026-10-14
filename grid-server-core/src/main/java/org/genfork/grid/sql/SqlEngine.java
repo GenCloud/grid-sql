@@ -312,15 +312,25 @@ public final class SqlEngine {
 		GridProcessFence.checkAdmit("SqlEngine.execute");
 		SqlTxMetrics.recordExecution();
 		final SqlSession sess = session == null ? newSession() : session;
-		final String effective = SqlBinds.materialize(sql, binds);
-		final String expanded = SqlNamedQueryExpand.expand(effective, catalog.viewSelectBodies());
-		final Stmt stmt = applyWireExecuteBinds(SqlStatementParser.parse(expanded, sess.timezone()), binds);
+		final String expanded = SqlNamedQueryExpand.expand(sql, catalog.viewSelectBodies());
+		final Stmt stmt;
+		final String dispatchSql;
+		if (binds != null && binds.length > 0) {
+			// Keep Object binds (incl. byte[]) — structured SqlBindParam resolve, not String.valueOf.
+			final Stmt template = SqlStatementParser.parsePreparedBody(expanded, sess.timezone());
+			stmt = applyWireExecuteBinds(
+					SqlPreparedBinder.bind(template, expanded, binds, sess.timezone()), binds);
+			dispatchSql = expanded;
+		} else {
+			dispatchSql = expanded;
+			stmt = applyWireExecuteBinds(SqlStatementParser.parse(expanded, sess.timezone()), binds);
+		}
 		SqlReplicaAdmission.afterParse(sess, stmt, replication);
 		ensurePrivilege(sess, stmt);
 		final TableCatalog prevCatalog = SqlUdfLookup.push(catalog);
 		final SqlUdfCallContext prevCtx = SqlUdfCallContext.push(sess, this::execute);
 		try {
-			return dispatch(sess, stmt, expanded);
+			return dispatch(sess, stmt, dispatchSql);
 		} finally {
 			SqlUdfCallContext.restore(prevCtx);
 			SqlUdfLookup.restore(prevCatalog);
@@ -365,14 +375,17 @@ public final class SqlEngine {
 		GridProcessFence.checkAdmit("SqlEngine.executeCompiled");
 		SqlTxMetrics.recordExecution();
 		final SqlSession sess = session == null ? newSession() : session;
-		final String effective = SqlBinds.materialize(placeholderSql, binds);
-		final Stmt bound = SqlPreparedBinder.bind(template, effective, binds);
+		// Binder materializes residual SELECT/WHERE text; SET/VALUES keep Object wire cells.
+		final Stmt bound = SqlPreparedBinder.bind(template, placeholderSql, binds, sess.timezone());
+		final String dispatchSql = bound instanceof SelectSql select
+				? select.sql()
+				: placeholderSql;
 		SqlReplicaAdmission.afterParse(sess, bound, replication);
 		ensurePrivilege(sess, bound);
 		final TableCatalog prevCatalog = SqlUdfLookup.push(catalog);
 		final SqlUdfCallContext prevCtx = SqlUdfCallContext.push(sess, this::execute);
 		try {
-			return dispatch(sess, bound, effective);
+			return dispatch(sess, bound, dispatchSql);
 		} finally {
 			SqlUdfCallContext.restore(prevCtx);
 			SqlUdfLookup.restore(prevCatalog);
@@ -859,6 +872,11 @@ public final class SqlEngine {
 			applyingReplicatedDdl.set(false);
 		}
 		catalog.rewriteCompactedDdl();
+		// FULL only: CREATE TABLE hydrate precedes CREATE INDEX replay (skip-backfill).
+		// LAZY must not force all-shard hydrate (huge OpLog without .sbpt fail-closed).
+		if (replication == null || !replication.isLazyHydrate()) {
+			tables.rebuildSecondaryIndexesAfterCatalogRecover();
+		}
 	}
 
 	/** Test hook: privilege catalog snapshot bytes. */

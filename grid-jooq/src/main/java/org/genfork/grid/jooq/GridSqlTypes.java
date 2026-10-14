@@ -17,8 +17,10 @@ package org.genfork.grid.jooq;
 
 import java.sql.Date;
 import java.sql.Time;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.Objects;
@@ -48,7 +50,8 @@ public final class GridSqlTypes {
 	/**
 	 * jOOQ {@link DataType} for a catalog {@link SqlType}.
 	 * <p>
-	 * {@link SqlType#TIMESTAMP} maps to VARCHAR (ISO-8601 string on the Grid wire).
+	 * {@link SqlType#TIMESTAMP} maps to {@link SQLDataType#LOCALDATETIME} (zone-less local);
+	 * sealed storage remains ISO-8601 string after server coerce.
 	 */
 	public static DataType<?> toDataType(SqlType sqlType) {
 		Objects.requireNonNull(sqlType, ERR_NULL_SQL_TYPE);
@@ -58,7 +61,7 @@ public final class GridSqlTypes {
 			case DOUBLE -> SQLDataType.DOUBLE;
 			case BOOLEAN -> SQLDataType.BOOLEAN;
 			case VARCHAR -> SQLDataType.VARCHAR;
-			case TIMESTAMP -> SQLDataType.VARCHAR;
+			case TIMESTAMP -> SQLDataType.LOCALDATETIME;
 			case BYTES -> SQLDataType.VARBINARY;
 			case UUID -> SQLDataType.UUID;
 			case DATE -> SQLDataType.LOCALDATE;
@@ -106,6 +109,9 @@ public final class GridSqlTypes {
 		}
 		if (Instant.class.equals(javaType) || OffsetDateTime.class.equals(javaType)) {
 			return SqlType.TIMESTAMPTZ;
+		}
+		if (LocalDateTime.class.equals(javaType) || Timestamp.class.equals(javaType)) {
+			return SqlType.TIMESTAMP;
 		}
 		if (String.class.equals(javaType)) {
 			return SqlType.VARCHAR;

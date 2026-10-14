@@ -173,18 +173,54 @@ public final class TableStore {
 	}
 
 	public void addIndex(IndexDef indexDef, long newEpoch) {
+		addIndex(indexDef, newEpoch, true);
+	}
+
+	/**
+	 * Wire a secondary index; {@code backfill} is false during OpLog/ddl replay so CREATE…DROP
+	 * history cannot NonUnique against already-hydrated stackable rows.
+	 */
+	public void addIndex(IndexDef indexDef, long newEpoch, boolean backfill) {
 		Objects.requireNonNull(indexDef, "indexDef");
 		final TableSchema next = schema.withIndex(indexDef, newEpoch);
 		index.addNamedIndex(indexDef, next);
 		applySchema(next);
-		backfillIndex(indexDef);
+		if (backfill) {
+			backfillIndex(indexDef);
+		}
 	}
 
 	public void dropIndex(String indexName, long newEpoch) {
-		final TableSchema next = schema.withoutIndex(indexName, newEpoch);
-		index.dropNamedIndex(indexName);
-		applySchema(next);
-		// Existing trees for remaining indexes keep their entries; dropped tree discarded.
+		IndexDef def = schema.findIndex(indexName);
+		if (def == null) {
+			def = index.findNamedIndex(indexName);
+		}
+		final String catalogName = def != null ? def.name() : indexName;
+		final List<String> columns = def != null ? def.columns() : List.of();
+		if (index.hasNamedIndex(indexName)) {
+			index.dropNamedIndex(indexName);
+		}
+		if (schema.findIndex(indexName) != null) {
+			applySchema(schema.withoutIndex(indexName, newEpoch));
+		}
+		purgeSealedIndexArtifacts(catalogName, columns.isEmpty() ? null : columns);
+	}
+
+	/**
+	 * Best-effort sealed purge when DROP INDEX IF EXISTS finds no schema/RAM entry.
+	 */
+	public void purgeOrphanSealedIndex(String indexName) {
+		if (indexName == null || indexName.isBlank()) {
+			return;
+		}
+		purgeSealedIndexArtifacts(indexName, null);
+	}
+
+	private void purgeSealedIndexArtifacts(String catalogIndexName, List<String> columns) {
+		if (replicationCoordinator == null) {
+			return;
+		}
+		replicationCoordinator.purgeIndexArtifacts(schema.catalogKey(), catalogIndexName, columns);
 	}
 
 	/**
@@ -273,8 +309,9 @@ public final class TableStore {
 	 * <p>
 	 * Skips the synthetic PRIMARY KEY tree ({@code table_pk}): {@link #forEachPrimaryKey} walks that
 	 * tree, so dropping it mid-rebuild would empty the backfill source.
+	 * Used after ALTER DROP COLUMN and after FULL catalog recover (not LAZY boot).
 	 */
-	private void rebuildAllSecondaryIndexes() {
+	public void rebuildAllSecondaryIndexes() {
 		final List<IndexDef> defs = new ArrayList<>(schema.indexes());
 		for (IndexDef def : defs) {
 			if (isSyntheticPrimaryKeyIndex(def)) {
@@ -797,7 +834,10 @@ public final class TableStore {
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		if (rejectExistingPk && getCommittedBytes(keyBytes) != null) {
 			throw new NonUniqueValueException(
-					"duplicate primary key for table " + schema.catalogKey());
+					NonUniqueValueException.formatMessage(
+							schema.catalogKey(),
+							CatalogPersistUtil.syntheticPkIndexName(schema.catalogKey()),
+							"pk"));
 		}
 		validateChecks(coerced);
 		final String pkName = schema.pkColumn().name();
@@ -844,7 +884,7 @@ public final class TableStore {
 				}
 				if (!samePrimaryKey) {
 					throw new NonUniqueValueException(
-							"duplicate value for unique index " + idx.name());
+							NonUniqueValueException.formatMessage(schema.catalogKey(), idx.name(), "row"));
 				}
 			}
 		}

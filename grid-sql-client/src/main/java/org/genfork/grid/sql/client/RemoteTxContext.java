@@ -63,6 +63,14 @@ public final class RemoteTxContext implements TxContext {
     }
 
 	@Override
+	public Flux<Result> executeBatchBound(List<BatchStatement> statements) {
+		if (closed.get()) {
+			return Flux.error(new IllegalStateException(SqlClientMessages.TX_CLOSED));
+		}
+		return connection.execBatchBound(sessionId, statements);
+	}
+
+	@Override
 	public Mono<Void> commit() {
 		return finish(SqlStatementTag.COMMIT.wire());
 	}

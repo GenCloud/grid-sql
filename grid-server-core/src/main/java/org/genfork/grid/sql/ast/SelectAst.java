@@ -18,6 +18,7 @@ package org.genfork.grid.sql.ast;
 import java.util.List;
 
 import org.genfork.grid.query.util.SetOpKind;
+import org.genfork.grid.sql.SqlParseSupport;
 
 /**
  * SELECT / set-op / CTE / EXPLAIN AST types.
@@ -323,9 +324,16 @@ public final class SelectAst {
 			boolean avg,
 			/** GROUP BY columns (empty = none); composite wire key in executor. */
 			List<String> groupByColumns,
-			int offset,
-			/** Null when no explicit {@code LIMIT} clause. */
-			Integer limitOrNull,
+			/**
+			 * OFFSET value: non-negative {@link Integer} or prepare-time {@link org.genfork.grid.sql.SqlBindParam}.
+			 * Use {@link #offset()} after bind / for literal SQL.
+			 */
+			Object offsetValue,
+			/**
+			 * LIMIT value: non-negative {@link Integer}, prepare-time {@link org.genfork.grid.sql.SqlBindParam},
+			 * or null when no {@code LIMIT} clause. Use {@link #limitOrNull()} after bind / for literal SQL.
+			 */
+			Object limitValueOrNull,
 			boolean distinct,
 			/** ANTLR-parsed HAVING comparison ({@code AggComparison} / column compare), or null. */
 			HavingPredicate havingOrNull,
@@ -344,6 +352,19 @@ public final class SelectAst {
 			/** Locked rows are omitted instead of waiting. */
 			boolean skipLocked
 	) implements Stmt {
+		/** Resolved non-negative OFFSET (rejects unresolved prepare binds). */
+		public int offset() {
+			return SqlParseSupport.resolvedPagingInt(offsetValue, "OFFSET");
+		}
+
+		/** Resolved LIMIT or null when unbounded (rejects unresolved prepare binds). */
+		public Integer limitOrNull() {
+			if (limitValueOrNull == null) {
+				return null;
+			}
+			return SqlParseSupport.resolvedPagingInt(limitValueOrNull, "LIMIT");
+		}
+
 		/** First GROUP BY column, or null when ungrouped. */
 		public String groupByColumnOrNull() {
 			return groupByColumns == null || groupByColumns.isEmpty()

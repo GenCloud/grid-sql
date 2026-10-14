@@ -22,6 +22,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import org.genfork.grid.catalog.CatalogMetaCache;
 import org.genfork.grid.replication.region.RegionRole;
+import org.genfork.grid.sql.netty.SqlServer;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
 
 /**
@@ -1533,6 +1534,12 @@ public class GridConfigurationProperties {
 		private int port = 15432;
 		private String user = "grid";
 		private String password = "grid";
+		/**
+		 * Max concurrent {@code SESSION_OPEN} sessions per SQL TCP channel.
+		 * {@code <= 0} = unlimited on the listener. YAML: {@code grid.sql-server.max-tx-contexts}.
+		 * Default = {@link SqlServer#DEFAULT_MAX_TX_CONTEXTS}.
+		 */
+		private int maxTxContexts = SqlServer.DEFAULT_MAX_TX_CONTEXTS;
 
 		public boolean isEnabled() {
 			return enabled;
@@ -1572,6 +1579,14 @@ public class GridConfigurationProperties {
 
 		public void setPassword(String password) {
 			this.password = password;
+		}
+
+		public int getMaxTxContexts() {
+			return maxTxContexts;
+		}
+
+		public void setMaxTxContexts(int maxTxContexts) {
+			this.maxTxContexts = maxTxContexts;
 		}
 	}
 }

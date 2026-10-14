@@ -81,4 +81,25 @@ public interface TxContext {
 	 * Each emitted {@link Result} is one statement outcome; fail-fast aborts the remainder.
 	 */
 	Flux<Result> executeBatch(List<String> sqls);
+
+	/**
+	 * Execute bound {@code statements} in order sharing this open TX (remote: one {@code BATCH_EXEC} RTT).
+	 * <p>
+	 * All statements see the same dirty buffer until {@link #commit()} / {@link #rollback()}.
+	 * Each emitted {@link Result} is one statement outcome; fail-fast aborts the remainder.
+	 */
+	default Flux<Result> executeBatchBound(List<BatchStatement> statements) {
+		if (statements == null || statements.isEmpty()) {
+			return Flux.empty();
+		}
+		return Flux.fromIterable(statements)
+				.concatMap(slot -> {
+					Statement statement = createStatement(slot.sql());
+					final Object[] binds = slot.binds();
+					for (int i = 0; i < binds.length; i++) {
+						statement = statement.bind(i, binds[i]);
+					}
+					return statement.execute();
+				});
+	}
 }

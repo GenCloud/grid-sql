@@ -15,42 +15,38 @@
  */
 package org.genfork.grid.jooq;
 
+import java.util.EnumSet;
+import java.util.Objects;
+import java.util.Set;
+
+import org.genfork.grid.jooq.dialect.GridDialect;
 import org.jooq.Configuration;
 import org.jooq.SQLDialect;
+import org.jooq.conf.FetchTriggerValuesAfterReturning;
 import org.jooq.conf.ParamType;
 import org.jooq.conf.RenderKeywordCase;
 import org.jooq.conf.RenderNameCase;
+import org.jooq.conf.RenderOptionalKeyword;
 import org.jooq.conf.RenderQuotedNames;
 import org.jooq.conf.Settings;
 import org.jooq.impl.DefaultConfiguration;
 
 /**
- * Grid-tuned jOOQ dialect / settings for SimplifiedSql string building.
+ * Grid-tuned jOOQ host dialect / settings for SimplifiedSql string building.
  * <p>
  * This module is <strong>not</strong> a database engine. jOOQ only builds SQL strings
  * (and optionally executes them over JDBC). The server still parses with ANTLR
  * {@code SimplifiedSql}; product capacity remains on {@code grid://}
  * {@code ConnectionFactory}.
  * <p>
- * Dialect: {@link SQLDialect#DEFAULT} (closest generic / ANSI-ish baseline). There is no
- * first-class Grid dialect enum in OSS jOOQ; do not switch to Postgres/MySQL dialects —
- * those emit dialect-specific syntax SimplifiedSql rejects.
+ * Host dialect: {@link SQLDialect#DEFAULT} only. Logical dialect capabilities live in
+ * {@link GridDialect}; critical clauses (ON CONFLICT / RETURNING / TRUNCATE) are rendered
+ * by Grid QueryParts via {@link GridDSL#insertInto} / {@link GridDSL#truncate} — never via
+ * SQLITE / POSTGRES / MYSQL product dialects or VisitListener / ExecuteListener SQL rewrites.
  * <p>
- * Supported DSL surface (must match grammar):
- * <ul>
- *   <li>SELECT with EQ JOIN only ({@code ON col = col}); INNER/LEFT/RIGHT/FULL as in SimplifiedSql</li>
- *   <li>ORDER BY + LIMIT / OFFSET</li>
- *   <li>INSERT … VALUES; UPSERT … VALUES; INSERT … ON CONFLICT DO UPDATE|DO NOTHING</li>
- *   <li>UPDATE / DELETE with mandatory WHERE</li>
- * </ul>
- * Limits / avoid: quoted identifiers, INSERT SELECT, multi-table UPDATE SET from
- * vendor dialects, non-EQ JOIN predicates, vendor functions not in SimplifiedSql.
- * {@code DSLContext.insert…onConflict} under {@link SQLDialect#DEFAULT} may emit
- * MySQL {@code ON DUPLICATE KEY} — use {@code UPSERT} or a plain {@code ON CONFLICT}
- * string instead.
- * Do not use Hikari as the product DataSource — prefer
- * {@link org.genfork.grid.jdbc.GridDataSource} (TCP floor
- * {@link org.genfork.grid.jdbc.GridDataSource#MIN_TCP_CHANNELS}).
+ * jOOQ 3.19+ emits a one-shot WARN ({@code DefaultExecuteContext.logDefaultDialect}) when
+ * executing under {@code DEFAULT}. That is expected for Grid (not a Spring misconfiguration);
+ * Spring consumers silence it via {@code GridJooqSpringSupport} / logging config.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -58,17 +54,39 @@ import org.jooq.impl.DefaultConfiguration;
  */
 public final class GridSQL {
 	/**
-	 * Closest OSS dialect for SimplifiedSql rendering (generic DEFAULT, not a vendor dialect).
+	 * Closest OSS host dialect for SimplifiedSql rendering (generic DEFAULT, not a vendor dialect).
 	 */
 	public static final SQLDialect DIALECT = SQLDialect.DEFAULT;
 
 	private static final String MODULE_NAME = "grid-jooq";
+	private static final String ERR_CONFIGURATION = "configuration";
+	private static final String ERR_VENDOR_DIALECT_PREFIX =
+			"Grid product path forbids vendor SQLDialect (use DEFAULT + GridDSL QueryParts): ";
+
+	/** Vendor dialects that must never be the product render host. */
+	private static final Set<SQLDialect> FORBIDDEN_PRODUCT_DIALECTS = EnumSet.of(
+			SQLDialect.SQLITE,
+			SQLDialect.POSTGRES,
+			SQLDialect.MYSQL,
+			SQLDialect.MARIADB,
+			SQLDialect.H2,
+			SQLDialect.HSQLDB,
+			SQLDialect.DERBY,
+			SQLDialect.FIREBIRD,
+			SQLDialect.CUBRID,
+			SQLDialect.IGNITE);
 
 	private GridSQL() {
 	}
 
 	/**
 	 * Settings tuned so rendered SQL is accepted by SimplifiedSql (unquoted names, {@code ?} binds).
+	 * <p>
+	 * {@link FetchTriggerValuesAfterReturning#NEVER} keeps native {@code RETURNING} when apps
+	 * use jOOQ returning steps under DEFAULT (no {@code last_insert_rowid} emulation).
+	 * <p>
+	 * {@link RenderOptionalKeyword#ON} for field aliases forces {@code AS} so
+	 * {@code fetchExists} renders {@code SELECT 1 AS one} (SimplifiedSql rejects bare {@code 1 one}).
 	 */
 	public static Settings settings() {
 		return new Settings()
@@ -78,17 +96,65 @@ public final class GridSQL {
 				.withRenderCatalog(false)
 				.withRenderSchema(false)
 				.withParamType(ParamType.INDEXED)
-				.withRenderFormatted(false);
+				.withRenderFormatted(false)
+				.withRenderOptionalAsKeywordForFieldAliases(RenderOptionalKeyword.ON)
+				.withFetchTriggerValuesAfterReturning(FetchTriggerValuesAfterReturning.NEVER);
 	}
 
 	/**
-	 * Fresh configuration: {@link #DIALECT} + {@link #settings()}, no connection.
+	 * Fresh configuration: {@link #DIALECT} + {@link #settings()}, no connection, no strip listeners.
 	 */
 	public static Configuration configuration() {
 		final DefaultConfiguration configuration = new DefaultConfiguration();
+		installProduct(configuration);
+		return configuration;
+	}
+
+	/**
+	 * Product install: host {@link #DIALECT} + {@link #settings()}.
+	 * <p>
+	 * Fail-fast if a forbidden vendor dialect is already set. Does <strong>not</strong> register
+	 * VisitListener / ExecuteListener SQL rewrite (strip) listeners.
+	 *
+	 * @return the same configuration for chaining
+	 */
+	public static Configuration installProduct(Configuration configuration) {
+		Objects.requireNonNull(configuration, ERR_CONFIGURATION);
+		final SQLDialect current = configuration.dialect();
+		if (current != null && isForbiddenProductDialect(current)) {
+			throw new IllegalStateException(ERR_VENDOR_DIALECT_PREFIX + current);
+		}
 		configuration.set(DIALECT);
 		configuration.set(settings());
 		return configuration;
+	}
+
+	/**
+	 * Overwrite any preset dialect with {@link #DIALECT} + {@link #settings()} (no fail-fast).
+	 * Use when migrating configs that still carry SQLITE from soft-swap.
+	 */
+	public static Configuration installProductOverwrite(Configuration configuration) {
+		Objects.requireNonNull(configuration, ERR_CONFIGURATION);
+		configuration.set(DIALECT);
+		configuration.set(settings());
+		return configuration;
+	}
+
+	/** True when {@code dialect} is banned as a product render host. */
+	public static boolean isForbiddenProductDialect(SQLDialect dialect) {
+		if (dialect == null) {
+			return false;
+		}
+		final SQLDialect family = dialect.family();
+		return FORBIDDEN_PRODUCT_DIALECTS.contains(dialect)
+				|| FORBIDDEN_PRODUCT_DIALECTS.contains(family);
+	}
+
+	/**
+	 * Logical SimplifiedSql dialect (capabilities); host enum stays {@link #DIALECT}.
+	 */
+	public static GridDialect logicalDialect() {
+		return GridDialect.INSTANCE;
 	}
 
 	/**

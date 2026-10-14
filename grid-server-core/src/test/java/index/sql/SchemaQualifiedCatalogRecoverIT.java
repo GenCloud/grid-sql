@@ -65,6 +65,10 @@ class SchemaQualifiedCatalogRecoverIT {
 
 		final String compacted = Files.readString(catalog.resolve("ddl.sql"), StandardCharsets.UTF_8);
 		assertFalse(compacted.contains("CREATE INDEX auth_server."), compacted);
-		assertTrue(compacted.contains("CREATE INDEX account_game_server_data_pk ON"));
+		assertFalse(compacted.contains("CREATE UNIQUE INDEX auth_server."), compacted);
+		// STRICT (PK mirror) compact emit must keep UNIQUE and a leaf index name (no schema dots).
+		assertTrue(
+				compacted.contains("CREATE UNIQUE INDEX account_game_server_data_pk ON"),
+				compacted);
 	}
 }

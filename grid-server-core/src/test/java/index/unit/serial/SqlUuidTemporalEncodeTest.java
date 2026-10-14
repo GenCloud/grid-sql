@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -32,6 +33,8 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * UUID / DATE / TIME / TIMESTAMPTZ logical-row encode/decode.
@@ -124,5 +127,24 @@ class SqlUuidTemporalEncodeTest {
 		final byte[] a = SqlTypeCoercion.uuidToBytes(id);
 		final byte[] b = SqlTypeCoercion.uuidToBytes(id);
 		assertArrayEquals(a, b);
+	}
+
+	@Test
+	void timestampCoerceAcceptsInstantAndLocalDateTime() {
+		final Instant i = Instant.parse("2026-10-10T08:28:08Z");
+		assertEquals(
+				"2026-10-10T08:28:08",
+				RowEncoder.coerceTo(SqlType.TIMESTAMP, i));
+		assertEquals(
+				"2026-10-10T11:28:08",
+				RowEncoder.coerceTo(SqlType.TIMESTAMP, LocalDateTime.of(2026, 10, 10, 11, 28, 8)));
+	}
+
+	@Test
+	void instantToIntFailsClosed() {
+		final IllegalArgumentException ex = assertThrows(
+				IllegalArgumentException.class,
+				() -> RowEncoder.coerceTo(SqlType.INT, Instant.parse("2026-10-10T08:28:08.410874800Z")));
+		assertTrue(ex.getMessage().contains("cannot coerce temporal"));
 	}
 }

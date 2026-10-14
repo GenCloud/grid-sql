@@ -301,11 +301,15 @@ public final class SqlDdlExecutor {
 		}
 		final IndexDef def = IndexDef.of(s.indexName(), s.kind(), s.columns().toArray(String[]::new));
 		final long epoch = catalog.nextEpoch();
-		store.addIndex(def, epoch);
+		final boolean replay = applyingReplicatedDdl.get();
+		store.addIndex(def, epoch, !replay);
 		catalog.replaceSchema(store.schema());
-		final String persist = SqlDdlRender.createIndex(s, store.schema().catalogKey());
-		catalog.appendDdl(persist);
-		publishDdl(persist, epoch);
+		if (!replay) {
+			final String persist = SqlDdlRender.createIndex(s, store.schema().catalogKey());
+			catalog.appendDdl(persist);
+			publishDdl(persist, epoch);
+			catalog.rewriteCompactedDdl();
+		}
 		return SqlResult.ddl(SqlStatementTag.CREATE_INDEX);
 	}
 
@@ -319,6 +323,8 @@ public final class SqlDdlExecutor {
 		final TableStore store = tables.requireStore(tables.resolveTable(session, table));
 		if (store.schema().findIndex(s.indexName()) == null && !store.index().hasNamedIndex(s.indexName())) {
 			if (s.ifExists() || applyingReplicatedDdl.get()) {
+				// Schema already clean — still best-effort purge orphan sealed sidecars.
+				store.purgeOrphanSealedIndex(s.indexName());
 				return SqlResult.ddl(SqlStatementTag.DROP_INDEX);
 			}
 			throw new IllegalStateException("Index not found: " + s.indexName());
@@ -326,9 +332,13 @@ public final class SqlDdlExecutor {
 		final long epoch = catalog.nextEpoch();
 		store.dropIndex(s.indexName(), epoch);
 		catalog.replaceSchema(store.schema());
-		final String persist = SqlDdlRender.dropIndex(s, store.schema().catalogKey());
-		catalog.appendDdl(persist);
-		publishDdl(persist, epoch);
+		if (!applyingReplicatedDdl.get()) {
+			final String persist = SqlDdlRender.dropIndex(s, store.schema().catalogKey());
+			catalog.appendDdl(persist);
+			publishDdl(persist, epoch);
+			// Compact so restart does not replay CREATE UNIQUE after stackable rows hydrate.
+			catalog.rewriteCompactedDdl();
+		}
 		return SqlResult.ddl(SqlStatementTag.DROP_INDEX);
 	}
 

@@ -147,9 +147,13 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 		builder.withDetail(DETAIL_LOCK_WAIT_TIMEOUTS, SqlLockMetrics.waitTimeouts());
 		builder.withDetail(DETAIL_LOCK_CANCELS, SqlLockMetrics.waitCancels());
 		builder.withDetail(DETAIL_SQL_CANCEL_INFLIGHT, DistributedQueryMetrics.cancelActive());
-		final Integer maxTx = properties.getSql() == null ? null : properties.getSql().getMaxTxContexts();
-		if (maxTx != null) {
-			builder.withDetail(DETAIL_MAX_TX_CONTEXTS, maxTx);
+		if (properties.getSqlServer() != null) {
+			builder.withDetail(DETAIL_MAX_TX_CONTEXTS, properties.getSqlServer().getMaxTxContexts());
+		} else {
+			final Integer maxTx = properties.getSql() == null ? null : properties.getSql().getMaxTxContexts();
+			if (maxTx != null) {
+				builder.withDetail(DETAIL_MAX_TX_CONTEXTS, maxTx);
+			}
 		}
 		withReplicationDetails(builder);
 		return builder;

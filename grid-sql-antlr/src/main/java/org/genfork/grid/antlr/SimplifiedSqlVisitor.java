@@ -563,6 +563,12 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitJoinCond(SimplifiedSqlParser.JoinCondContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#joinCondInner}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitJoinCondInner(SimplifiedSqlParser.JoinCondInnerContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#selectList}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -828,6 +834,12 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitValue(SimplifiedSqlParser.ValueContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#jdbcEscapeValue}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitJdbcEscapeValue(SimplifiedSqlParser.JdbcEscapeValueContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link SimplifiedSqlParser#coalesceExpr}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -881,4 +893,10 @@ public interface SimplifiedSqlVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitLimitClause(SimplifiedSqlParser.LimitClauseContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link SimplifiedSqlParser#limitAtom}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitLimitAtom(SimplifiedSqlParser.LimitAtomContext ctx);
 }

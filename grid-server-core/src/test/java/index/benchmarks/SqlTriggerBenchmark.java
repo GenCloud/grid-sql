@@ -55,6 +55,12 @@ public class SqlTriggerBenchmark extends AbstractLatencyBenchmark {
 	private static final String PARENT = "trg_parent";
 	private static final String CHILD = "trg_child";
 	private static final String STATEMENT_SOURCE = "trg_statement_source";
+	private static final String CROSS_SCHEMA = "trg_xs";
+	private static final String CROSS_PARENT = "xs_parent";
+	private static final String CROSS_CHILD = "xs_child";
+	private static final String QUAL_CROSS_PARENT = CROSS_SCHEMA + "." + CROSS_PARENT;
+	private static final String QUAL_CROSS_CHILD = CROSS_SCHEMA + "." + CROSS_CHILD;
+	private static final String SCHEMA_PUBLIC = "public";
 	private static final int MISSING_PARENT_ID = -1;
 
 	private SqlEngine engine;
@@ -72,6 +78,14 @@ public class SqlTriggerBenchmark extends AbstractLatencyBenchmark {
 		engine.execute(
 				"CREATE TRIGGER trg_statement AFTER INSERT ON " + STATEMENT_SOURCE + " FOR EACH STATEMENT "
 						+ "AS 'DELETE FROM " + CHILD + " WHERE parent_id = " + MISSING_PARENT_ID + "'");
+		engine.execute("CREATE SCHEMA " + CROSS_SCHEMA);
+		final SqlSession crossSetup = engine.newSession();
+		engine.execute(crossSetup, "SET SCHEMA " + CROSS_SCHEMA);
+		engine.execute(crossSetup, "CREATE TABLE " + CROSS_PARENT + " (id INT PRIMARY KEY)");
+		engine.execute(crossSetup, "CREATE TABLE " + CROSS_CHILD + " (id INT PRIMARY KEY, parent_id INT)");
+		engine.execute(crossSetup,
+				"CREATE TRIGGER trg_xs_del BEFORE DELETE ON " + CROSS_PARENT + " FOR EACH ROW "
+						+ "AS 'DELETE FROM " + CROSS_CHILD + " WHERE id = OLD.id'");
 	}
 
 	@TearDown(Level.Trial)
@@ -102,5 +116,19 @@ public class SqlTriggerBenchmark extends AbstractLatencyBenchmark {
 		engine.execute(session, "BEGIN");
 		bh.consume(engine.execute(session, "DELETE FROM " + PARENT + " WHERE id = " + id).rowsAffected());
 		engine.execute(session, "ROLLBACK");
+	}
+
+	/**
+	 * Cross-schema DELETE from {@code public}: bare trigger body resolves via session schema scope.
+	 */
+	@Benchmark
+	public void deleteWithTriggerCrossSchema(Blackhole bh) {
+		final int id = seq.getAndIncrement();
+		engine.execute("INSERT INTO " + QUAL_CROSS_PARENT + " (id) VALUES (" + id + ")");
+		engine.execute("INSERT INTO " + QUAL_CROSS_CHILD + " (id, parent_id) VALUES (" + id + ", " + id + ")");
+		final SqlSession publicSession = engine.newSession();
+		engine.execute(publicSession, "SET SCHEMA " + SCHEMA_PUBLIC);
+		bh.consume(engine.execute(publicSession, "DELETE FROM " + QUAL_CROSS_PARENT + " WHERE id = " + id)
+				.rowsAffected());
 	}
 }

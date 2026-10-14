@@ -15,7 +15,14 @@
  */
 package org.genfork.grid.sql;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.NavigableMap;
+
+import org.genfork.grid.catalog.SqlTypeCoercion;
 
 /**
  * Positional ? bind materialization into SQL literals (injection-safe quoting).
@@ -25,6 +32,13 @@ import java.util.NavigableMap;
  * @since: 1.0
  */
 public final class SqlBinds {
+	private static final String LIT_TIMESTAMP_PREFIX = "TIMESTAMP '";
+	private static final String LIT_TIMESTAMPTZ_PREFIX = "TIMESTAMPTZ '";
+	private static final String LIT_DATE_PREFIX = "DATE '";
+	private static final String LIT_TIME_PREFIX = "TIME '";
+	private static final char LIT_SUFFIX = '\'';
+	private static final DateTimeFormatter TIME_LIT = DateTimeFormatter.ISO_LOCAL_TIME;
+
 	private SqlBinds() {
 	}
 
@@ -32,9 +46,39 @@ public final class SqlBinds {
 		if (binds == null || binds.length == 0) {
 			return sql;
 		}
-
 		final StringBuilder out = new StringBuilder(sql.length() + 16);
-		int bi = 0;
+		final int consumed = appendMaterialized(sql, binds, 0, out);
+		if (consumed != binds.length) {
+			throw new IllegalArgumentException(
+					"Bind count mismatch: placeholders=" + consumed + " binds=" + binds.length);
+		}
+		return out.toString();
+	}
+
+	/**
+	 * Replace {@code ?} in a SQL fragment using binds from {@code startIndex}, without requiring
+	 * that all bind slots are consumed (SET binds may precede a WHERE fragment).
+	 */
+	public static String materializeRange(String sql, Object[] binds, int startIndex) {
+		if (sql == null) {
+			return null;
+		}
+		if (binds == null || binds.length == 0 || sql.indexOf('?') < 0) {
+			return sql;
+		}
+		if (startIndex < 0) {
+			throw new IllegalArgumentException("bind startIndex must be >= 0");
+		}
+		final StringBuilder out = new StringBuilder(sql.length() + 16);
+		appendMaterialized(sql, binds, startIndex, out);
+		return out.toString();
+	}
+
+	/**
+	 * @return number of placeholders replaced
+	 */
+	private static int appendMaterialized(String sql, Object[] binds, int startIndex, StringBuilder out) {
+		int bi = startIndex;
 		boolean inStr = false;
 		for (int i = 0; i < sql.length(); i++) {
 			final char c = sql.charAt(i);
@@ -58,13 +102,7 @@ public final class SqlBinds {
 			}
 			out.append(c);
 		}
-
-		if (bi != binds.length) {
-			throw new IllegalArgumentException(
-					"Bind count mismatch: placeholders=" + bi + " binds=" + binds.length);
-		}
-
-		return out.toString();
+		return bi - startIndex;
 	}
 
 	public static String toSqlLiteral(Object value) {
@@ -78,6 +116,21 @@ public final class SqlBinds {
 			case Number n -> {
 				// Prefer signed decimal form once grammar accepts '-'? INT (VALUES + predicates).
 				return n.toString();
+			}
+			case LocalDateTime ldt -> {
+				return LIT_TIMESTAMP_PREFIX + SqlTypeCoercion.toTimestampString(ldt) + LIT_SUFFIX;
+			}
+			case Instant i -> {
+				return LIT_TIMESTAMPTZ_PREFIX + i.toString() + LIT_SUFFIX;
+			}
+			case LocalDate d -> {
+				return LIT_DATE_PREFIX + d + LIT_SUFFIX;
+			}
+			case LocalTime t -> {
+				return LIT_TIME_PREFIX + t.format(TIME_LIT) + LIT_SUFFIX;
+			}
+			case byte[] bytes -> {
+				return SqlBytesLiterals.formatXHex(bytes);
 			}
 			default -> {
 			}

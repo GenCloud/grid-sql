@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
+import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
 
 import java.io.IOException;
@@ -62,6 +63,15 @@ public final class SealedBPTreeService implements AutoCloseable {
 		SealedBPTreeWriter.write(file, domain, shard, indexName, ordered);
 		final SealedBPTreeReader replacement = SealedBPTreeReader.open(file);
 		readers.put(key, replacement);
+	}
+
+	/**
+	 * Unmap reader and delete sealed {@code .sbpt} for one index (DROP INDEX purge).
+	 */
+	public void deleteIndex(String domain, int shard, String indexName) {
+		final ReaderKey key = new ReaderKey(domain, shard, indexName);
+		closeQuietly(readers.remove(key));
+		GridFs.deleteQuietly(indexFile(domain, shard, indexName));
 	}
 
 	/**

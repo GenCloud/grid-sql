@@ -79,7 +79,9 @@ public class GridSqlAutoConfiguration {
 				.overlay(overlay, autoPinTtlMs)
 				.listen(tcp);
 		if (tcp) {
-			b.bind(listen.getHost(), listen.getPort()).auth(listen.getUser(), listen.getPassword());
+			b.bind(listen.getHost(), listen.getPort())
+					.auth(listen.getUser(), listen.getPassword())
+					.maxTxContexts(listen.getMaxTxContexts());
 		}
 		return b.build().start();
 	}

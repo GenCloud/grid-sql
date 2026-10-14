@@ -71,7 +71,7 @@ public class SqlGameWavesIT {
 		engine.execute("CREATE TABLE documents (id INT PRIMARY KEY, raw BYTEA, body JSON)");
 
 		final SqlResult result = engine.execute(
-				"INSERT INTO documents VALUES (1, 'wire', '{\"x\":1}') RETURNING raw, body");
+				"INSERT INTO documents VALUES (1, X'77697265', '{\"x\":1}') RETURNING raw, body");
 		assertArrayEquals("wire".getBytes(StandardCharsets.UTF_8), (byte[]) result.rows().getFirst()[0]);
 		assertEquals("{\"x\":1}", result.rows().getFirst()[1]);
 	}

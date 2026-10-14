@@ -176,7 +176,7 @@ grid:
 | `op-log.fsync` | Durability; batch path amortizes group fsync |
 | `orchid.tick-ms` / `order-threshold` | Sync admission; keep `2*pi*freq*tick/1000 << 1` |
 | `sql.default-shards` | Shard parallelism on CREATE TABLE |
-| Concurrent TX on one TCP | Hard channel cap is **8**; Boot does not apply `grid.sql.max-tx-contexts` to the listener — open more `Connection`s ([SQL server](../configuration/sql-server.md)) |
+| Concurrent TX on one TCP | Hard channel cap is **8**; raise `grid.sql-server.max-tx-contexts` — open more `Connection`s ([SQL server](../configuration/sql-server.md)) |
 | `durability.working-set-max-entries` + `hydrate-mode` | RAM ceiling vs sealed miss cost |
 | `swarm` / `placement-optimizer` | Load hints; production `apply-auto-cutover` default **true** (see [bio-inspired.md](../../understand/bio-inspired.md); set `false` only to suppress migrate under load) |
 

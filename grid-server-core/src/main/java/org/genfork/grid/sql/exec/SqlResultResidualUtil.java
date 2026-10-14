@@ -17,7 +17,6 @@ package org.genfork.grid.sql.exec;
 
 import org.genfork.grid.query.filters.FilterCondition;
 import org.genfork.grid.query.filters.impl.AlwaysTrueCondition;
-import org.genfork.grid.query.plan.QueryData;
 import org.genfork.grid.query.plan.QueryParser;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.ast.SelectAst.SelectSql;
@@ -40,18 +39,16 @@ public final class SqlResultResidualUtil {
 	}
 
 	/**
-	 * Build residual filter tree from SELECT text (ANTLR). Optional resolved subquery filters.
+	 * Build residual filter tree from SELECT text (ANTLR).
+	 * <p>
+	 * Delegates to {@link QueryParser#residualWhere} — covers table SELECT and bare
+	 * {@code SELECT lit… WHERE …} (insert-if-absent); never the index/plan path.
 	 */
 	public static FilterCondition selectFilter(String selectSql, List<FilterCondition> resolvedSubqueryFilters) {
 		final List<FilterCondition> resolved = resolvedSubqueryFilters == null
 				? Collections.emptyList()
 				: resolvedSubqueryFilters;
-		final QueryData qd = QueryParser.parseAndBuildCondition(
-				null, selectSql, Collections.emptyMap(), resolved);
-		if (qd.filter() == null || qd.filter().conditionTree() == null) {
-			return AlwaysTrueCondition.getInstance();
-		}
-		return qd.filter().conditionTree();
+		return QueryParser.residualWhere(selectSql, resolved);
 	}
 
 	/**

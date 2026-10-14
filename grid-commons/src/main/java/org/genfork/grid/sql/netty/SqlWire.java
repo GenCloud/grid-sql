@@ -36,7 +36,7 @@ import org.genfork.grid.sql.client.SessionRole;
 /**
  * Payload encode/decode helpers for SQL opcodes.
  * EXEC: {@code u32 sessionId | u32 sqlLen | sql | u16 bindCount | cells}.
- * BATCH_EXEC: {@code u32 sessionId | u32 n | n × (u32 sqlLen | utf8 sql)}.
+ * BATCH_EXEC: {@code u32 sessionId | u32 n | n × (u32 sqlLen | utf8 sql | u16 bindCount | cells)}.
  * <p>
  * WireTiny product path: heap {@link EncodeBuffers#allocateWireLe} + {@code byte[]}.
  * WireLarge / Netty pooled: {@code *Into(ByteBuf)} variants (no {@code toByteArray}).
@@ -93,6 +93,8 @@ public final class SqlWire {
 	private static final byte CELL_DATE = 7;
 	private static final byte CELL_TIME = 8;
 	private static final byte CELL_INSTANT = 9;
+	/** Bind-cell tag (not {@code SqlType.ordinal()}; TIMESTAMPTZ ordinal is also 10). */
+	private static final byte CELL_BYTES = 10;
 
 	private static final int CELL_UUID_BYTES = CELL_TAG_BYTES + 16;
 	private static final int CELL_DATE_BYTES = CELL_TAG_BYTES + Integer.BYTES;
@@ -180,23 +182,48 @@ public final class SqlWire {
 	}
 
 	/**
-	 * BATCH_EXEC payload: session id + ordered UTF-8 SQL strings (no binds).
+	 * One BATCH_EXEC statement slot: indexed SQL + positional binds (wire cells).
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/10
+	 * @since: 1.2
+	 */
+	public record BatchStatement(String sql, Object[] binds) {
+		public BatchStatement {
+			binds = binds == null ? new Object[0] : binds;
+		}
+	}
+
+	/**
+	 * BATCH_EXEC payload: session id + ordered statements (bindCount may be 0 per slot).
 	 */
 	public static byte[] batchExec(int sessionId, List<String> sqls) {
 		final List<String> list = sqls == null ? List.of() : sqls;
-		int size = SESSION_ID_BYTES + LEN_PREFIX_BYTES;
-		final List<byte[]> encoded = new ArrayList<>(list.size());
+		final List<BatchStatement> statements = new ArrayList<>(list.size());
 		for (String sql : list) {
-			final byte[] b = (sql == null ? "" : sql).getBytes(StandardCharsets.UTF_8);
-			encoded.add(b);
-			size += LEN_PREFIX_BYTES + b.length;
+			statements.add(new BatchStatement(sql, new Object[0]));
+		}
+		return batchExecStatements(sessionId, statements);
+	}
+
+	/**
+	 * BATCH_EXEC payload with per-statement binds.
+	 */
+	public static byte[] batchExecStatements(int sessionId, List<BatchStatement> statements) {
+		final List<BatchStatement> list = statements == null ? List.of() : statements;
+		int size = SESSION_ID_BYTES + LEN_PREFIX_BYTES;
+		for (BatchStatement st : list) {
+			final byte[] sqlBytes = (st.sql() == null ? "" : st.sql()).getBytes(StandardCharsets.UTF_8);
+			size += LEN_PREFIX_BYTES + sqlBytes.length + BIND_COUNT_BYTES;
+			for (Object cell : st.binds()) {
+				size += encodeCell(cell).length;
+			}
 		}
 		final ByteBuffer buf = EncodeBuffers.allocateWireLe(size);
 		buf.putInt(sessionId);
-		buf.putInt(encoded.size());
-		for (byte[] b : encoded) {
-			buf.putInt(b.length);
-			buf.put(b);
+		buf.putInt(list.size());
+		for (BatchStatement st : list) {
+			writeBatchStatement(buf, st);
 		}
 		return EncodeBuffers.toByteArray(buf);
 	}
@@ -206,14 +233,36 @@ public final class SqlWire {
 	 */
 	public static void batchExecInto(ByteBuf out, int sessionId, List<String> sqls) {
 		final List<String> list = sqls == null ? List.of() : sqls;
+		final List<BatchStatement> statements = new ArrayList<>(list.size());
+		for (String sql : list) {
+			statements.add(new BatchStatement(sql, new Object[0]));
+		}
+		batchExecStatementsInto(out, sessionId, statements);
+	}
+
+	/**
+	 * BATCH_EXEC with binds into {@code out}.
+	 */
+	public static void batchExecStatementsInto(ByteBuf out, int sessionId, List<BatchStatement> statements) {
+		final List<BatchStatement> list = statements == null ? List.of() : statements;
 		out.writeIntLE(sessionId);
 		out.writeIntLE(list.size());
-		for (String sql : list) {
-			lengthPrefixedBytesInto(out, (sql == null ? "" : sql).getBytes(StandardCharsets.UTF_8));
+		for (BatchStatement st : list) {
+			writeBatchStatementInto(out, st);
 		}
 	}
 
-	public record BatchExecPayload(int sessionId, List<String> sqls) {
+	/**
+	 * Decoded BATCH_EXEC payload.
+	 *
+	 * @author: GenCloud
+	 * @date: 2026/10
+	 * @since: 1.2
+	 */
+	public record BatchExecPayload(int sessionId, List<BatchStatement> statements) {
+		public List<String> sqls() {
+			return statements.stream().map(BatchStatement::sql).toList();
+		}
 	}
 
 	public static BatchExecPayload readBatchExec(byte[] payload) {
@@ -223,11 +272,44 @@ public final class SqlWire {
 		if (n < 0) {
 			throw new IllegalArgumentException("BATCH_EXEC n < 0");
 		}
-		final List<String> sqls = new ArrayList<>(n);
+		final List<BatchStatement> statements = new ArrayList<>(n);
 		for (int i = 0; i < n; i++) {
-			sqls.add(readUtf8(buf));
+			statements.add(readBatchStatement(buf));
 		}
-		return new BatchExecPayload(sessionId, List.copyOf(sqls));
+		return new BatchExecPayload(sessionId, List.copyOf(statements));
+	}
+
+	private static void writeBatchStatement(ByteBuffer buf, BatchStatement st) {
+		final byte[] sqlBytes = (st.sql() == null ? "" : st.sql()).getBytes(StandardCharsets.UTF_8);
+		buf.putInt(sqlBytes.length);
+		buf.put(sqlBytes);
+		final Object[] binds = st.binds();
+		buf.putShort((short) binds.length);
+		for (Object cell : binds) {
+			buf.put(encodeCell(cell));
+		}
+	}
+
+	private static void writeBatchStatementInto(ByteBuf out, BatchStatement st) {
+		lengthPrefixedBytesInto(out, (st.sql() == null ? "" : st.sql()).getBytes(StandardCharsets.UTF_8));
+		final Object[] binds = st.binds();
+		out.writeShortLE(binds.length);
+		for (Object cell : binds) {
+			encodeCellInto(out, cell);
+		}
+	}
+
+	private static BatchStatement readBatchStatement(ByteBuffer buf) {
+		final String sql = readUtf8(buf);
+		if (!buf.hasRemaining()) {
+			return new BatchStatement(sql, new Object[0]);
+		}
+		final int count = buf.getShort() & 0xffff;
+		final Object[] binds = new Object[count];
+		for (int i = 0; i < count; i++) {
+			binds[i] = decodeCell(buf);
+		}
+		return new BatchStatement(sql, binds);
 	}
 
 	public static byte[] sessionId(int id) {
@@ -553,6 +635,14 @@ public final class SqlWire {
 			b.putInt(i.getNano());
 			return EncodeBuffers.toByteArray(b);
 		}
+		if (cell instanceof byte[] raw) {
+			final byte[] b = raw == null ? new byte[0] : raw;
+			final ByteBuffer buf = EncodeBuffers.allocateWireLe(CELL_STRING_HEADER_BYTES + b.length);
+			buf.put(CELL_BYTES);
+			buf.putInt(b.length);
+			buf.put(b);
+			return EncodeBuffers.toByteArray(buf);
+		}
 		final byte[] s = String.valueOf(cell).getBytes(StandardCharsets.UTF_8);
 		final ByteBuffer b = EncodeBuffers.allocateWireLe(CELL_STRING_HEADER_BYTES + s.length);
 		b.put(CELL_STRING);
@@ -608,6 +698,13 @@ public final class SqlWire {
 			out.writeIntLE(i.getNano());
 			return;
 		}
+		if (cell instanceof byte[] raw) {
+			final byte[] b = raw == null ? new byte[0] : raw;
+			out.writeByte(CELL_BYTES);
+			out.writeIntLE(b.length);
+			out.writeBytes(b);
+			return;
+		}
 		final byte[] s = String.valueOf(cell).getBytes(StandardCharsets.UTF_8);
 		out.writeByte(CELL_STRING);
 		out.writeIntLE(s.length);
@@ -636,6 +733,12 @@ public final class SqlWire {
 			case CELL_DATE -> LocalDate.ofEpochDay(buf.getInt());
 			case CELL_TIME -> LocalTime.ofNanoOfDay(buf.getLong());
 			case CELL_INSTANT -> Instant.ofEpochSecond(buf.getLong(), buf.getInt());
+			case CELL_BYTES -> {
+				final int len = buf.getInt();
+				final byte[] b = new byte[len];
+				buf.get(b);
+				yield b;
+			}
 			default -> throw new IllegalArgumentException("bad cell kind " + kind);
 		};
 	}

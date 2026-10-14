@@ -20,7 +20,7 @@ Short definitions for the terms used across the operations and architecture page
 | `jdbc:grid://` | SQL URL of the JDBC client (same protocol) |
 | `SyncConnectionFactory` | Sync façade without `java.sql.*`: same `grid://`, wait via `SyncAwait` |
 | `readEndpoints` | SQL hosts for autocommit SELECT/EXPLAIN when `readPreference=REPLICA` |
-| `maxTxContexts` | Cap on logical sessions on one TCP. **Client** URL default **256**; **server** channel hard-cap **8** (Boot does not raise it from YAML) — open another `Connection` when exhausted |
+| `maxTxContexts` | Cap on logical sessions on one TCP. **Client** URL default **256**; **server** channel hard-cap **8** (configurable via `grid.sql-server.max-tx-contexts`) — open another `Connection` when exhausted |
 | `writerEligible` | Wire metadata: the node may accept writes |
 | `regionEpoch` | Epoch counter of the Active site under region fencing |
 | AQE | Adaptive Query Execution: parallel scan and `DIST_MAP` for heavy SELECTs |

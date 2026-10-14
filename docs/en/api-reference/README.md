@@ -10,7 +10,7 @@ Product SPI lives in **`grid-sql-client`** (apps) and **`grid-server-core`** (en
 |---------|--------------|
 | AUTH / connect reject | Wrong user/pass or node not ready yet |
 | `bad frameLen` | Client hit a replication port (**5615**/**5616**), not SQL |
-| `maxTxContexts=N exhausted` (wire code 5) | More than eight open sessions on one TCP (server hard-cap **8**); Boot does not raise it from YAML — open another `Connection` or close idle `TxContext`s ([SQL server](../configure-and-operate/configuration/sql-server.md)) |
+| `maxTxContexts=N exhausted` (wire code 5) | More than eight open sessions on one TCP (server hard-cap **8**); configurable via `grid.sql-server.max-tx-contexts` — open another `Connection` or close idle `TxContext`s ([SQL server](../configure-and-operate/configuration/sql-server.md)) |
 | Stale / `applyLagStale` on replica read | Catch-up lag; above threshold — **reject** (wait or read the writer) ([replica reads](../configure-and-operate/operations/replica-reads.md)) |
 | Write reject after role promotion | Client did not `rediscoverWriter()` — [promote](../configure-and-operate/operations/ha-promote.md) |
 | Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without `rediscoverWriter()` |
@@ -71,7 +71,7 @@ Next: [java-client](../develop/java-client.md), [transactions](../develop/transa
 
 Apps should **not** embed `SqlEngine` remotely — talk `grid://` to a starter/node. Boot wiring: [spring-boot](../develop/spring-boot.md).
 
-TCP listen session cap is **8** open contexts per channel (Boot does not raise it from `grid.sql.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` (per-node; replication does not ship it) — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
+TCP listen session cap is **8** open contexts per channel (set `grid.sql-server.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` (per-node; replication does not ship it) — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC client
 

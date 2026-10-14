@@ -33,7 +33,9 @@ public final class ColumnMetas {
 	public static final int PRECISION_DOUBLE = 17;
 	public static final int PRECISION_BOOLEAN = 1;
 	public static final int PRECISION_VARCHAR = 255;
-	public static final int PRECISION_BYTES = 0;
+	/** JDBC/codegen display size for unbounded {@link SqlType#BYTES} (not a storage cap). */
+	public static final int PRECISION_BYTES_UNBOUNDED = Integer.MAX_VALUE;
+	public static final int PRECISION_BYTES = PRECISION_BYTES_UNBOUNDED;
 	public static final int PRECISION_TIMESTAMP = 255;
 	public static final int PRECISION_UUID = SqlTypeWireSizes.UUID_BYTES;
 	public static final int PRECISION_DATE = 10;

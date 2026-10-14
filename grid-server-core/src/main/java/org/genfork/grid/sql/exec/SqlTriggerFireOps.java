@@ -115,7 +115,14 @@ public final class SqlTriggerFireOps {
 			final Stmt bound = granularity == TriggerGranularity.ROW
 					? SqlTriggerBindUtil.bindTrigger(def.bodyStmt(), schema, oldBlob, newBlob)
 					: def.bodyStmt();
-			runBody(session, engine, bound);
+			if (schema != null) {
+				SqlSessionSchemaScopeUtil.runWithSchema(
+						session,
+						schema.schemaName(),
+						() -> runBody(session, engine, bound));
+			} else {
+				runBody(session, engine, bound);
+			}
 		}
 	}
 

@@ -60,6 +60,22 @@ public final class NumericPlusComparisonCondition implements FilterCondition {
 		this.compareTo = compareTo;
 	}
 
+	public String getField() {
+		return field;
+	}
+
+	public Object getAddend() {
+		return addend;
+	}
+
+	public LogicalOperatorCondition.Operator getOperator() {
+		return operator;
+	}
+
+	public Object getCompareTo() {
+		return compareTo;
+	}
+
 	@Override
 	public boolean validate(TableSchema schema) {
 		final ColumnDef col = schema.column(field);

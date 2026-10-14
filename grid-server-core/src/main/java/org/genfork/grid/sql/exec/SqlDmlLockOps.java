@@ -41,6 +41,25 @@ public final class SqlDmlLockOps {
 		}
 	}
 
+	/**
+	 * Serialize {@code ON CONFLICT} on the same UNIQUE arbiter: TX holds until commit/rollback;
+	 * autocommit holds only for the statement (caller must {@link #releaseConflictArbiterAutocommit}).
+	 */
+	static void acquireConflictArbiter(SqlSession session, String table, byte[] arbiterKey) {
+		if (session.inTransaction()) {
+			ensureRowLocked(session, table, arbiterKey);
+		} else {
+			session.lockManager().lock(table, arbiterKey);
+		}
+	}
+
+	/** Release autocommit arbiter lock; no-op inside an open TX (buffer owns the lock). */
+	static void releaseConflictArbiterAutocommit(SqlSession session, String table, byte[] arbiterKey) {
+		if (!session.inTransaction()) {
+			session.lockManager().unlock(table, arbiterKey);
+		}
+	}
+
 	static byte[] existingBytes(SqlSession session, String table, TableStore store, byte[] key) {
 		if (key == null) {
 			return null;

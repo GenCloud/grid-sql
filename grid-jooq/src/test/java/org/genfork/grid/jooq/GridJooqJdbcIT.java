@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.ServerSocket;
 import java.nio.file.Files;
+import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
 
 import org.genfork.grid.catalog.TableCatalog;
@@ -36,6 +37,7 @@ import org.jooq.Table;
 import org.jooq.impl.DataSourceConnectionProvider;
 import org.jooq.impl.DefaultConfiguration;
 import org.jooq.impl.DefaultDSLContext;
+import org.jooq.impl.SQLDataType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -112,6 +114,23 @@ class GridJooqJdbcIT {
 		dsl.insertInto(accounts).columns(id, balance).values(2, 200).execute();
 		assertEquals(Integer.valueOf(200),
 				dsl.select(balance).from(accounts).where(id.eq(2)).fetchOne(balance));
+	}
+
+	/**
+	 * jOOQ DEFAULT {@code LOCALDATETIME} → {@code getTimestamp}; driver must accept ISO without seconds.
+	 */
+	@Test
+	void localDateTimeRoundTripWithoutSeconds() {
+		engine.execute("CREATE TABLE ev (id INT PRIMARY KEY, ts TIMESTAMP)");
+		final DSLContext dsl = GridDSL.using(dataSource);
+
+		final Table<Record> ev = table(name("ev"));
+		final Field<Integer> id = field(name("id"), Integer.class);
+		final Field<LocalDateTime> ts = field(name("ts"), SQLDataType.LOCALDATETIME);
+		final LocalDateTime wall = LocalDateTime.of(2026, 10, 12, 12, 0, 0);
+
+		assertEquals(1, dsl.insertInto(ev).columns(id, ts).values(1, wall).execute());
+		assertEquals(wall, dsl.select(ts).from(ev).where(id.eq(1)).fetchOne(ts));
 	}
 
 	private static int freePort() throws Exception {

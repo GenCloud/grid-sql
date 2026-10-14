@@ -55,7 +55,7 @@ grid://<пользователь>:<пароль>@<хост>:<порт>[,<хос�
 | `timezone` | `UTC` | Часовой пояс для временных типов |
 | `readEndpoints` / `readPreference` / `staleReadPolicy` | — / `PRIMARY` / reject-on-stale | Маршрутизация чтения; см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md) |
 
-На **сервере** по умолчанию канал принимает не больше **8** открытых сессий на TCP. Spring Boot **не** прокидывает `grid.sql.max-tx-contexts` в слушатель — если клиент просит больше восьми на одном сокете, откройте дополнительные `Connection` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md), [транзакции](../develop/transactions.md)).
+На **сервере** по умолчанию канал принимает не больше **8** открытых сессий на TCP. Spring задаётся `grid.sql-server.max-tx-contexts` в слушатель — если клиент просит больше восьми на одном сокете, откройте дополнительные `Connection` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md), [транзакции](../develop/transactions.md)).
 
 Полный список (включая HA): [Java-клиент](../develop/java-client.md). JDBC и синхронный доступ без JDBC: [JDBC-клиент](../develop/jdbc-tooling.md). Смена пишущего: [повышение роли](../configure-and-operate/operations/ha-promote.md).
 

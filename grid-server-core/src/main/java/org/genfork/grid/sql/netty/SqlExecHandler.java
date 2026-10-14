@@ -56,7 +56,6 @@ import org.genfork.grid.threading.ThreadService;
  * @since: 1.0
  */
 public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> {
-	public static final int DEFAULT_MAX_TX_CONTEXTS = 256;
 	private static final int SERVER_PUSH_REQUEST_ID = 0;
 	private static final String STALE_OVERRIDE_NODE_ID = "stale-override";
 
@@ -86,7 +85,7 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 	private volatile String authUser = "anonymous";
 
 	public SqlExecHandler(SqlEngine engine, String expectedUser, String expectedPassword) {
-		this(engine, expectedUser, expectedPassword, DEFAULT_MAX_TX_CONTEXTS, null);
+		this(engine, expectedUser, expectedPassword, SqlServer.DEFAULT_MAX_TX_CONTEXTS, null);
 	}
 
 	public SqlExecHandler(SqlEngine engine, String expectedUser, String expectedPassword, int maxTxContexts) {
@@ -318,15 +317,18 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 							"unknown sessionId " + batch.sessionId())));
 			return;
 		}
-		final List<String> sqls = batch.sqls();
-		if (sqls.isEmpty()) {
+		final List<SqlWire.BatchStatement> statements = batch.statements();
+		if (statements.isEmpty()) {
+			// Fail-closed: never leave the client correlator waiting on n=0.
+			ctx.writeAndFlush(new SqlFrame(SqlOpcode.ERROR, frame.requestId(),
+					SqlWire.error(SqlWireErrorCodes.EXEC_FAILED, "empty BATCH_EXEC")));
 			return;
 		}
 		final int requestId = frame.requestId();
 		inFlightExec.add(requestId);
 		final SerialTaskQueue queue = sessionQueues.computeIfAbsent(batch.sessionId(), k -> new SerialTaskQueue());
 		queue.submit(ThreadService.getLogicExecutor(),
-				() -> runBatchStep(ctx, requestId, session, queue, sqls, 0));
+				() -> runBatchStep(ctx, requestId, session, queue, statements, 0));
 	}
 
 	private void runBatchStep(
@@ -334,10 +336,10 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 			int requestId,
 			SqlSession session,
 			SerialTaskQueue queue,
-			List<String> sqls,
+			List<SqlWire.BatchStatement> statements,
 			int index
 	) {
-		if (index >= sqls.size()) {
+		if (index >= statements.size()) {
 			finishRequest(requestId);
 			return;
 		}
@@ -347,10 +349,11 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		}
 		interruptRegistry.register(requestId);
 		try {
-			final SqlResult result = engine.execute(session, sqls.get(index));
+			final SqlWire.BatchStatement step = statements.get(index);
+			final SqlResult result = engine.execute(session, step.sql(), step.binds());
 			final Runnable next = () -> queue.submit(ThreadService.getLogicExecutor(),
-					() -> runBatchStep(ctx, requestId, session, queue, sqls, index + 1));
-			writeResult(ctx, requestId, result, index + 1 < sqls.size() ? next : null);
+					() -> runBatchStep(ctx, requestId, session, queue, statements, index + 1));
+			writeResult(ctx, requestId, result, index + 1 < statements.size() ? next : null);
 		} catch (Exception ex) {
 			SqlExecDispatchSupport.finishCancelledOrWriteError(
 					ctx, requestId, ex, this::consumeCancelIntent, this::finishRequest, this::serverMeta);

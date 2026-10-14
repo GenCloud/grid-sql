@@ -110,6 +110,29 @@ public class SqlEngineCatalogDmlTest {
 		assertEquals("updated", sel.rows().getFirst()[1]);
 	}
 
+	/**
+	 * jOOQ stackable insert-if-absent: {@code INSERT … SELECT lit… WHERE NOT EXISTS (…)}.
+	 */
+	@Test
+	void insertSelectLiteralsWhereNotExists() {
+		engine.execute(
+				"CREATE TABLE item_data (id INT PRIMARY KEY, owner_id INT, item_id INT, item_count BIGINT, location_data VARCHAR)");
+		engine.execute(
+				"INSERT INTO item_data (id, owner_id, item_id, item_count, location_data) "
+						+ "SELECT 1, 10, 57, 5, 'INVENTORY' WHERE NOT EXISTS ("
+						+ "SELECT 1 AS one FROM item_data WHERE owner_id = 10 AND item_id = 57 AND location_data = 'INVENTORY')");
+		assertEquals(1, engine.execute("SELECT id FROM item_data WHERE id = 1").rows().size());
+
+		final SqlResult second = engine.execute(
+				"INSERT INTO item_data (id, owner_id, item_id, item_count, location_data) "
+						+ "SELECT 2, 10, 57, 99, 'INVENTORY' WHERE NOT EXISTS ("
+						+ "SELECT 1 AS one FROM item_data WHERE owner_id = 10 AND item_id = 57 AND location_data = 'INVENTORY')");
+		assertEquals(0L, second.rowsAffected());
+		assertEquals(1, engine.execute("SELECT id FROM item_data").rows().size());
+		assertEquals(5L, ((Number) engine.execute(
+				"SELECT item_count FROM item_data WHERE id = 1").rows().getFirst()[0]).longValue());
+	}
+
 	@Test
 	void updateMixedRmwRequiresPkEquality() {
 		engine.execute("CREATE TABLE mix2 (id INT PRIMARY KEY, bucket INT, n INT, v VARCHAR)");

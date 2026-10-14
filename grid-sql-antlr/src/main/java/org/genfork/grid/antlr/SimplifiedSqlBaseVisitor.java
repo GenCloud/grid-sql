@@ -662,6 +662,13 @@ public class SimplifiedSqlBaseVisitor<T> extends AbstractParseTreeVisitor<T> imp
 	 * <p>The default implementation returns the result of calling
 	 * {@link #visitChildren} on {@code ctx}.</p>
 	 */
+	@Override public T visitJoinCondInner(SimplifiedSqlParser.JoinCondInnerContext ctx) { return visitChildren(ctx); }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation returns the result of calling
+	 * {@link #visitChildren} on {@code ctx}.</p>
+	 */
 	@Override public T visitSelectList(SimplifiedSqlParser.SelectListContext ctx) { return visitChildren(ctx); }
 	/**
 	 * {@inheritDoc}
@@ -949,6 +956,13 @@ public class SimplifiedSqlBaseVisitor<T> extends AbstractParseTreeVisitor<T> imp
 	 * <p>The default implementation returns the result of calling
 	 * {@link #visitChildren} on {@code ctx}.</p>
 	 */
+	@Override public T visitJdbcEscapeValue(SimplifiedSqlParser.JdbcEscapeValueContext ctx) { return visitChildren(ctx); }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation returns the result of calling
+	 * {@link #visitChildren} on {@code ctx}.</p>
+	 */
 	@Override public T visitCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx) { return visitChildren(ctx); }
 	/**
 	 * {@inheritDoc}
@@ -1006,4 +1020,11 @@ public class SimplifiedSqlBaseVisitor<T> extends AbstractParseTreeVisitor<T> imp
 	 * {@link #visitChildren} on {@code ctx}.</p>
 	 */
 	@Override public T visitLimitClause(SimplifiedSqlParser.LimitClauseContext ctx) { return visitChildren(ctx); }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation returns the result of calling
+	 * {@link #visitChildren} on {@code ctx}.</p>
+	 */
+	@Override public T visitLimitAtom(SimplifiedSqlParser.LimitAtomContext ctx) { return visitChildren(ctx); }
 }

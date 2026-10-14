@@ -199,12 +199,16 @@ public class OrchidMultiDcVotersTest {
 
 		survivor.forgetPeer("sdc-a");
 		final long deadline = System.currentTimeMillis() + 3_000L;
-		while (System.currentTimeMillis() < deadline && survivor.getLastCommittedSeq() < seq) {
+		// tip advances before fireApply in sealBufferedProposesFromProposerSerial — wait both
+		while (System.currentTimeMillis() < deadline
+				&& (survivor.getLastCommittedSeq() < seq || applied.get() < 1)) {
 			Thread.sleep(20L);
 		}
 		assertTrue(survivor.getLastCommittedSeq() >= seq,
 				"forgetPeer must seal digested propose before clear; tip=" + survivor.getLastCommittedSeq());
-		assertTrue(applied.get() >= 1, "sealed propose must apply");
+		assertTrue(applied.get() >= 1,
+				"sealed propose must apply; tip=" + survivor.getLastCommittedSeq()
+						+ " applied=" + applied.get());
 	}
 
 	@Test

@@ -44,7 +44,7 @@ curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.d
 | `promoteHint` | string, `n/a` | Тот же hint, что в wire `ServerMeta` |
 | `regionEpoch` / `regionRole` | long / int, `n/a` | Multi-site region claim |
 | `oplogArchiveEnabled` | boolean, `n/a` | Путь архива OpLog |
-| `maxTxContexts` | integer | Может появиться из YAML `grid.sql.max-tx-contexts` — **информативное** поле; Boot **не** поднимает им жёсткий потолок канала (**8**) — [SQL-сервер](configuration/sql-server.md) |
+| `maxTxContexts` | integer | Из `grid.sql-server.max-tx-contexts` (по умолчанию **8**) — [SQL-сервер](configuration/sql-server.md) |
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Блокировки и CANCEL |
 
 Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и те же шкалы согласия/ремонта. Ключа `reason` нет: живой процесс с несинхронизированным кластером жив, но не готов.

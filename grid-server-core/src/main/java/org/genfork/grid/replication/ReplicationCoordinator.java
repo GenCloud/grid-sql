@@ -1283,6 +1283,18 @@ public class ReplicationCoordinator {
 		onTableDropped(domainType);
 	}
 
+	/**
+	 * DROP INDEX: purge sealed {@code .sbpt}/{@code .sbm} for one secondary index (not full domain).
+	 */
+	public void purgeIndexArtifacts(String domainType, String catalogIndexName, List<String> columns) {
+		if (domainType == null || domainType.isBlank()) {
+			return;
+		}
+		if (sealedGridMapService != null) {
+			sealedGridMapService.purgeIndexArtifacts(domainType, catalogIndexName, columns);
+		}
+	}
+
 	public OrchidNode getOrchidNode() {
 		return this.orchidNode;
 	}

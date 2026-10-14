@@ -27,6 +27,7 @@ grid:
 | `grid.sql-server.host` | `0.0.0.0` | Bind address; restrict it when the host is multi-homed |
 | `grid.sql-server.port` | `15432` | SQL port |
 | `grid.sql-server.user` / `password` | `grid` / `grid` | Bootstrap master credentials; when the user catalog is empty they are seeded as administrator (full power). Blank both → open-auth (no seed) |
+| `grid.sql-server.max-tx-contexts` | `8` | Max concurrent logical sessions per SQL TCP channel (`<= 0` = unlimited) |
 | `grid.sql.default-shards` | `4` | Shard count for tables created without an explicit clause |
 | `grid.sql.data-dir` | `./data/catalog` | Catalog root; `catalog/privileges.meta` lives under it (per-node; not shipped by replication) |
 | `grid.sql.lock-wait-timeout-ms` | `8000` | Record-lock wait ceiling before `lock wait timeout` |
@@ -68,10 +69,10 @@ The two sides have different defaults, and the server side is the one that binds
 
 | Side | Default | Notes |
 |------|---------|-------|
-| Server channel (Spring Boot wiring) | `8` | The Boot adapter does not forward `grid.sql.max-tx-contexts` to the listener |
+| Server channel | `8` | YAML `grid.sql-server.max-tx-contexts` (Boot → `SqlServerRuntime` → listener); `<= 0` = unlimited |
 | Client (`grid://`, `RemoteConnectionFactory`) | `256` | URL parameter or constructor argument |
 
-So an application that keeps more than eight transactions open concurrently on one connection will see rejections even though its own limit is higher. Spread the load across additional `Connection` instances — each is its own TCP channel — rather than raising the client value. This is a session cap, not a socket pool: parallel transactions are `TxContext` objects multiplexed over one channel.
+Raise the **server** knob when one TCP must carry more concurrent sessions (JDBC / Spring TX multiplex). Also spread load across additional `Connection` instances when needed — each is its own TCP channel. This is a session cap, not a socket pool: parallel transactions are `TxContext` objects multiplexed over one channel.
 
 ## Authentication boundary
 
@@ -115,7 +116,7 @@ From an IDE, start `org.genfork.grid.sql.SqlServerMain` with preview features en
 | Readiness DOWN, `reason: orchid_not_synced` | Replication not yet synced | Wait; do not send traffic — [replication](replication.md) |
 | `AUTH failed` | Credentials do not match the catalog | Fix the URL authority — [security](../operations/security.md) |
 | `not authenticated` | Frames sent before AUTH after users exist | Supply credentials in the URL |
-| `maxTxContexts=8 exhausted` | More than eight concurrent sessions on one channel | Open an additional `Connection` |
+| `maxTxContexts=N exhausted` | More concurrent sessions on one channel than `grid.sql-server.max-tx-contexts` | Raise that YAML key and/or open an additional `Connection` |
 | `lock wait timeout` | Another transaction holds the record lock | Shorten transactions; review `grid.sql.lock-wait-timeout-ms` |
 | Two nodes on one host both fail to start Actuator | Both default to port 7777 | Give each its own `server.port` |
 

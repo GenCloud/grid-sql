@@ -61,7 +61,7 @@ The `/<schema>` path is the default session schema on `SESSION_OPEN` (same as `S
 |--------|---------|---------|
 | `minConnections` | `1` | TCP sockets opened on warmup / first `obtain` (clamped to `maxConnections`) |
 | `maxConnections` | `1` | Upper bound of TCP sockets in the factory pool |
-| `maxTxContexts` | `256` | Client soft cap on concurrent logical sessions over one socket (`0` — unlimited on the client). Server channel hard-cap is **8**; Boot does not apply YAML to the listener — [SQL server](../configure-and-operate/configuration/sql-server.md) |
+| `maxTxContexts` | `256` | Client soft cap on concurrent logical sessions over one socket (`0` — unlimited on the client). Server channel hard-cap is **8**; set `grid.sql-server.max-tx-contexts` on the listener — [SQL server](../configure-and-operate/configuration/sql-server.md) |
 | `connectTimeoutMs` | `5000` | Connection establishment timeout |
 | `execTimeoutMs` | `0` (off) | Statement execution timeout |
 | `readTimeoutMs` / `writeTimeoutMs` | `0` (off) | Channel timeouts |

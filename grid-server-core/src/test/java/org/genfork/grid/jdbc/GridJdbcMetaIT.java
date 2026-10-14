@@ -21,9 +21,11 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.Types;
 import java.util.concurrent.TimeUnit;
 
 import org.genfork.grid.catalog.TableCatalog;
+import org.genfork.grid.sql.ColumnMetas;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.netty.SqlServer;
 import org.junit.jupiter.api.AfterEach;
@@ -53,6 +55,7 @@ class GridJdbcMetaIT {
 		engine.execute("CREATE TABLE child (id INT PRIMARY KEY, parent_id INT, "
 				+ "FOREIGN KEY (parent_id) REFERENCES parent (id) ON DELETE RESTRICT)");
 		engine.execute("CREATE INDEX idx_child_parent ON child (parent_id)");
+		engine.execute("CREATE TABLE bin_meta (id INT PRIMARY KEY, payload BYTEA)");
 		port = freePort();
 		server = new SqlServer("127.0.0.1", port, engine, "u", "p", 32);
 		server.start();
@@ -137,6 +140,37 @@ class GridJdbcMetaIT {
 				}
 			}
 			assertTrue(found);
+		}
+	}
+
+	@Test
+	void byteaColumnsReportVarbinaryForJooqCodegen() throws Exception {
+		final String url = "jdbc:grid://u:p@127.0.0.1:" + port + "/public";
+		try (Connection c = DriverManager.getConnection(url)) {
+			final DatabaseMetaData md = c.getMetaData();
+			boolean foundCol = false;
+			try (ResultSet rs = md.getColumns(null, "public", "bin_meta", "payload")) {
+				while (rs.next()) {
+					foundCol = true;
+					assertEquals(Types.VARBINARY, rs.getInt("DATA_TYPE"));
+					/* jOOQ DEFAULT dialect: TYPE_NAME must be VARBINARY (BYTEA → OTHER/Object). */
+					assertEquals("VARBINARY", rs.getString("TYPE_NAME"));
+					assertEquals(ColumnMetas.PRECISION_BYTES_UNBOUNDED, rs.getInt("COLUMN_SIZE"));
+				}
+			}
+			assertTrue(foundCol);
+
+			boolean foundTypeInfo = false;
+			try (ResultSet rs = md.getTypeInfo()) {
+				while (rs.next()) {
+					if ("VARBINARY".equals(rs.getString("TYPE_NAME"))) {
+						foundTypeInfo = true;
+						assertEquals(Types.VARBINARY, rs.getInt("DATA_TYPE"));
+						assertEquals(ColumnMetas.PRECISION_BYTES_UNBOUNDED, rs.getInt("PRECISION"));
+					}
+				}
+			}
+			assertTrue(foundTypeInfo);
 		}
 	}
 

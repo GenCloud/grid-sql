@@ -47,6 +47,7 @@ import org.genfork.grid.sql.client.sync.SyncConnectionFactory;
 import org.genfork.grid.sql.client.sync.SyncResult;
 import org.genfork.grid.sql.client.sync.SyncStatement;
 import org.genfork.grid.sql.client.sync.SyncTxContext;
+import org.genfork.grid.sql.netty.SqlWire;
 
 /**
  * JDBC {@link Connection} over {@link SyncConnectionFactory} / {@link SyncConnection}.
@@ -673,6 +674,35 @@ public final class GridConnection implements Connection {
 		} catch (RuntimeException e) {
 			throw mapSql(e);
 		}
+	}
+
+	List<SyncResult> syncBatchBound(List<SqlWire.BatchStatement> statements, Duration queryTimeout)
+			throws SQLException {
+		ensureOpen();
+		ensureSpiLive();
+		try {
+			if (autoCommit || openTx == null) {
+				return sync.executeBatchBound(statements, effectiveTimeout(queryTimeout));
+			}
+			return openTx.executeBatchBound(statements, effectiveTimeout(queryTimeout));
+		} catch (RuntimeException e) {
+			throw mapSql(e);
+		}
+	}
+
+	/**
+	 * One {@code BATCH_EXEC} RTT with indexed binds (jOOQ / tooling).
+	 */
+	public void executeBatchBound(List<SqlWire.BatchStatement> statements) throws SQLException {
+		syncBatchBound(statements, null);
+	}
+
+	/**
+	 * Bound {@code BATCH_EXEC} with one ordered {@link SyncResult} per statement slot (multi-result SELECT).
+	 */
+	public List<SyncResult> executeBatchBoundResults(List<SqlWire.BatchStatement> statements)
+			throws SQLException {
+		return syncBatchBound(statements, null);
 	}
 
 	private Duration effectiveTimeout(Duration queryTimeout) {

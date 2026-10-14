@@ -284,10 +284,12 @@ public final class SqlInformationSchemaExecutor {
 	}
 
 	/**
-	 * SQL type token exposed to JDBC {@code information_schema.columns.data_type}.
+	 * SQL DDL synonym for catalog {@link SqlType} ({@code BYTEA} for {@link SqlType#BYTES}).
 	 * <p>
-	 * Must round-trip through {@code SqlType#fromToken} / Grid JDBC mapping so jOOQ
-	 * codegen sees {@code Types.VARBINARY} for binary columns (not {@code Types.OTHER}).
+	 * jOOQ {@code JDBCDatabase} reads {@link java.sql.DatabaseMetaData#getColumns} and
+	 * resolves by {@code TYPE_NAME} under {@code SQLDialect.DEFAULT} — that path maps
+	 * {@code BYTEA}→{@code OTHER}; Grid JDBC rewrites to {@code VARBINARY} in
+	 * {@code GridJdbcTypeSupport#typeName}. This information_schema token stays {@code BYTEA}.
 	 */
 	private static String informationSchemaDataType(SqlType type) {
 		if (type == SqlType.BYTES) {

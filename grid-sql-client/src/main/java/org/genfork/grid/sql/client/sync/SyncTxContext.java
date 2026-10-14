@@ -27,6 +27,7 @@ import org.genfork.grid.sql.client.SqlClientMessages;
 import org.genfork.grid.sql.client.SqlSavepointSql;
 import org.genfork.grid.sql.client.transport.TransportConnection;
 import org.genfork.grid.sql.client.transport.TransportOutcome;
+import org.genfork.grid.sql.netty.SqlWire;
 
 /**
  * Blocking TX over {@link TransportConnection} EXEC + closeSession CompletionStages.
@@ -87,6 +88,20 @@ public final class SyncTxContext implements AutoCloseable {
 				: execTimeout;
 		final List<TransportOutcome> outcomes =
 				SyncAwait.await(transport.batchExec(sessionId, sqls), effective, null, syncExecutor);
+		return SyncConnection.wrapOutcomes(outcomes, effective, syncExecutor);
+	}
+
+	public List<SyncResult> executeBatchBound(List<SqlWire.BatchStatement> statements) {
+		return executeBatchBound(statements, timeout);
+	}
+
+	public List<SyncResult> executeBatchBound(List<SqlWire.BatchStatement> statements, Duration execTimeout) {
+		ensureOpen();
+		final Duration effective = execTimeout == null || execTimeout.isZero() || execTimeout.isNegative()
+				? timeout
+				: execTimeout;
+		final List<TransportOutcome> outcomes =
+				SyncAwait.await(transport.batchExecStatements(sessionId, statements), effective, null, syncExecutor);
 		return SyncConnection.wrapOutcomes(outcomes, effective, syncExecutor);
 	}
 

@@ -31,7 +31,15 @@ import org.genfork.grid.sql.ColumnMetas;
  */
 public final class GridJdbcTypeSupport {
 	private static final String TYPE_NAME_OTHER = "OTHER";
-	private static final String TYPE_NAME_BYTEA = "BYTEA";
+	/**
+	 * JDBC {@code TYPE_NAME} for {@link SqlType#BYTES}.
+	 * <p>
+	 * Must be a name registered on jOOQ {@code SQLDialect.DEFAULT}
+	 * ({@code VARBINARY} / {@code BINARY} / {@code BLOB}). {@code BYTEA} is only on
+	 * the Postgres family — {@code JDBCDatabase} codegen would emit {@code OTHER}/{@code Object}.
+	 * SQL DDL / {@code information_schema} still use the {@code BYTEA} token.
+	 */
+	private static final String TYPE_NAME_VARBINARY = "VARBINARY";
 	private static final int SCALE_DOUBLE = 10;
 
 	private GridJdbcTypeSupport() {
@@ -60,14 +68,17 @@ public final class GridJdbcTypeSupport {
 	}
 
 	/**
-	 * JDBC type name for tooling ({@code BYTEA} for bytes; otherwise enum name).
+	 * JDBC {@link java.sql.DatabaseMetaData} type name (jOOQ {@code JDBCDatabase} lookup key).
+	 * <p>
+	 * {@link SqlType#BYTES} → {@code VARBINARY} (not {@code BYTEA}) so DEFAULT-dialect codegen
+	 * maps to {@code byte[]}; DDL synonym {@code BYTEA} stays in the catalog / information_schema.
 	 */
 	public static String typeName(SqlType type) {
 		if (type == null) {
 			return TYPE_NAME_OTHER;
 		}
 		if (type == SqlType.BYTES) {
-			return TYPE_NAME_BYTEA;
+			return TYPE_NAME_VARBINARY;
 		}
 		return type.name();
 	}

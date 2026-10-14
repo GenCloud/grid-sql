@@ -928,6 +928,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitJoinCond(SimplifiedSqlParser.JoinCondContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#joinCondInner}.
+	 * @param ctx the parse tree
+	 */
+	void enterJoinCondInner(SimplifiedSqlParser.JoinCondInnerContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#joinCondInner}.
+	 * @param ctx the parse tree
+	 */
+	void exitJoinCondInner(SimplifiedSqlParser.JoinCondInnerContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#selectList}.
 	 * @param ctx the parse tree
 	 */
@@ -1376,6 +1386,16 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 */
 	void exitValue(SimplifiedSqlParser.ValueContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#jdbcEscapeValue}.
+	 * @param ctx the parse tree
+	 */
+	void enterJdbcEscapeValue(SimplifiedSqlParser.JdbcEscapeValueContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#jdbcEscapeValue}.
+	 * @param ctx the parse tree
+	 */
+	void exitJdbcEscapeValue(SimplifiedSqlParser.JdbcEscapeValueContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link SimplifiedSqlParser#coalesceExpr}.
 	 * @param ctx the parse tree
 	 */
@@ -1465,4 +1485,14 @@ public interface SimplifiedSqlListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitLimitClause(SimplifiedSqlParser.LimitClauseContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link SimplifiedSqlParser#limitAtom}.
+	 * @param ctx the parse tree
+	 */
+	void enterLimitAtom(SimplifiedSqlParser.LimitAtomContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link SimplifiedSqlParser#limitAtom}.
+	 * @param ctx the parse tree
+	 */
+	void exitLimitAtom(SimplifiedSqlParser.LimitAtomContext ctx);
 }

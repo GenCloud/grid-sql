@@ -19,6 +19,7 @@ import org.genfork.grid.sql.SqlRouteClassifier;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentMap;
 
@@ -153,6 +154,31 @@ public final class RoutingConnection implements Connection {
 			return writer.executeBatch(sqls);
 		}
 		return Flux.fromIterable(sqls).concatMap(sql -> createReadStatement(sql).execute());
+	}
+
+	@Override
+	public Flux<Result> executeBatchBound(List<BatchStatement> statements) {
+		final List<BatchStatement> list = statements == null ? List.of() : List.copyOf(statements);
+		if (list.isEmpty()) {
+			return Flux.empty();
+		}
+		if (readFactory == null || SqlClientRouteContext.suppressReplicaReads()) {
+			return writer.executeBatchBound(list);
+		}
+		final List<String> sqls = new ArrayList<>(list.size());
+		for (BatchStatement statement : list) {
+			sqls.add(statement.sql());
+		}
+		if (!SqlClientRouteUtil.allRead(prepareRouteCache, sqls)) {
+			return writer.executeBatchBound(list);
+		}
+		return Flux.usingWhen(
+				readFactory.obtain(),
+				conn -> conn.executeBatchBound(list),
+				Connection::close,
+				(conn, _) -> conn.close(),
+				Connection::close
+		);
 	}
 
 	@Override

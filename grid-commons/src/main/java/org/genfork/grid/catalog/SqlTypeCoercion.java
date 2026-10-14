@@ -15,6 +15,8 @@
  */
 package org.genfork.grid.catalog;
 
+import java.sql.Date;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -26,6 +28,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.Temporal;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -45,12 +48,33 @@ public final class SqlTypeCoercion {
 	private static final DateTimeFormatter TS = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 	private static final char SPACE = ' ';
 	private static final char ISO_T = 'T';
+	private static final String ERR_TEMPORAL_TO_NUMERIC = "cannot coerce temporal ";
+	private static final String ERR_TO_NUMERIC_SUFFIX = " to numeric";
+	private static final String ERR_TO_BYTES = "cannot coerce ";
+	private static final String ERR_TO_BYTES_SUFFIX = " to BYTES (expected byte[])";
 
 	private SqlTypeCoercion() {
 	}
 
 	public static ZoneId zoneOrUtc(ZoneId zone) {
 		return zone == null ? ZoneOffset.UTC : zone;
+	}
+
+	/**
+	 * Fail-closed: temporal values must not reach INT/BIGINT/DOUBLE via {@code String.valueOf} parse.
+	 */
+	public static void rejectTemporalForNumeric(Object raw, SqlType target) {
+		if (raw == null) {
+			return;
+		}
+		if (raw instanceof Temporal
+				|| raw instanceof Timestamp
+				|| raw instanceof Date
+				|| raw instanceof Time) {
+			throw new IllegalArgumentException(
+					ERR_TEMPORAL_TO_NUMERIC + raw.getClass().getSimpleName()
+							+ ERR_TO_NUMERIC_SUFFIX + " (" + target + ")");
+		}
 	}
 
 	public static UUID toUuid(Object raw) {
@@ -62,6 +86,21 @@ public final class SqlTypeCoercion {
         };
     }
 
+	/**
+	 * Fail-closed coerce to {@link SqlType#BYTES}: only {@code null} or {@code byte[]}.
+	 * Hex strings belong in CAST / ANTLR literal paths via {@code SqlBytesLiterals}.
+	 */
+	public static byte[] toBytes(Object raw) {
+		if (raw == null) {
+			return null;
+		}
+		if (raw instanceof byte[] b) {
+			return b;
+		}
+		throw new IllegalArgumentException(
+				ERR_TO_BYTES + raw.getClass().getName() + ERR_TO_BYTES_SUFFIX);
+	}
+
 	public static LocalDate toDate(Object raw) {
         switch (raw) {
             case null -> {
@@ -70,7 +109,7 @@ public final class SqlTypeCoercion {
             case LocalDate d -> {
                 return d;
             }
-            case java.sql.Date d -> {
+            case Date d -> {
                 return d.toLocalDate();
             }
             case LocalDateTime ldt -> {
@@ -97,7 +136,7 @@ public final class SqlTypeCoercion {
             case LocalTime t -> {
                 return t;
             }
-            case java.sql.Time t -> {
+            case Time t -> {
                 return t.toLocalTime();
             }
             case LocalDateTime ldt -> {
@@ -170,6 +209,45 @@ public final class SqlTypeCoercion {
             default -> normalizeTemporalString(String.valueOf(raw));
         };
     }
+
+	/**
+	 * Coerce to {@link LocalDateTime} for {@link SqlType#TIMESTAMP}.
+	 * <p>
+	 * Accepts ISO-8601 with optional seconds / fraction ({@code 2026-01-01T12:00}),
+	 * which {@link Timestamp#valueOf(String)} rejects.
+	 */
+	public static LocalDateTime toLocalDateTime(Object raw) {
+		switch (raw) {
+			case null -> {
+				return null;
+			}
+			case LocalDateTime ldt -> {
+				return ldt;
+			}
+			case Timestamp ts -> {
+				return ts.toLocalDateTime();
+			}
+			case Instant i -> {
+				return LocalDateTime.ofInstant(i, ZoneOffset.UTC);
+			}
+			case LocalDate d -> {
+				return d.atStartOfDay();
+			}
+			default -> {
+			}
+		}
+		return LocalDateTime.parse(normalizeTemporalString(String.valueOf(raw)), TS);
+	}
+
+	/**
+	 * JDBC {@link Timestamp} bridge for {@link SqlType#TIMESTAMP} cells.
+	 * Prefer {@link #toLocalDateTime(Object)} at the product edge; this exists for
+	 * {@code ResultSet#getTimestamp} callers (e.g. jOOQ DEFAULT binding).
+	 */
+	public static Timestamp toSqlTimestamp(Object raw) {
+		final LocalDateTime ldt = toLocalDateTime(raw);
+		return ldt == null ? null : Timestamp.valueOf(ldt);
+	}
 
 	public static byte[] uuidToBytes(UUID uuid) {
 		Objects.requireNonNull(uuid, "uuid");

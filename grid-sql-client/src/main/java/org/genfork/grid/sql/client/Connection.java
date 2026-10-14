@@ -47,6 +47,28 @@ public interface Connection {
 	 */
 	Flux<Result> executeBatch(List<String> sqls);
 
+	/**
+	 * Execute {@code statements} in order as one bound batch (remote: one {@code BATCH_EXEC} RTT).
+	 * <p>
+	 * Autocommit path: each statement commits independently unless the transport is in an open TX.
+	 * For a shared TX, use {@link TxContext#executeBatchBound(List)} after {@link #begin()}.
+	 * Each emitted {@link Result} is one statement outcome (rows or rowsUpdated), fail-fast on error.
+	 */
+	default Flux<Result> executeBatchBound(List<BatchStatement> statements) {
+		if (statements == null || statements.isEmpty()) {
+			return Flux.empty();
+		}
+		return Flux.fromIterable(statements)
+				.concatMap(slot -> {
+					Statement statement = createStatement(slot.sql());
+					final Object[] binds = slot.binds();
+					for (int i = 0; i < binds.length; i++) {
+						statement = statement.bind(i, binds[i]);
+					}
+					return statement.execute();
+				});
+	}
+
 	Mono<Void> close();
 
 	/**

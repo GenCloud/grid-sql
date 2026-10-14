@@ -15,33 +15,46 @@
  */
 package org.genfork.grid.sql;
 
-import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
-import org.genfork.grid.sql.ast.SelectAst.ExistsSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.FuncArg;
-import org.genfork.grid.sql.ast.SelectAst.FunctionFrom;
-import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
-import org.genfork.grid.sql.ast.DmlAst.InsertSql;
-import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
-import org.genfork.grid.sql.ast.DmlAst.MergeSql;
-import org.genfork.grid.sql.ast.DmlAst.OnConflict;
-import org.genfork.grid.sql.ast.SelectAst.SelectItem;
-import org.genfork.grid.sql.ast.SelectAst.SelectSql;
-import org.genfork.grid.sql.ast.Stmt;
-import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
-import org.genfork.grid.sql.ast.SelectAst.WhereSubquery;
-
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.genfork.grid.query.filters.FilterCondition;
+import org.genfork.grid.query.filters.impl.AndCondition;
+import org.genfork.grid.query.filters.impl.LogicalOperatorCondition;
+import org.genfork.grid.query.filters.impl.NotCondition;
+import org.genfork.grid.query.filters.impl.NumericPlusComparisonCondition;
+import org.genfork.grid.query.filters.impl.OrCondition;
+import org.genfork.grid.query.plan.UpdatePlan;
+import org.genfork.grid.sql.SqlBuiltinExpr.CaseBranch;
+import org.genfork.grid.sql.SqlBuiltinExpr.CaseExpr;
+import org.genfork.grid.sql.SqlBuiltinExpr.CoalesceExpr;
+import org.genfork.grid.sql.SqlBuiltinExpr.NumericColPlus;
+import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
+import org.genfork.grid.sql.ast.DmlAst.InsertSql;
+import org.genfork.grid.sql.ast.DmlAst.MergeSql;
+import org.genfork.grid.sql.ast.DmlAst.OnConflict;
+import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
+import org.genfork.grid.sql.ast.SelectAst.ExistsSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.FuncArg;
+import org.genfork.grid.sql.ast.SelectAst.FunctionFrom;
+import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
+import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
+import org.genfork.grid.sql.ast.SelectAst.SelectItem;
+import org.genfork.grid.sql.ast.SelectAst.SelectSql;
+import org.genfork.grid.sql.ast.SelectAst.WhereSubquery;
+import org.genfork.grid.sql.ast.Stmt;
+
 /**
  * Applies EXECUTE binds to a PREPARE-time {@link Stmt} without re-running ANTLR on the body.
  * <p>
  * Text fields that drive residual filters ({@link SelectSql#sql()}, {@code whereSql}) are replaced
- * with the fully materialized statement / fragment when needed. Structured bind slots
- * ({@link SqlBindParam}) are resolved in place. Unsupported shapes fall back to a full body parse.
+ * with materialized literals when needed. Structured bind slots ({@link SqlBindParam}) are resolved
+ * in place so {@code byte[]} and other wire cells stay as {@link Object}. Unsupported shapes fall
+ * back to a full body parse under the session timezone.
  *
  * @author: GenCloud
  * @date: 2025/11
@@ -54,22 +67,24 @@ public final class SqlPreparedBinder {
 	}
 
 	/**
-	 * Bind {@code template} for EXECUTE. {@code effectiveSql} is {@link SqlBinds#materialize}
-	 * of the prepared body (views already expanded at PREPARE).
+	 * Bind {@code template} using session timezone for any full-parse fallback.
+	 *
+	 * @param placeholderSql prepared body (views already expanded); may still contain {@code ?}
 	 */
-	public static Stmt bind(Stmt template, String effectiveSql, Object[] binds) {
+	public static Stmt bind(Stmt template, String placeholderSql, Object[] binds, ZoneId zone) {
 		Objects.requireNonNull(template, "template");
-		Objects.requireNonNull(effectiveSql, "effectiveSql");
+		Objects.requireNonNull(placeholderSql, "placeholderSql");
 		try {
-			return bindStrict(template, effectiveSql, binds);
+			return bindStrict(template, placeholderSql, binds);
 		} catch (UnsupportedOperationException ex) {
-			return SqlStatementParser.parse(effectiveSql);
+			// Residual shapes still need a full ANTLR pass (subquery placeholders, etc.).
+			return SqlStatementParser.parse(SqlBinds.materialize(placeholderSql, binds), zone);
 		}
 	}
 
-	private static Stmt bindStrict(Stmt template, String effectiveSql, Object[] binds) {
+	private static Stmt bindStrict(Stmt template, String placeholderSql, Object[] binds) {
 		if (template instanceof SelectSql s) {
-			return bindSelect(s, effectiveSql, binds);
+			return bindSelect(s, placeholderSql, binds);
 		}
 		if (template instanceof InsertSql s) {
 			return bindInsert(s, binds);
@@ -89,13 +104,16 @@ public final class SqlPreparedBinder {
 		throw new UnsupportedOperationException("prepared bind unsupported for " + template.getClass().getSimpleName());
 	}
 
-	private static SelectSql bindSelect(SelectSql s, String effectiveSql, Object[] binds) {
+	private static SelectSql bindSelect(SelectSql s, String placeholderSql, Object[] binds) {
 		final Object pk = resolve(s.pkValueOrNull(), binds);
 		final List<WhereSubquery> subs = bindWhereSubs(s.whereSubqueries());
 		final FunctionFrom from = bindFromFunction(s.fromFunctionOrNull(), binds);
 		final List<SelectItem> items = bindSelectItems(s.selectItems(), binds);
+		final String sql = hasPlaceholder(placeholderSql)
+				? SqlBinds.materialize(placeholderSql, binds)
+				: placeholderSql;
 		return new SelectSql(
-				effectiveSql,
+				sql,
 				s.table(),
 				s.projection(),
 				items,
@@ -107,8 +125,8 @@ public final class SqlPreparedBinder {
 				s.sumColumnOrNull(),
 				s.avg(),
 				s.groupByColumns(),
-				s.offset(),
-				s.limitOrNull(),
+				resolvePaging(s.offsetValue(), binds),
+				resolvePaging(s.limitValueOrNull(), binds),
 				s.distinct(),
 				s.havingOrNull(),
 				s.minAgg(),
@@ -130,7 +148,7 @@ public final class SqlPreparedBinder {
 			for (Object cell : row) {
 				copy.add(resolve(cell, binds));
 			}
-			rows.add(List.copyOf(copy));
+			rows.add(SqlNullSafeCollections.freezeList(copy));
 		}
 		final OnConflict conflict = s.onConflictOrNull() == null
 				? null
@@ -153,17 +171,16 @@ public final class SqlPreparedBinder {
 	}
 
 	private static UpdateSql bindUpdate(UpdateSql s, Object[] binds) {
+		final int whereBindStart = maxBindIndex(s.setLiterals()) + 1;
 		final Object pk = resolve(s.pkValueOrNull(), binds);
 		final Map<String, Object> sets = bindMap(s.setLiterals(), binds);
-		// Residual keysMatching needs literals in whereSql; false PK-eq on non-PK cols must reparse.
-		if (hasPlaceholder(s.whereSql())) {
-			throw new UnsupportedOperationException("update where still has placeholders");
-		}
+		final String whereSql = materializeWhere(s.whereSql(), binds, whereBindStart);
+		final UpdatePlan rmw = bindRmw(s.rmw(), pk);
 		return new UpdateSql(
 				s.table(),
-				s.rmw(),
+				rmw,
 				sets,
-				s.whereSql(),
+				whereSql,
 				s.pkColumnOrNull(),
 				pk,
 				s.sourceTableOrNull(),
@@ -174,12 +191,82 @@ public final class SqlPreparedBinder {
 	}
 
 	private static DeleteSql bindDelete(DeleteSql s, Object[] binds) {
-		// extractPkEq treats any col=? as PK; residual WHERE on non-PK must full-reparse effective SQL.
-		if (hasPlaceholder(s.whereSql())) {
-			throw new UnsupportedOperationException("delete where still has placeholders");
-		}
 		final Object pk = resolve(s.pkValueOrNull(), binds);
-		return new DeleteSql(s.table(), s.whereSql(), s.pkColumnOrNull(), pk);
+		final String whereSql = materializeWhere(s.whereSql(), binds, 0);
+		return new DeleteSql(s.table(), whereSql, s.pkColumnOrNull(), pk);
+	}
+
+	private static UpdatePlan bindRmw(UpdatePlan rmw, Object resolvedPk) {
+		if (rmw == null) {
+			return null;
+		}
+		return new UpdatePlan(rmw.table(), rmw.assigns(), rmw.pkColumn(), resolvedPk, rmw.templateKey());
+	}
+
+	private static String materializeWhere(String whereSql, Object[] binds, int startIndex) {
+		if (!hasPlaceholder(whereSql)) {
+			return whereSql;
+		}
+		return SqlBinds.materializeRange(whereSql, binds, startIndex);
+	}
+
+	private static int maxBindIndex(Map<String, Object> map) {
+		if (map == null || map.isEmpty()) {
+			return -1;
+		}
+		int max = -1;
+		for (Object value : map.values()) {
+			max = Math.max(max, maxBindIndexDeep(value));
+		}
+		return max;
+	}
+
+	private static int maxBindIndexDeep(Object value) {
+		if (value instanceof SqlBindParam param) {
+			return param.index();
+		}
+		if (value instanceof NumericColPlus plus) {
+			return maxBindIndexDeep(plus.addend());
+		}
+		if (value instanceof CoalesceExpr coal) {
+			int max = -1;
+			for (Object arg : coal.args()) {
+				max = Math.max(max, maxBindIndexDeep(arg));
+			}
+			return max;
+		}
+		if (value instanceof CaseExpr caseExpr) {
+			int max = -1;
+			for (CaseBranch branch : caseExpr.branches()) {
+				max = Math.max(max, maxBindIndexCondition(branch.when()));
+				max = Math.max(max, maxBindIndexDeep(branch.thenValue()));
+			}
+			return Math.max(max, maxBindIndexDeep(caseExpr.elseValueOrNull()));
+		}
+		return -1;
+	}
+
+	private static int maxBindIndexCondition(FilterCondition condition) {
+		if (condition instanceof LogicalOperatorCondition loc) {
+			int max = -1;
+			for (Object v : loc.getValues()) {
+				max = Math.max(max, maxBindIndexDeep(v));
+			}
+			return max;
+		}
+		if (condition instanceof NumericPlusComparisonCondition npc) {
+			return Math.max(maxBindIndexDeep(npc.getAddend()), maxBindIndexDeep(npc.getCompareTo()));
+		}
+		if (condition instanceof AndCondition and) {
+			return Math.max(maxBindIndexCondition(and.getLeft()), maxBindIndexCondition(and.getRight()));
+		}
+		if (condition instanceof OrCondition or) {
+			return Math.max(maxBindIndexCondition(or.getLeft()), maxBindIndexCondition(or.getRight()));
+		}
+		if (condition instanceof NotCondition not) {
+			return maxBindIndexCondition(not.getChild());
+		}
+		return -1;
 	}
 
 	private static MergeSql bindMerge(MergeSql s, Object[] binds) {
@@ -273,17 +360,17 @@ public final class SqlPreparedBinder {
 		}
 		final Map<String, Object> out = new LinkedHashMap<>(map.size());
 		for (Map.Entry<String, Object> e : map.entrySet()) {
-			out.put(e.getKey(), resolve(e.getValue(), binds));
+			out.put(e.getKey(), resolveDeep(e.getValue(), binds));
 		}
-		return Map.copyOf(out);
+		return SqlNullSafeCollections.freezeMap(out);
 	}
 
 	private static List<Object> bindList(List<Object> values, Object[] binds) {
 		final List<Object> out = new ArrayList<>(values.size());
 		for (Object v : values) {
-			out.add(resolve(v, binds));
+			out.add(resolveDeep(v, binds));
 		}
-		return List.copyOf(out);
+		return SqlNullSafeCollections.freezeList(out);
 	}
 
 	private static Object resolve(Object value, Object[] binds) {
@@ -295,6 +382,83 @@ public final class SqlPreparedBinder {
 					"Not enough bind values for prepared placeholder index " + param.index());
 		}
 		return binds[param.index()];
+	}
+
+	/**
+	 * Resolve {@link SqlBindParam} and nested SET markers ({@link CaseExpr}, {@link NumericColPlus}, …).
+	 */
+	private static Object resolveDeep(Object value, Object[] binds) {
+		if (value instanceof SqlBindParam) {
+			return resolve(value, binds);
+		}
+		if (value instanceof NumericColPlus plus) {
+			return new NumericColPlus(plus.column(), resolveDeep(plus.addend(), binds));
+		}
+		if (value instanceof CoalesceExpr coal) {
+			final List<Object> args = new ArrayList<>(coal.args().size());
+			for (Object arg : coal.args()) {
+				args.add(resolveDeep(arg, binds));
+			}
+			return new CoalesceExpr(args);
+		}
+		if (value instanceof CaseExpr caseExpr) {
+			return bindCaseExpr(caseExpr, binds);
+		}
+		return value;
+	}
+
+	private static CaseExpr bindCaseExpr(CaseExpr caseExpr, Object[] binds) {
+		final List<CaseBranch> branches = new ArrayList<>(caseExpr.branches().size());
+		for (CaseBranch branch : caseExpr.branches()) {
+			branches.add(new CaseBranch(
+					bindCondition(branch.when(), binds),
+					resolveDeep(branch.thenValue(), binds)));
+		}
+		return new CaseExpr(branches, resolveDeep(caseExpr.elseValueOrNull(), binds));
+	}
+
+	private static FilterCondition bindCondition(FilterCondition condition, Object[] binds) {
+		if (condition instanceof LogicalOperatorCondition loc) {
+			final Object[] values = loc.getValues();
+			final Object[] resolved = new Object[values.length];
+			for (int i = 0; i < values.length; i++) {
+				resolved[i] = resolveDeep(values[i], binds);
+			}
+			return new LogicalOperatorCondition(loc.getField(), loc.getOperator(), resolved);
+		}
+		if (condition instanceof NumericPlusComparisonCondition npc) {
+			return new NumericPlusComparisonCondition(
+					npc.getField(),
+					resolveDeep(npc.getAddend(), binds),
+					npc.getOperator(),
+					resolveDeep(npc.getCompareTo(), binds));
+		}
+		if (condition instanceof AndCondition and) {
+			return new AndCondition(bindCondition(and.getLeft(), binds), bindCondition(and.getRight(), binds));
+		}
+		if (condition instanceof OrCondition or) {
+			return new OrCondition(bindCondition(or.getLeft(), binds), bindCondition(or.getRight(), binds));
+		}
+		if (condition instanceof NotCondition not) {
+			return new NotCondition(bindCondition(not.getChild(), binds));
+		}
+		return condition;
+	}
+
+	/** Resolve LIMIT/OFFSET bind to a non-negative {@link Integer} (or null). */
+	private static Object resolvePaging(Object value, Object[] binds) {
+		if (value == null) {
+			return null;
+		}
+		final Object resolved = resolve(value, binds);
+		if (resolved == null) {
+			return Integer.valueOf(0);
+		}
+		if (resolved instanceof Number n) {
+			return Integer.valueOf(Math.max(0, n.intValue()));
+		}
+		throw new IllegalArgumentException(
+				"LIMIT/OFFSET bind must be numeric, got " + resolved.getClass().getSimpleName());
 	}
 
 	private static boolean hasPlaceholder(String sql) {

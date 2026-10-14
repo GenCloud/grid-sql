@@ -30,8 +30,6 @@ import org.genfork.grid.sql.SqlEngine;
  * @since: 1.0
  */
 public final class SqlServerPipeline extends ChannelInitializer<SocketChannel> {
-	private static final int DEFAULT_MAX_TX_CONTEXTS = 8;
-
 	private final SqlEngine engine;
 	private final String user;
 	private final String password;
@@ -41,7 +39,7 @@ public final class SqlServerPipeline extends ChannelInitializer<SocketChannel> {
 	private final AtomicReference<Boolean> applyLagStaleOverride;
 
 	public SqlServerPipeline(SqlEngine engine, String user, String password) {
-		this(engine, user, password, DEFAULT_MAX_TX_CONTEXTS, null, null, null);
+		this(engine, user, password, SqlServer.DEFAULT_MAX_TX_CONTEXTS, null, null, null);
 	}
 
 	public SqlServerPipeline(SqlEngine engine, String user, String password, int maxTxContexts) {
