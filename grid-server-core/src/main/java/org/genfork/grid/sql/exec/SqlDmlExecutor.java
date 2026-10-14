@@ -150,21 +150,87 @@ public final class SqlDmlExecutor {
 			List<String> returning,
 			List<byte[]> returned
 	) {
-		fillIdentityDefaults(session, store.schema(), named);
 		fillColumnDefaults(session, store.schema(), named);
-		final Object[] row = store.rowFromNamed(named);
-		assertFkParents(session, table, row);
-		final long rowAffected = applyInsertRow(session, table, store, row, conflict);
+		final long rowAffected;
+		if (conflict == null) {
+			fillIdentityDefaults(session, store.schema(), named);
+			final Object[] row = store.rowFromNamed(named);
+			assertFkParents(session, table, row);
+			rowAffected = applyInsertRow(session, table, store, row, null);
+			if (rowAffected > 0L && returning != null && !returning.isEmpty()) {
+				final byte[] key = store.keyBytesForPk(row[store.schema().pkColumn().ordinal()]);
+				final byte[] value = SqlDmlLockOps.existingBytes(session, table, store, key);
+				if (value != null) {
+					returned.add(value);
+				}
+			}
+			return rowAffected;
+		}
+		if (conflictTargetsPrimaryKey(store.schema(), conflict)) {
+			fillIdentityDefaults(session, store.schema(), named);
+		}
+		final Object[] probeRow = store.rowFromNamed(named);
+		assertFkParents(session, table, probeRow);
+		rowAffected = applyConflictInsertRow(session, table, store, named, probeRow, conflict);
 		if (rowAffected > 0L && returning != null && !returning.isEmpty()) {
-			final byte[] key = conflict == null
-					? store.keyBytesForPk(row[store.schema().pkColumn().ordinal()])
-					: SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
-			final byte[] value = SqlDmlLockOps.existingBytes(session, table, store, key);
+			final byte[] key = SqlMergeMatchOps.resolveConflictKey(store, store.rowFromNamed(named), conflict);
+			final byte[] value = key == null
+					? null
+					: SqlDmlLockOps.existingBytes(session, table, store, key);
 			if (value != null) {
 				returned.add(value);
 			}
 		}
 		return rowAffected;
+	}
+
+	/**
+	 * {@code ON CONFLICT} on PK (or omitted target) needs IDENTITY before probe; secondary UNIQUE defers it.
+	 */
+	private static boolean conflictTargetsPrimaryKey(TableSchema schema, OnConflict conflict) {
+		final List<String> targets = conflict.targetColumns();
+		if (targets == null || targets.isEmpty()) {
+			return true;
+		}
+		return targets.size() == 1
+				&& targets.getFirst().equalsIgnoreCase(schema.pkColumn().name());
+	}
+
+	/**
+	 * ON CONFLICT path: probe without burning IDENTITY on secondary UNIQUE miss→hit; allocate only on miss.
+	 */
+	private long applyConflictInsertRow(
+			SqlSession session,
+			String table,
+			TableStore store,
+			Map<String, Object> named,
+			Object[] probeRow,
+			OnConflict conflict
+	) {
+		final byte[] arbiterKey = SqlMergeMatchOps.conflictArbiterLockKey(store, probeRow, conflict);
+		SqlDmlLockOps.acquireConflictArbiter(session, table, arbiterKey);
+		try {
+			final byte[] conflictKey = SqlMergeMatchOps.resolveConflictKey(store, probeRow, conflict);
+			final byte[] existing;
+			if (conflictKey != null) {
+				SqlDmlLockOps.ensureConflictKeyLocked(session, table, conflictKey);
+				existing = SqlDmlLockOps.existingBytes(session, table, store, conflictKey);
+			} else {
+				existing = null;
+			}
+			if (existing != null) {
+				return applyConflictHit(session, table, store, conflictKey, existing, probeRow, conflict);
+			}
+			fillIdentityDefaults(session, store.schema(), named);
+			final Object[] insertRow = store.rowFromNamed(named);
+			try {
+				return insertConflictMissRow(session, table, store, insertRow);
+			} catch (NonUniqueValueException ex) {
+				return recoverConflictAfterUniqueRace(session, table, store, insertRow, conflict, ex);
+			}
+		} finally {
+			SqlDmlLockOps.releaseConflictArbiterAutocommit(session, table, arbiterKey);
+		}
 	}
 
 	private Object resolveInsertValue(SqlSession session, Object raw) {
@@ -717,52 +783,30 @@ public final class SqlDmlExecutor {
 			Object[] row,
 			OnConflict conflict
 	) {
-		if (conflict == null) {
-			final boolean rejectExistingPk = plainInsertRejectExistingPk(session, table, store, row);
-			final TableStore.EncodedRow encoded = store.encodeUpsert(row, rejectExistingPk);
-			SqlTriggerFireOps.fireBeforeRow(
+		if (conflict != null) {
+			throw new IllegalStateException("ON CONFLICT must use applyConflictInsertRow");
+		}
+		final boolean rejectExistingPk = plainInsertRejectExistingPk(session, table, store, row);
+		final TableStore.EncodedRow encoded = store.encodeUpsert(row, rejectExistingPk);
+		SqlTriggerFireOps.fireBeforeRow(
+				session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
+		final long affected;
+		if (session.inTransaction()) {
+			SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
+			affected = 1L;
+		} else {
+			affected = store.upsert(row);
+			if (VisibilityDiag.enabled()) {
+			    VisibilityDiag.debugf("dml.insert",
+			            "table=%s autocommit affected=%d %s", table, affected,
+			            VisibilityDiag.keyTag(encoded.keyBytes()));
+			}
+		}
+		if (affected > 0L) {
+			SqlTriggerFireOps.fireAfterRow(
 					session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
-			final long affected;
-			if (session.inTransaction()) {
-				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
-				affected = 1L;
-			} else {
-				affected = store.upsert(row);
-				if (VisibilityDiag.enabled()) {
-				    VisibilityDiag.debugf("dml.insert",
-				            "table=%s autocommit affected=%d %s", table, affected,
-				            VisibilityDiag.keyTag(encoded.keyBytes()));
-				}
-			}
-			if (affected > 0L) {
-				SqlTriggerFireOps.fireAfterRow(
-						session, engine, table, TriggerEvent.INSERT, null, encoded.valueBytes());
-			}
-			return affected;
 		}
-		// Serialize concurrent ON CONFLICT on the same UNIQUE target (arbiter), then probe / insert.
-		final byte[] arbiterKey = SqlMergeMatchOps.conflictArbiterLockKey(store, row, conflict);
-		SqlDmlLockOps.acquireConflictArbiter(session, table, arbiterKey);
-		try {
-			final byte[] conflictKey = SqlMergeMatchOps.resolveConflictKey(store, row, conflict);
-			final byte[] existing;
-			if (conflictKey != null) {
-				SqlDmlLockOps.ensureConflictKeyLocked(session, table, conflictKey);
-				existing = SqlDmlLockOps.existingBytes(session, table, store, conflictKey);
-			} else {
-				existing = null;
-			}
-			if (existing != null) {
-				return applyConflictHit(session, table, store, conflictKey, existing, row, conflict);
-			}
-			try {
-				return insertConflictMissRow(session, table, store, row);
-			} catch (NonUniqueValueException ex) {
-				return recoverConflictAfterUniqueRace(session, table, store, row, conflict, ex);
-			}
-		} finally {
-			SqlDmlLockOps.releaseConflictArbiterAutocommit(session, table, arbiterKey);
-		}
+		return affected;
 	}
 
 	/**

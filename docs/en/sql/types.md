@@ -68,6 +68,14 @@ UPSERT INTO sessions (id, user_id) VALUES (UUID '3f2504e0-4f89-11d3-9a0c-0305e82
 
 `BYTES` (also `BYTEA`, `BINARY`, `BLOB`) stores an arbitrary byte array and arrives at the client as `byte[]`. This is the right home for compressed payloads, serialized messages and small images. Filtering on content works only as whole-value equality.
 
+SQL-standard binary literals use grammar token `HEX_BYTES`:
+
+```sql
+UPSERT INTO blobs (id, payload) VALUES (1, X'0A1B2C');
+```
+
+Odd-length hex and non-hex digits are rejected at parse. JDBC binds use `setBytes` / `byte[]` — [JDBC client](../develop/jdbc-tooling.md).
+
 ## NULL
 
 Any column without `NOT NULL` accepts `NULL`. Test with `IS NULL` and `IS NOT NULL`; `= NULL` will not do what you want, exactly as in any other SQL.

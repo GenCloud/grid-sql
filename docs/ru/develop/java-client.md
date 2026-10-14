@@ -106,7 +106,14 @@ Flux<String> names = connection
         .flatMap(result -> result.map((row, meta) -> row.get("name", String.class)));
 ```
 
-Несколько запросов одним RTT — `connection.executeBatch(List.of(...))`. В autocommit каждый запрос коммитится сам по себе; общей транзакции у них нет.
+Несколько запросов одним RTT:
+
+| API | Полезная нагрузка | Провод |
+|-----|-------------------|--------|
+| `connection.executeBatch(List.of(...))` | Только текст SQL | `BATCH_EXEC` без binds на слот |
+| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Индексированный SQL + `Object[]` binds на слот (`org.genfork.grid.sql.client.BatchStatement`) | Один RTT `BATCH_EXEC` с binds |
+
+В autocommit каждый слот коммитится сам по себе; общей транзакции у них нет. Для общей TX — `TxContext.executeBatch` / `executeBatchBound` после `begin()` — [транзакции](transactions.md).
 
 ## Транзакции
 

@@ -44,12 +44,24 @@ jOOQ version comes from Spring Boot **3.5.14** BOM (`jooq.version` **3.19.x**, c
 
 - `GridSQL.installProduct(Configuration)` — host `SQLDialect.DEFAULT` + Settings; **fail-fast** on SQLITE/POSTGRES/MYSQL/…. Does **not** register VisitListener / ExecuteListener SQL rewrites.
 - Logical dialect = `GridDialect` (`org.genfork.grid.jooq.dialect`); there is no OSS `SQLDialect.GRID` enum constant.
+
+| `GridDialect` flag | Meaning |
+|--------------------|---------|
+| `supportsOnConflictDoUpdate` | `INSERT … ON CONFLICT (…) DO UPDATE SET …` / `EXCLUDED.col` |
+| `supportsOnConflictDoNothing` | `INSERT … ON CONFLICT (…) DO NOTHING` |
+| `supportsReturning` | Native `INSERT … RETURNING …` (no `last_insert_rowid` emulation) |
+| `supportsTruncate` | `TRUNCATE TABLE` |
+| `supportsForUpdateSkipLocked` | `FOR UPDATE SKIP LOCKED` |
+| `supportsIndexedBinds` | Indexed `?` binds |
+
 - `GridDSL` — `DSLContext` factory plus Grid QueryParts:
   - `GridDSL.insertInto(dsl, table).set(…).onConflict(…).doUpdate().set(…)` → `ON CONFLICT … DO UPDATE` (not `ON DUPLICATE KEY`)
   - `onConflictDoNothing` / `insertReturning` / `truncate`
+  - `GridDSL.buildBatchStatements(queries)` → SPI `BatchStatement` slots; `GridDSL.executeBatchBound(dsl, queries)` → one bound `BATCH_EXEC` over `GridConnection`
+  - Under `installProduct`, jOOQ `.forUpdate().skipLocked()` renders `FOR UPDATE SKIP LOCKED` (`GridForUpdateSkipLocked`); writer-only — [transactions](transactions.md)
 - Forbidden on the product path: `SQLDialect.SQLITE|POSTGRES|MYSQL`, VisitListener/ExecuteListener strip-rewrite as a “dialect”.
 - `GridConnectionProvider` — sync JDBC acquire/release for jOOQ.
-- JDBC edge (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` maps exceptions only.
+- JDBC edge (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` maps exceptions only. `RETURNING` via `executeUpdate` + `getGeneratedKeys()` — [JDBC client](jdbc-tooling.md).
 
 ## Consumer codegen (app-owned)
 

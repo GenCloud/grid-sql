@@ -71,6 +71,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -129,6 +130,11 @@ public class ReplicationCoordinator {
 	private final NettyReplicationTransport nettyTransport;
 	private final AdaptiveDiskFirstController adaptiveDiskFirstController;
 	private final Map<String, ReplicaApplier> appliers = new ConcurrentHashMap<>();
+	private final Map<String, MutationRecorder> recorders = new ConcurrentHashMap<>();
+	/** Domains bound during {@code _catalog} OpLog DDL; FULL hydrate deferred until catalog replay ends. */
+	private final Set<String> deferredHydrateDomains = ConcurrentHashMap.newKeySet();
+	/** {@code > 0} while nested inside {@code _catalog} {@link SealedHydrateService#hydrateDomainFull}. */
+	private final AtomicInteger catalogHydrateDepth = new AtomicInteger();
 	private final Set<String> pendingSchemaBarriers = ConcurrentHashMap.newKeySet();
 	private final ReplicationFlowControl flowControl;
 	/**
@@ -252,6 +258,15 @@ public class ReplicationCoordinator {
 		final ReplicaApplier catalogApplier = appliers.get(CATALOG_DOMAIN);
 		if (catalogApplier != null) {
 			catalogApplier.setCatalogDdlHandler(handler);
+		}
+	}
+
+	/**
+	 * After SqlEngine catalog bind + {@code recoverPersistedCatalog}: allow HELLO sealed packs.
+	 */
+	public void markCatalogBootstrapComplete() {
+		if (sealedHydrateService != null) {
+			sealedHydrateService.markCatalogBootstrapComplete();
 		}
 	}
 
@@ -515,6 +530,12 @@ public class ReplicationCoordinator {
 		if (!enabled) {
 			return null;
 		}
+		final MutationRecorder existing = recorders.get(domainType);
+		if (existing != null && appliers.containsKey(domainType)) {
+			// Idempotent: do not second hydrate / second orchid apply listener.
+			sealedGridMapService.bindProcessor(domainType, processorByShard);
+			return existing;
+		}
 		final ApplyAckSender ackSender = new ApplyAckSender() {
 			@Override
 			public void sendAck(ReplicationOp op) {
@@ -561,13 +582,38 @@ public class ReplicationCoordinator {
 				homologousRepair,
 				streamOpLogAppender,
 				streamCommitSerializer);
+		recorders.put(domainType, recorder);
 		sealedGridMapService.bindProcessor(domainType, processorByShard);
 		final boolean lazy = sealedHydrateService.isLazyHydrate() && !CATALOG_DOMAIN.equals(domainType);
+		final boolean deferTableHydrate = !CATALOG_DOMAIN.equals(domainType)
+				&& catalogHydrateDepth.get() > 0
+				&& !lazy;
 		if (lazy) {
 			log.info("Domain={} hydrateMode=LAZY (shard-touch on access)", domainType);
+			finishDomainRegistration(domainType);
+		} else if (deferTableHydrate) {
+			// Bind only: finishDomainRegistration (schema BARRIER) must run AFTER hydrate —
+			// otherwise BARRIER advances appliedWm past OpLog UPSERTs and FULL hydrate skips rows.
+			deferredHydrateDomains.add(domainType);
+			log.debug("Domain={} FULL hydrate deferred until _catalog OpLog replay ends", domainType);
+		} else if (CATALOG_DOMAIN.equals(domainType)) {
+			catalogHydrateDepth.incrementAndGet();
+			try {
+				sealedHydrateService.hydrateDomainFull(domainType, applier);
+				flushDeferredDomainHydrates();
+			} finally {
+				catalogHydrateDepth.decrementAndGet();
+			}
+			finishDomainRegistration(domainType);
 		} else {
 			sealedHydrateService.hydrateDomainFull(domainType, applier);
+			finishDomainRegistration(domainType);
 		}
+		return recorder;
+	}
+
+	/** OpLog index-ckpt + placement + schema barrier after hydrate (or deferred bind). */
+	private void finishDomainRegistration(String domainType) {
 		long maxSeq = 0L;
 		for (String streamKey : opLog.streamKeys()) {
 			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
@@ -596,7 +642,23 @@ public class ReplicationCoordinator {
 			}
 		}
 		pipelineSchemaBarrier(domainType);
-		return recorder;
+	}
+
+	/** FULL hydrate + finishDomainRegistration for domains bound during nested {@code _catalog} DDL. */
+	private void flushDeferredDomainHydrates() {
+		if (deferredHydrateDomains.isEmpty()) {
+			return;
+		}
+		final ArrayList<String> domains = new ArrayList<>(deferredHydrateDomains);
+		deferredHydrateDomains.clear();
+		for (String domainType : domains) {
+			final ReplicaApplier applier = appliers.get(domainType);
+			if (applier == null) {
+				continue;
+			}
+			sealedHydrateService.hydrateDomainFull(domainType, applier);
+			finishDomainRegistration(domainType);
+		}
 	}
 
 	/**

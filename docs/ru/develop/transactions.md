@@ -50,12 +50,22 @@ Mono<Void> transfer = Mono.usingWhen(
 Пакетный вариант, когда несколько запросов делят одну транзакцию и один RTT:
 
 ```java
+// Только текст SQL — без binds на слот
 tx.executeBatch(List.of(
         "UPDATE accounts SET balance = balance - 10 WHERE id = 1",
         "UPDATE accounts SET balance = balance + 10 WHERE id = 2"));
+
+// Индексированный SQL + binds — один RTT BATCH_EXEC с binds
+tx.executeBatchBound(List.of(
+        new BatchStatement(
+                "UPDATE accounts SET balance = balance - ? WHERE id = ?",
+                new Object[]{10L, 1L}),
+        new BatchStatement(
+                "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+                new Object[]{10L, 2L})));
 ```
 
-Все запросы батча видят один и тот же грязный буфер; при ошибке остаток не выполняется.
+`BatchStatement` — `org.genfork.grid.sql.client.BatchStatement` (SQL + `Object[]` binds). Зеркало в autocommit: `Connection.executeBatch` / `executeBatchBound`. Все слоты батча видят один и тот же грязный буфер; при ошибке остаток не выполняется.
 
 ## Параллельные транзакции
 

@@ -208,7 +208,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 	@Override
 	public IndexOperationResult searchEq(T key) {
 		if (key == null) {
-			return new IndexOperationResult();
+			return IndexOperationResult.EMPTY;
 		}
 		return root.searchEq(key);
 	}
@@ -1080,11 +1080,12 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 				return operationResult;
 			}
 			final int idx = indexedBinarySearch(keys, key, false);
-			if (idx >= 0) {
-				final Set<IndexPointerRef> currentPointers = values.get(idx);
-				operationResult.addSize(currentPointers.size());
-				operationResult.setPointers(currentPointers);
+			if (idx < 0) {
+				return IndexOperationResult.EMPTY;
 			}
+			final Set<IndexPointerRef> currentPointers = values.get(idx);
+			operationResult.addSize(currentPointers.size());
+			operationResult.setPointers(currentPointers);
 			return operationResult;
 		}
 
@@ -1094,15 +1095,15 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 				return searchEq(key);
 			}
 			if (!key.isPartial()) {
-				final IndexOperationResult operationResult = new IndexOperationResult();
 				final int idx = indexedBinarySearch(keys, key, false);
 				if (idx < 0) {
-					return operationResult;
+					return IndexOperationResult.EMPTY;
 				}
 				final Set<IndexPointerRef> currentPointers = values.get(idx);
 				if (currentPointers == null || currentPointers.isEmpty()) {
-					return operationResult;
+					return IndexOperationResult.EMPTY;
 				}
+				final IndexOperationResult operationResult = new IndexOperationResult();
 				if (currentPointers.size() <= maxResults) {
 					operationResult.addSize(currentPointers.size());
 					operationResult.setPointers(currentPointers);

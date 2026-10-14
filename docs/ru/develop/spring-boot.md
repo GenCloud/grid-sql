@@ -52,6 +52,7 @@ grid:
     enabled: true
     host: 0.0.0.0
     port: 15432
+    max-tx-contexts: 8          # жёсткий потолок открытых TX-контекстов на SQL TCP-канал
   codec:
     duplex:
       enabled: true

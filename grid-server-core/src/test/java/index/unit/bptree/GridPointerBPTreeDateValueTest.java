@@ -133,7 +133,8 @@ public class GridPointerBPTreeDateValueTest extends AbstractGridPointerBPTreeTes
 	@Test
 	public void _08_expect_not_exists() {
 		final IndexOperationResult result = laxTree.searchEq(null);
-		Assertions.assertNull(result.getPointers());
+		Assertions.assertTrue(result.pointersOrExpand().isEmpty());
+		Assertions.assertEquals(0, result.getSize());
 	}
 
 	@Test
@@ -142,7 +143,8 @@ public class GridPointerBPTreeDateValueTest extends AbstractGridPointerBPTreeTes
 		laxTree.delete(new SingleTreeKey(valueArray));
 
 		final IndexOperationResult result = laxTree.searchEq(new SingleTreeKey(valueArray));
-		Assertions.assertNull(result.getPointers());
+		Assertions.assertTrue(result.pointersOrExpand().isEmpty());
+		Assertions.assertEquals(0, result.getSize());
 	}
 
 	@Test

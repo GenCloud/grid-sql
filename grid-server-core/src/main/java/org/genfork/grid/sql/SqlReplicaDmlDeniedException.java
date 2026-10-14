@@ -26,4 +26,8 @@ public final class SqlReplicaDmlDeniedException extends RuntimeException {
 	public SqlReplicaDmlDeniedException(String message) {
 		super(message);
 	}
+
+	public SqlReplicaDmlDeniedException(String message, Throwable cause) {
+		super(message, cause);
+	}
 }

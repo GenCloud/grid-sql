@@ -125,7 +125,8 @@ Grid **отклоняет DDL внутри открытой транзакции
   - `CREATE USER` / `DROP USER` / `GRANT` / `REVOKE`
   - `SELECT * FROM information_schema.users|roles|role_members|table_privileges`
 - SQL Editor: разовые `SELECT` и DML в пределах упрощённого диалекта.
-- **Многооператорные скрипты** (через `;`): ANTLR `script` → `BATCH_EXEC` (DBeaver script без Bad SQL).
+- **Многооператорные скрипты** (через `;`): ANTLR `script` → `BATCH_EXEC` только из текста SQL (DBeaver script без Bad SQL). Это не то же самое, что bound prepared batch.
+- **`PreparedStatement.addBatch()` + `executeBatch()`**: один и тот же SQL, N строк binds → один bound `BATCH_EXEC` (SPI `BatchStatement` / wire binds). Предпочтительный путь для повторяемого DML с параметрами.
 - Транзакции, в том числе точки сохранения. Параллельные TX = N JDBC `Connection` с одной фабрики (multiplex), не один TX на сокет.
 - Прокручиваемый `ResultSet` и Data Editor — для одиночной таблицы с первичным ключом (materialize для IDE). При **составном PK** UPDATE/DELETE в Data Editor строит WHERE только по **ведущей колонке PK**, не по полному составному ключу.
 - `Statement.cancel()` отменяет незавершённый SyncAwait и отправляет по протоколу кадр `CANCEL`.
@@ -133,6 +134,9 @@ Grid **отклоняет DDL внутри открытой транзакции
 - Unwrap: `SyncConnection`, `ServerMeta`, `SyncConnectionFactory`; `pin` / `unpin` на `GridConnection`.
 - Метаданные колонок приходят из `RowMetadata` / `ROW_DESC`; JDBC-подсказки каталога используются только как запасной путь.
 - `isValid()` проверяет жизненный цикл канала и не гоняет `SELECT 1`.
+- **Binds для `BYTES` / `BYTEA`:** `PreparedStatement.setBytes` / `byte[]`. JDBC meta и codegen отдают **`VARBINARY`**; DDL и `information_schema` сохраняют продуктовое имя **`BYTEA`** (синоним `BYTES`).
+- **Temporal (`TIMESTAMP`):** `setObject(LocalDateTime)`, `getObject(…, LocalDateTime.class)`, `getTimestamp` (тот же контракт, что в [grid-jooq README](../../../grid-jooq/README.md)).
+- **`RETURNING` → generated keys:** DML с `RETURNING` через `Statement.executeUpdate` / `PreparedStatement.executeUpdate`, затем `getGeneratedKeys()` (путь jOOQ `SQLDialect.DEFAULT` + `returning()`). Это не отдельный ResultSet от `executeQuery`.
 
 ## Частая ошибка: `bad frameLen …`
 

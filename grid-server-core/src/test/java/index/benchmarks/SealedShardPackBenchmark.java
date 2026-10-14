@@ -15,9 +15,11 @@
  */
 package index.benchmarks;
 
+import org.genfork.grid.mem.GridScalableMap;
 import org.genfork.grid.mem.index.IndexPointerRef;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
+import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.replication.snapshot.sealed.SealedBitmapService;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.snapshot.sealed.SealedPackFingerprint;
@@ -55,7 +57,7 @@ import java.util.concurrent.TimeUnit;
  * Pack / fingerprint thrpt for sealed migrate CATCH_UP ship path.
  *
  * @author: GenCloud
- * @date: 2026/05
+ * @date: 2026/10
  * @since: 1.0
  */
 @BenchmarkMode(Mode.Throughput)
@@ -82,6 +84,14 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 	public void setup() throws Exception {
 		sealedRoot = Files.createTempDirectory("sealed-pack-jmh");
 		sealed = new SealedGridMapService(sealedRoot);
+		final GridEntriesProcessor processor = new GridEntriesProcessor(
+				SHARD, new GridScalableMap(), null, null);
+		sealed.bindProcessor(DOMAIN, shard -> shard == SHARD ? processor : null);
+		for (int i = 0; i < ARTIFACT_ROWS; i++) {
+			final byte[] key = ("k" + i).getBytes(StandardCharsets.UTF_8);
+			processor.installCommitted(key, ("v" + i).getBytes(StandardCharsets.UTF_8), false);
+		}
+		sealed.dumpDomain(DOMAIN, null, null);
 		final SealedBitmapService bitmaps = sealed.sealedBitmapService();
 		final GridBitmapIndex bitmap = new GridBitmapIndex(BITMAP_PROPERTY + "-BITMAP", BITMAP_CAPACITY);
 		for (int i = 0; i < ARTIFACT_ROWS; i++) {
@@ -125,6 +135,21 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 		deleteRecursive(target);
 		Files.createDirectories(target);
 		bh.consume(SealedShardPack.unpack(packedBytes, target).size());
+	}
+
+	/** Shard-local HELLO apply path: unpack under lifecycle gate + openShardLazy (no full-domain hydrate). */
+	@Benchmark
+	public long unpackShardArtifactsAndOpenLazy() throws Exception {
+		sealed.unpackShardArtifacts(DOMAIN, SHARD, packedBytes);
+		return sealed.openShardLazy(DOMAIN, SHARD);
+	}
+
+	/** G-00001: double seal dump with live reader (overwrite-close + short exclusive write). */
+	@Benchmark
+	public int doubleDumpDomain() {
+		final int first = sealed.dumpDomain(DOMAIN, null, null);
+		final int second = sealed.dumpDomain(DOMAIN, null, null);
+		return first + second;
 	}
 
 	@Test

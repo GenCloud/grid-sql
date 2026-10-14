@@ -325,12 +325,14 @@ public final class SqlEngine {
 			dispatchSql = expanded;
 			stmt = applyWireExecuteBinds(SqlStatementParser.parse(expanded, sess.timezone()), binds);
 		}
-		SqlReplicaAdmission.afterParse(sess, stmt, replication);
-		ensurePrivilege(sess, stmt);
 		final TableCatalog prevCatalog = SqlUdfLookup.push(catalog);
 		final SqlUdfCallContext prevCtx = SqlUdfCallContext.push(sess, this::execute);
 		try {
+			SqlReplicaAdmission.afterParse(sess, stmt, replication);
+			ensurePrivilege(sess, stmt);
 			return dispatch(sess, stmt, dispatchSql);
+		} catch (RuntimeException ex) {
+			throw SqlExecErrorContextUtil.enrich(ex, dispatchSql, binds);
 		} finally {
 			SqlUdfCallContext.restore(prevCtx);
 			SqlUdfLookup.restore(prevCatalog);
@@ -380,12 +382,14 @@ public final class SqlEngine {
 		final String dispatchSql = bound instanceof SelectSql select
 				? select.sql()
 				: placeholderSql;
-		SqlReplicaAdmission.afterParse(sess, bound, replication);
-		ensurePrivilege(sess, bound);
 		final TableCatalog prevCatalog = SqlUdfLookup.push(catalog);
 		final SqlUdfCallContext prevCtx = SqlUdfCallContext.push(sess, this::execute);
 		try {
+			SqlReplicaAdmission.afterParse(sess, bound, replication);
+			ensurePrivilege(sess, bound);
 			return dispatch(sess, bound, dispatchSql);
+		} catch (RuntimeException ex) {
+			throw SqlExecErrorContextUtil.enrich(ex, dispatchSql, binds);
 		} finally {
 			SqlUdfCallContext.restore(prevCtx);
 			SqlUdfLookup.restore(prevCatalog);

@@ -128,7 +128,7 @@ CREATE BITMAP INDEX idx_orders_status ON orders (status);
 DROP INDEX idx_orders_customer ON orders;
 ```
 
-A single column gives a B+ tree of pointers, several columns give a composite tree. `BITMAP` is enabled **only** by an explicit `CREATE BITMAP INDEX` and only on one column; it cannot be turned on through YAML configuration. When bitmap is appropriate and how an index takes part in the plan — see [indexes](indexes.md).
+A single column gives a B+ tree of pointers, several columns give a composite tree. `BITMAP` is enabled **only** by an explicit `CREATE BITMAP INDEX` and only on one column; it cannot be turned on through YAML configuration. `DROP INDEX` also best-effort purges sealed `.sbpt` / `.sbm` for that index so LAZY hydrate cannot resurrect it — details in [indexes](indexes.md). When bitmap is appropriate and how an index takes part in the plan — see the same page.
 
 ## ALTER TABLE
 

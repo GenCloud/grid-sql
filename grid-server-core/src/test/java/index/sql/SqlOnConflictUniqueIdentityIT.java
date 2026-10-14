@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.sql.SqlEngine;
+import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlSession;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -85,6 +86,26 @@ class SqlOnConflictUniqueIdentityIT {
 		assertEquals(1, engine.execute(
 				"SELECT id FROM event_schedulers WHERE event_name = 'E' AND scheduler_name = 'S'")
 				.rows().size());
+	}
+
+	/**
+	 * IT-R3: repeated ON CONFLICT must keep a single IDENTITY id (no ghost PK).
+	 */
+	@Test
+	void onConflictDoesNotAllocateSecondIdentityWhenUniqueExists() {
+		engine.execute(
+				"INSERT INTO event_schedulers (event_name, scheduler_name, prev_fire_time) "
+						+ "VALUES ('E', 'S', TIMESTAMP '2020-01-01 00:00:00')");
+		final Object firstId = engine.execute(
+				"SELECT id FROM event_schedulers WHERE event_name = 'E' AND scheduler_name = 'S'")
+				.rows().getFirst()[0];
+		engine.execute(UPSERT_SQL);
+		engine.execute(UPSERT_SQL);
+		final SqlResult rows = engine.execute(
+				"SELECT id FROM event_schedulers WHERE event_name = 'E' AND scheduler_name = 'S'");
+		assertEquals(1, rows.rows().size());
+		assertEquals(firstId, rows.rows().getFirst()[0]);
+		assertEquals(1, engine.execute("SELECT id FROM event_schedulers").rows().size());
 	}
 
 	@Test

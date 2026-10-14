@@ -18,6 +18,7 @@ package index.sql;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
+import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
 import org.genfork.grid.sql.client.Result;
 import org.genfork.grid.sql.netty.SqlServer;
@@ -131,6 +132,53 @@ public class SqlEngineCatalogDmlTest {
 		assertEquals(1, engine.execute("SELECT id FROM item_data").rows().size());
 		assertEquals(5L, ((Number) engine.execute(
 				"SELECT item_count FROM item_data WHERE id = 1").rows().getFirst()[0]).longValue());
+	}
+
+	/**
+	 * jOOQ {@code DSL.val(boolean)} materializes to TRUE/FALSE; must not parse as ColumnRef
+	 * ({@code expression SELECT without FROM cannot reference columns: FALSE}).
+	 */
+	@Test
+	void insertSelectBoolLiteralWhereNotExists() {
+		engine.execute(
+				"CREATE TABLE item_bool (id INT PRIMARY KEY, owner_id INT, item_id INT, locked BOOLEAN, location_data VARCHAR)");
+		engine.execute(
+				"INSERT INTO item_bool (id, owner_id, item_id, locked, location_data) "
+						+ "SELECT 1, 10, 57, FALSE, 'INVENTORY' WHERE NOT EXISTS ("
+						+ "SELECT 1 AS one FROM item_bool WHERE owner_id = 10 AND item_id = 57 AND location_data = 'INVENTORY')");
+		assertEquals(1, engine.execute("SELECT id FROM item_bool WHERE id = 1").rows().size());
+		assertEquals(Boolean.FALSE, engine.execute(
+				"SELECT locked FROM item_bool WHERE id = 1").rows().getFirst()[0]);
+
+		final SqlResult second = engine.execute(
+				"INSERT INTO item_bool (id, owner_id, item_id, locked, location_data) "
+						+ "SELECT 2, 10, 57, TRUE, 'INVENTORY' WHERE NOT EXISTS ("
+						+ "SELECT 1 AS one FROM item_bool WHERE owner_id = 10 AND item_id = 57 AND location_data = 'INVENTORY')");
+		assertEquals(0L, second.rowsAffected());
+		assertEquals(1, engine.execute("SELECT id FROM item_bool").rows().size());
+	}
+
+	/** Same shape as ItemRepository stackable insert-if-absent over JDBC binds (bool → FALSE). */
+	@Test
+	void insertSelectBoolBindWhereNotExists() {
+		engine.execute(
+				"CREATE TABLE item_bind (id INT PRIMARY KEY, owner_id INT, item_id INT, locked BOOLEAN, location_data VARCHAR)");
+		final String sql =
+				"INSERT INTO item_bind (id, owner_id, item_id, locked, location_data) "
+						+ "SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS ("
+						+ "SELECT 1 AS one FROM item_bind WHERE owner_id = ? AND item_id = ? AND location_data = ?)";
+		final SqlResult first = engine.execute(
+				(SqlSession) null,
+				sql,
+				new Object[]{1, 10, 57, Boolean.FALSE, "INVENTORY", 10, 57, "INVENTORY"});
+		assertEquals(1L, first.rowsAffected());
+		assertEquals(Boolean.FALSE, engine.execute(
+				"SELECT locked FROM item_bind WHERE id = 1").rows().getFirst()[0]);
+		final SqlResult second = engine.execute(
+				(SqlSession) null,
+				sql,
+				new Object[]{2, 10, 57, Boolean.TRUE, "INVENTORY", 10, 57, "INVENTORY"});
+		assertEquals(0L, second.rowsAffected());
 	}
 
 	@Test

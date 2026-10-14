@@ -106,7 +106,14 @@ Flux<String> names = connection
         .flatMap(result -> result.map((row, meta) -> row.get("name", String.class)));
 ```
 
-Several statements in one RTT — `connection.executeBatch(List.of(...))`. In autocommit each statement commits on its own; there is no shared transaction around them.
+Several statements in one RTT:
+
+| API | Payload | Wire |
+|-----|---------|------|
+| `connection.executeBatch(List.of(...))` | SQL text only | `BATCH_EXEC` without per-slot binds |
+| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Indexed SQL + `Object[]` binds per slot (`org.genfork.grid.sql.client.BatchStatement`) | One RTT `BATCH_EXEC` with binds |
+
+In autocommit each slot commits on its own; there is no shared transaction around them. For a shared TX use `TxContext.executeBatch` / `executeBatchBound` after `begin()` — [transactions](transactions.md).
 
 ## Transactions
 

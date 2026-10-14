@@ -44,12 +44,24 @@
 
 - `GridSQL.installProduct(Configuration)` — host `SQLDialect.DEFAULT` + Settings; **fail-fast** на SQLITE/POSTGRES/MYSQL/…. **Не** регистрирует VisitListener / ExecuteListener SQL-rewrite.
 - Логический диалект = `GridDialect` (модуль `org.genfork.grid.jooq.dialect`), не enum `SQLDialect.GRID` (в OSS jOOQ закрытый enum).
+
+| Флаг `GridDialect` | Смысл |
+|--------------------|-------|
+| `supportsOnConflictDoUpdate` | `INSERT … ON CONFLICT (…) DO UPDATE SET …` / `EXCLUDED.col` |
+| `supportsOnConflictDoNothing` | `INSERT … ON CONFLICT (…) DO NOTHING` |
+| `supportsReturning` | Нативный `INSERT … RETURNING …` (без эмуляции `last_insert_rowid`) |
+| `supportsTruncate` | `TRUNCATE TABLE` |
+| `supportsForUpdateSkipLocked` | `FOR UPDATE SKIP LOCKED` |
+| `supportsIndexedBinds` | Индексированные binds `?` |
+
 - `GridDSL` — factory `DSLContext` + Grid QueryParts:
   - `GridDSL.insertInto(dsl, table).set(…).onConflict(…).doUpdate().set(…)` → `ON CONFLICT … DO UPDATE` (не `ON DUPLICATE KEY`)
   - `onConflictDoNothing` / `insertReturning` / `truncate`
+  - `GridDSL.buildBatchStatements(queries)` → слоты SPI `BatchStatement`; `GridDSL.executeBatchBound(dsl, queries)` → один bound `BATCH_EXEC` через `GridConnection`
+  - Под `installProduct` jOOQ `.forUpdate().skipLocked()` рендерит `FOR UPDATE SKIP LOCKED` (`GridForUpdateSkipLocked`); только на writer — [транзакции](transactions.md)
 - Запрещено в product path: `SQLDialect.SQLITE|POSTGRES|MYSQL`, VisitListener/ExecuteListener strip-rewrite как «диалект».
 - `GridConnectionProvider` — sync acquire/release для jOOQ.
-- Граница JDBC (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` только маппит исключения.
+- Граница JDBC (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` только маппит исключения. `RETURNING` через `executeUpdate` + `getGeneratedKeys()` — [JDBC-клиент](jdbc-tooling.md).
 
 ## Codegen у потребителя
 

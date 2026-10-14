@@ -270,6 +270,10 @@ public final class SqlServerRuntime implements AutoCloseable {
 			}
 			engine.setOverlay(overlayStore, autoPinTtlMs);
 			engine.recoverPersistedCatalog();
+			if (effective != null) {
+				// HELLO sealed packs deferred until catalog bind + recover (boot race vs nested FULL hydrate).
+				effective.markCatalogBootstrapComplete();
+			}
 			seedBootstrapAdministrator(engine.privileges(), user, password);
 			final SqlServer tcp = listen
 					? new SqlServer(host, port, engine, user, password, maxTxContexts, effective)

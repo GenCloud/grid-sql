@@ -536,9 +536,14 @@ selectList
     | selectItem (',' selectItem)*
     ;
 
+/**
+ * Prefer {@code value} (NULL/TRUE/FALSE/?/literals) before {@code columnName} —
+ * TRUE/FALSE/NULL are also {@link #keywordAsIdent} and would otherwise parse as ColumnRef
+ * (breaks jOOQ {@code INSERT … SELECT … FALSE … WHERE NOT EXISTS} after bind materialize).
+ * Keep coalesce / fn / EXISTS alts above {@code value} (value also embeds coalesceExpr).
+ */
 selectItem
-    : columnName (AS alias=ident)?
-    | aggregateExpr (AS alias=ident)?
+    : aggregateExpr (AS alias=ident)?
     | windowExpr (AS alias=ident)?
     | functionCall (AS alias=ident)?
     | coalesceExpr (AS alias=ident)?
@@ -547,8 +552,8 @@ selectItem
     | NOW '(' ')' (AS alias=ident)?
     | CURRENT_TIMESTAMP (AS alias=ident)?
     | CURRENT_DATE (AS alias=ident)?
-    /** JOOQ {@code SELECT 1 AS one} inside EXISTS / fetchExists. */
     | value (AS alias=ident)?
+    | columnName (AS alias=ident)?
     ;
 
 functionCall

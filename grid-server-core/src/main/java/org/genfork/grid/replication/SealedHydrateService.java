@@ -23,6 +23,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
@@ -85,6 +87,12 @@ public final class SealedHydrateService {
 	private final Set<String> hydratedShards = ConcurrentHashMap.newKeySet();
 	private final AtomicInteger hydrateShardsDone = new AtomicInteger();
 	private final AtomicInteger hydrateShardsTotal = new AtomicInteger();
+	/**
+	 * False until {@link #markCatalogBootstrapComplete()} — HELLO sealed packs are queued so they
+	 * cannot race nested FULL hydrate during {@code _catalog} DDL replay.
+	 */
+	private final AtomicBoolean catalogBootstrapComplete = new AtomicBoolean(false);
+	private final ConcurrentLinkedQueue<SealedShardPackMsg> pendingSealedPacks = new ConcurrentLinkedQueue<>();
 
 	public SealedHydrateService(
 			boolean enabled,
@@ -393,19 +401,55 @@ public final class SealedHydrateService {
 		if (msg == null || sealedGridMapService == null || msg.packed() == null || msg.packed().length == 0) {
 			return;
 		}
+		if (!catalogBootstrapComplete.get()) {
+			pendingSealedPacks.offer(msg);
+			log.debug("Deferred sealed shard pack until catalog bootstrap from={} domain={} shard={}",
+					msg.fromNodeId(), msg.domainType(), msg.shard());
+			return;
+		}
+		applySealedShardPackLocal(msg);
+	}
+
+	/**
+	 * Allow HELLO sealed packs after SqlEngine catalog bind + deferred table hydrates.
+	 * Drains packs queued during bootstrap (shard-local apply, not full-domain stampede).
+	 */
+	public void markCatalogBootstrapComplete() {
+		catalogBootstrapComplete.set(true);
+		SealedShardPackMsg pending;
+		while ((pending = pendingSealedPacks.poll()) != null) {
+			applySealedShardPackLocal(pending);
+		}
+	}
+
+	/**
+	 * Unpack one shard and reopen + OpLog-tail hydrate that shard only.
+	 * Must not call {@link #hydrateDomainFull} per pack (stampede × shardCount).
+	 */
+	private void applySealedShardPackLocal(SealedShardPackMsg msg) {
+		final String domainType = msg.domainType();
+		final int shard = msg.shard();
 		try {
-			sealedGridMapService.unpackShardArtifacts(msg.packed());
+			// Unmap live readers before REPLACE — Windows AccessDenied on mmap'd sealed files.
+			sealedGridMapService.unpackShardArtifacts(domainType, shard, msg.packed());
 			log.debug("Unpacked sealed shard pack from={} domain={} shard={} bytes={}",
-					msg.fromNodeId(), msg.domainType(), msg.shard(), msg.packed().length);
-			// Unpack alone leaves map cold — hydrate sealed (+ OpLog tail) so rejoin after
-			// truncate sees pre-watermark keys without waiting for miss path.
-			final ReplicaApplier applier = appliers.get(msg.domainType());
-			if (applier != null) {
-				hydrateDomainFull(msg.domainType(), applier);
+					msg.fromNodeId(), domainType, shard, msg.packed().length);
+			long wm = sealedGridMapService.openShardLazy(domainType, shard);
+			if (wm > 0) {
+				nodeState.resetApplied(domainType, shard);
+				nodeState.advanceApplied(domainType, shard, wm);
 			}
+			final ReplicaApplier applier = appliers.get(domainType);
+			if (applier != null) {
+				snapshotService.hydrateOpLogFrom(domainType, shard, wm, applier, homologousRepair);
+			}
+			final String key = OpLogStreamKeyUtil.format(domainType, shard);
+			hydratedShards.add(key);
+			hydrateShardsDone.set(hydratedShards.size());
+			hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
 		} catch (IOException failure) {
 			log.warn("Failed to unpack sealed shard pack from={} domain={} shard={}: {}",
-					msg.fromNodeId(), msg.domainType(), msg.shard(), failure.toString());
+					msg.fromNodeId(), domainType, shard, failure.toString());
 		}
 	}
 

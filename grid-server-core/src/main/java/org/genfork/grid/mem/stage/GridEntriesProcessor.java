@@ -650,6 +650,19 @@ public class GridEntriesProcessor {
 	}
 
 	/**
+	 * Map+index tombstone for a PK displaced from a STRICT UNIQUE slot by a later UPSERT owner.
+	 */
+	public void tombstoneDisplacedStrictOwner(byte[] key) {
+		if (key == null) {
+			return;
+		}
+		putSealedDeleteTombstone(key);
+		if (gridIndexWorker != null) {
+			gridIndexWorker.indexNowRemove(key);
+		}
+	}
+
+	/**
 	 * Map put only (no staging / index queue). Pair with {@link GridIndexWorker#indexNow}.
 	 */
 	public void putMapOnly(byte[] key, byte[] value) {

@@ -15,6 +15,8 @@ DROP INDEX idx_t_name ON t;
 
 Index names are **object-local** (no `schema.` inside the identifier). The schema qualifier belongs on the table (`ON analytics.t`), not on the index name. On DDL journal recover, an illegal `schema.` prefix in an index name is stripped.
 
+`DROP INDEX` removes the catalog / in-memory index **and** best-effort purges sealed `.sbpt` / `.sbm` for that index (`SealedIndexPurgeUtil`), including catalog-named and composite-column sealed names. That way `hydrate-mode: LAZY` cannot resurrect a STRICT tree after the schema no longer lists the index. Contrast [`DROP TABLE`](ddl.md): table drop does **not** hot-purge all sealed domain artifacts (explicit retire stays separate).
+
 ## Three kinds
 
 | Kind | `IndexType` | Structure | Meaning |

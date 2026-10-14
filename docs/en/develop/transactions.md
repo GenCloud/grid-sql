@@ -50,12 +50,22 @@ If the transaction reached `commit()`, a `rollback()` in the release phase does 
 The batch variant, when several statements share one transaction and one RTT:
 
 ```java
+// SQL text only — no per-slot binds
 tx.executeBatch(List.of(
         "UPDATE accounts SET balance = balance - 10 WHERE id = 1",
         "UPDATE accounts SET balance = balance + 10 WHERE id = 2"));
+
+// Indexed SQL + binds — one RTT BATCH_EXEC with binds
+tx.executeBatchBound(List.of(
+        new BatchStatement(
+                "UPDATE accounts SET balance = balance - ? WHERE id = ?",
+                new Object[]{10L, 1L}),
+        new BatchStatement(
+                "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+                new Object[]{10L, 2L})));
 ```
 
-Every statement in the batch sees the same dirty buffer; on an error the remainder is not executed.
+`BatchStatement` is `org.genfork.grid.sql.client.BatchStatement` (SQL + `Object[]` binds). Autocommit mirrors: `Connection.executeBatch` / `executeBatchBound`. Every slot in the batch sees the same dirty buffer; on an error the remainder is not executed.
 
 ## Parallel transactions
 

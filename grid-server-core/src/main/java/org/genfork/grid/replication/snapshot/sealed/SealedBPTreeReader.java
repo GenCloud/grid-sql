@@ -615,6 +615,19 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		}
 	}
 
+	private void unmapAllForOverwrite() throws IOException {
+		if (mappedPage != null) {
+			GridFs.unmapForOverwrite(mappedPage);
+			mappedPage = null;
+			mappedPageId = -1;
+		}
+		if (pagesMap != null) {
+			GridFs.unmapForOverwrite(pagesMap);
+			pagesMap = null;
+			pageCache = null;
+		}
+	}
+
 	public int shard() {
 		return shard;
 	}
@@ -628,6 +641,24 @@ public final class SealedBPTreeReader implements AutoCloseable {
 			}
 			closed = true;
 			unmapAll();
+			channel.close();
+		} finally {
+			lifecycle.unlockWrite();
+		}
+	}
+
+	/**
+	 * Fail-closed close before sealed {@code .sbpt} {@code REPLACE} (G-00001).
+	 * Overwrite path only — not hot index remap.
+	 */
+	public void closeForOverwrite() throws IOException {
+		lifecycle.lockWrite();
+		try {
+			if (closed) {
+				return;
+			}
+			closed = true;
+			unmapAllForOverwrite();
 			channel.close();
 		} finally {
 			lifecycle.unlockWrite();

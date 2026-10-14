@@ -52,6 +52,7 @@ grid:
     enabled: true
     host: 0.0.0.0
     port: 15432
+    max-tx-contexts: 8          # hard cap open TX contexts per SQL TCP channel
   codec:
     duplex:
       enabled: true

@@ -122,6 +122,13 @@ public final class TableStore {
 			worker.start();
 		}
 
+		indexWorker.setDisplacedStrictOwnerTombstone(pk -> {
+			final GridEntriesProcessor processor = getProcessor(pk);
+			if (processor != null) {
+				processor.tombstoneDisplacedStrictOwner(pk);
+			}
+		});
+
 		index.setRowResolver(key -> getProcessor(key).get(key));
 		index.setTableRowStatsSupplier(this::approxRowStats);
 
@@ -403,8 +410,7 @@ public final class TableStore {
 	public long upsert(Object[] values, boolean rejectExistingPk) {
 		final Object[] coerced = coerceRow(values);
 		final byte[] keyBytes = PrimaryKeyCodec.encodeRow(schema, coerced);
-		validateConstraints(coerced, keyBytes, rejectExistingPk);
-		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
+		final byte[] valueBytes = validateConstraintsEncoded(coerced, keyBytes, rejectExistingPk);
 		final int shard = getShard(keyBytes);
 		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
@@ -670,8 +676,7 @@ public final class TableStore {
 				final ColumnDef col = schema.requireColumn(e.getKey());
 				values[col.ordinal()] = RowEncoder.coerce(col, e.getValue());
 			}
-			validateConstraints(values, keyBytes, false);
-			final byte[] merged = RowEncoder.encode(schema, values);
+			final byte[] merged = validateConstraintsEncoded(values, keyBytes, false);
 			if (mutationRecorder == null) {
 				processor.installCommitted(keyBytes, merged, false);
 				return 1L;
@@ -830,6 +835,13 @@ public final class TableStore {
 	 * Fail-closed NOT NULL (via {@link RowEncoder#coerce}) + UNIQUE/STRICT + duplicate PK on insert.
 	 */
 	public void validateConstraints(Object[] coerced, byte[] keyBytes, boolean rejectExistingPk) {
+		validateConstraintsEncoded(coerced, keyBytes, rejectExistingPk);
+	}
+
+	/**
+	 * Encode once, then CHECK + STRICT secondary unique (wire EQ) + optional PK reject.
+	 */
+	private byte[] validateConstraintsEncoded(Object[] coerced, byte[] keyBytes, boolean rejectExistingPk) {
 		Objects.requireNonNull(coerced, "coerced");
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		if (rejectExistingPk && getCommittedBytes(keyBytes) != null) {
@@ -839,62 +851,10 @@ public final class TableStore {
 							CatalogPersistUtil.syntheticPkIndexName(schema.catalogKey()),
 							"pk"));
 		}
-		validateChecks(coerced);
-		final String pkName = schema.pkColumn().name();
-		for (IndexDef idx : schema.indexes()) {
-			if (idx.kind() != IndexType.STRICT) {
-				continue;
-			}
-			if (idx.columns().size() == 1 && idx.columns().getFirst().equalsIgnoreCase(pkName)) {
-				continue;
-			}
-			boolean anyNull = false;
-			for (String colName : idx.columns()) {
-				final ColumnDef col = schema.requireColumn(colName);
-				if (coerced[col.ordinal()] == null) {
-					anyNull = true;
-					break;
-				}
-			}
-			if (anyNull) {
-				continue;
-			}
-			for (Object[] existing : allRows()) {
-				boolean same = true;
-				for (String colName : idx.columns()) {
-					final ColumnDef col = schema.requireColumn(colName);
-					final Object left = coerced[col.ordinal()];
-					final Object right = existing[col.ordinal()];
-					if (left == null ? right != null : !left.equals(right)) {
-						same = false;
-						break;
-					}
-				}
-				if (!same) {
-					continue;
-				}
-				boolean samePrimaryKey = true;
-				for (ColumnDef pkColumn : schema.pkColumns()) {
-					final Object existingPk = existing[pkColumn.ordinal()];
-					final Object newPk = coerced[pkColumn.ordinal()];
-					if (existingPk == null ? newPk != null : !existingPk.equals(newPk)) {
-						samePrimaryKey = false;
-						break;
-					}
-				}
-				if (!samePrimaryKey) {
-					throw new NonUniqueValueException(
-							NonUniqueValueException.formatMessage(schema.catalogKey(), idx.name(), "row"));
-				}
-			}
-		}
-	}
-
-	private void validateChecks(Object[] coerced) {
-		if (schema.checks().isEmpty()) {
-			return;
-		}
-		validateEncodedChecks(RowEncoder.encode(schema, coerced));
+		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
+		validateEncodedChecks(valueBytes);
+		StrictUniqueConstraintUtil.validateSecondaryStrict(this, schema, valueBytes, keyBytes);
+		return valueBytes;
 	}
 
 	private void validateEncodedChecks(byte[] valueBytes) {
@@ -967,8 +927,7 @@ public final class TableStore {
 	public EncodedRow encodeUpsert(Object[] values, boolean rejectExistingPk) {
 		final Object[] coerced = coerceRow(values);
 		final byte[] keyBytes = PrimaryKeyCodec.encodeRow(schema, coerced);
-		validateConstraints(coerced, keyBytes, rejectExistingPk);
-		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
+		final byte[] valueBytes = validateConstraintsEncoded(coerced, keyBytes, rejectExistingPk);
 		return new EncodedRow(keyBytes, valueBytes, getShard(keyBytes));
 	}
 
@@ -1001,8 +960,7 @@ public final class TableStore {
 			final ColumnDef col = schema.requireColumn(e.getKey());
 			values[col.ordinal()] = RowEncoder.coerce(col, e.getValue());
 		}
-		validateConstraints(values, keyBytes, false);
-		final byte[] merged = RowEncoder.encode(schema, values);
+		final byte[] merged = validateConstraintsEncoded(values, keyBytes, false);
 		return new EncodedRow(keyBytes, merged, getShard(keyBytes));
 	}
 

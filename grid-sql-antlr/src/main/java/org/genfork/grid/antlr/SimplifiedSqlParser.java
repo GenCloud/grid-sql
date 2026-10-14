@@ -8922,15 +8922,12 @@ public class SimplifiedSqlParser extends Parser {
 	@SuppressWarnings("CheckReturnValue")
 	public static class SelectItemContext extends ParserRuleContext {
 		public IdentContext alias;
-		public ColumnNameContext columnName() {
-			return getRuleContext(ColumnNameContext.class,0);
+		public AggregateExprContext aggregateExpr() {
+			return getRuleContext(AggregateExprContext.class,0);
 		}
 		public TerminalNode AS() { return getToken(SimplifiedSqlParser.AS, 0); }
 		public IdentContext ident() {
 			return getRuleContext(IdentContext.class,0);
-		}
-		public AggregateExprContext aggregateExpr() {
-			return getRuleContext(AggregateExprContext.class,0);
 		}
 		public WindowExprContext windowExpr() {
 			return getRuleContext(WindowExprContext.class,0);
@@ -8951,6 +8948,9 @@ public class SimplifiedSqlParser extends Parser {
 		public TerminalNode CURRENT_DATE() { return getToken(SimplifiedSqlParser.CURRENT_DATE, 0); }
 		public ValueContext value() {
 			return getRuleContext(ValueContext.class,0);
+		}
+		public ColumnNameContext columnName() {
+			return getRuleContext(ColumnNameContext.class,0);
 		}
 		public SelectItemContext(ParserRuleContext parent, int invokingState) {
 			super(parent, invokingState);
@@ -8983,7 +8983,7 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 1);
 				{
 				setState(1369);
-				columnName();
+				aggregateExpr();
 				setState(1372);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -9002,7 +9002,7 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 2);
 				{
 				setState(1374);
-				aggregateExpr();
+				windowExpr();
 				setState(1377);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -9021,7 +9021,7 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 3);
 				{
 				setState(1379);
-				windowExpr();
+				functionCall();
 				setState(1382);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -9040,7 +9040,7 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 4);
 				{
 				setState(1384);
-				functionCall();
+				coalesceExpr();
 				setState(1387);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -9059,15 +9059,21 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 5);
 				{
 				setState(1389);
-				coalesceExpr();
+				match(EXISTS);
+				setState(1390);
+				match(T__1);
+				setState(1391);
+				selectQuery();
 				setState(1392);
+				match(T__2);
+				setState(1395);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
 				if (_la==AS) {
 					{
-					setState(1390);
+					setState(1393);
 					match(AS);
-					setState(1391);
+					setState(1394);
 					((SelectItemContext)_localctx).alias = ident();
 					}
 				}
@@ -9077,22 +9083,24 @@ public class SimplifiedSqlParser extends Parser {
 			case 6:
 				enterOuterAlt(_localctx, 6);
 				{
-				setState(1394);
-				match(EXISTS);
-				setState(1395);
-				match(T__1);
-				setState(1396);
-				selectQuery();
 				setState(1397);
-				match(T__2);
+				match(NOT);
+				setState(1398);
+				match(EXISTS);
+				setState(1399);
+				match(T__1);
 				setState(1400);
+				selectQuery();
+				setState(1401);
+				match(T__2);
+				setState(1404);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
 				if (_la==AS) {
 					{
-					setState(1398);
+					setState(1402);
 					match(AS);
-					setState(1399);
+					setState(1403);
 					((SelectItemContext)_localctx).alias = ident();
 					}
 				}
@@ -9102,24 +9110,20 @@ public class SimplifiedSqlParser extends Parser {
 			case 7:
 				enterOuterAlt(_localctx, 7);
 				{
-				setState(1402);
-				match(NOT);
-				setState(1403);
-				match(EXISTS);
-				setState(1404);
-				match(T__1);
-				setState(1405);
-				selectQuery();
 				setState(1406);
+				match(NOW);
+				setState(1407);
+				match(T__1);
+				setState(1408);
 				match(T__2);
-				setState(1409);
+				setState(1411);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
 				if (_la==AS) {
 					{
-					setState(1407);
+					setState(1409);
 					match(AS);
-					setState(1408);
+					setState(1410);
 					((SelectItemContext)_localctx).alias = ident();
 					}
 				}
@@ -9129,12 +9133,8 @@ public class SimplifiedSqlParser extends Parser {
 			case 8:
 				enterOuterAlt(_localctx, 8);
 				{
-				setState(1411);
-				match(NOW);
-				setState(1412);
-				match(T__1);
 				setState(1413);
-				match(T__2);
+				match(CURRENT_TIMESTAMP);
 				setState(1416);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -9153,7 +9153,7 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 9);
 				{
 				setState(1418);
-				match(CURRENT_TIMESTAMP);
+				match(CURRENT_DATE);
 				setState(1421);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -9172,7 +9172,7 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 10);
 				{
 				setState(1423);
-				match(CURRENT_DATE);
+				value();
 				setState(1426);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -9191,7 +9191,7 @@ public class SimplifiedSqlParser extends Parser {
 				enterOuterAlt(_localctx, 11);
 				{
 				setState(1428);
-				value();
+				columnName();
 				setState(1431);
 				_errHandler.sync(this);
 				_la = _input.LA(1);
@@ -13455,9 +13455,9 @@ public class SimplifiedSqlParser extends Parser {
 		"]\u0001]\u0005]\u0553\b]\n]\f]\u0556\t]\u0003]\u0558\b]\u0001^\u0001^"+
 		"\u0001^\u0003^\u055d\b^\u0001^\u0001^\u0001^\u0003^\u0562\b^\u0001^\u0001"+
 		"^\u0001^\u0003^\u0567\b^\u0001^\u0001^\u0001^\u0003^\u056c\b^\u0001^\u0001"+
-		"^\u0001^\u0003^\u0571\b^\u0001^\u0001^\u0001^\u0001^\u0001^\u0001^\u0003"+
-		"^\u0579\b^\u0001^\u0001^\u0001^\u0001^\u0001^\u0001^\u0001^\u0003^\u0582"+
-		"\b^\u0001^\u0001^\u0001^\u0001^\u0001^\u0003^\u0589\b^\u0001^\u0001^\u0001"+
+		"^\u0001^\u0001^\u0001^\u0001^\u0003^\u0574\b^\u0001^\u0001^\u0001^\u0001"+
+		"^\u0001^\u0001^\u0001^\u0003^\u057d\b^\u0001^\u0001^\u0001^\u0001^\u0001"+
+		"^\u0003^\u0584\b^\u0001^\u0001^\u0001^\u0003^\u0589\b^\u0001^\u0001^\u0001"+
 		"^\u0003^\u058e\b^\u0001^\u0001^\u0001^\u0003^\u0593\b^\u0001^\u0001^\u0001"+
 		"^\u0003^\u0598\b^\u0003^\u059a\b^\u0001_\u0001_\u0001_\u0001_\u0001_\u0005"+
 		"_\u05a1\b_\n_\f_\u05a4\t_\u0003_\u05a6\b_\u0001_\u0001_\u0001`\u0001`"+
@@ -14219,45 +14219,45 @@ public class SimplifiedSqlParser extends Parser {
 		"\u0555\u0001\u0000\u0000\u0000\u0555\u0558\u0001\u0000\u0000\u0000\u0556"+
 		"\u0554\u0001\u0000\u0000\u0000\u0557\u054e\u0001\u0000\u0000\u0000\u0557"+
 		"\u054f\u0001\u0000\u0000\u0000\u0558\u00bb\u0001\u0000\u0000\u0000\u0559"+
-		"\u055c\u0003\u00cae\u0000\u055a\u055b\u0005\u009f\u0000\u0000\u055b\u055d"+
+		"\u055c\u0003\u00c2a\u0000\u055a\u055b\u0005\u009f\u0000\u0000\u055b\u055d"+
 		"\u0003\u00ceg\u0000\u055c\u055a\u0001\u0000\u0000\u0000\u055c\u055d\u0001"+
 		"\u0000\u0000\u0000\u055d\u059a\u0001\u0000\u0000\u0000\u055e\u0561\u0003"+
-		"\u00c2a\u0000\u055f\u0560\u0005\u009f\u0000\u0000\u0560\u0562\u0003\u00ce"+
+		"\u00c4b\u0000\u055f\u0560\u0005\u009f\u0000\u0000\u0560\u0562\u0003\u00ce"+
 		"g\u0000\u0561\u055f\u0001\u0000\u0000\u0000\u0561\u0562\u0001\u0000\u0000"+
-		"\u0000\u0562\u059a\u0001\u0000\u0000\u0000\u0563\u0566\u0003\u00c4b\u0000"+
+		"\u0000\u0562\u059a\u0001\u0000\u0000\u0000\u0563\u0566\u0003\u00be_\u0000"+
 		"\u0564\u0565\u0005\u009f\u0000\u0000\u0565\u0567\u0003\u00ceg\u0000\u0566"+
 		"\u0564\u0001\u0000\u0000\u0000\u0566\u0567\u0001\u0000\u0000\u0000\u0567"+
-		"\u059a\u0001\u0000\u0000\u0000\u0568\u056b\u0003\u00be_\u0000\u0569\u056a"+
+		"\u059a\u0001\u0000\u0000\u0000\u0568\u056b\u0003\u00ecv\u0000\u0569\u056a"+
 		"\u0005\u009f\u0000\u0000\u056a\u056c\u0003\u00ceg\u0000\u056b\u0569\u0001"+
 		"\u0000\u0000\u0000\u056b\u056c\u0001\u0000\u0000\u0000\u056c\u059a\u0001"+
-		"\u0000\u0000\u0000\u056d\u0570\u0003\u00ecv\u0000\u056e\u056f\u0005\u009f"+
-		"\u0000\u0000\u056f\u0571\u0003\u00ceg\u0000\u0570\u056e\u0001\u0000\u0000"+
-		"\u0000\u0570\u0571\u0001\u0000\u0000\u0000\u0571\u059a\u0001\u0000\u0000"+
-		"\u0000\u0572\u0573\u0005A\u0000\u0000\u0573\u0574\u0005\u0002\u0000\u0000"+
-		"\u0574\u0575\u0003P(\u0000\u0575\u0578\u0005\u0003\u0000\u0000\u0576\u0577"+
-		"\u0005\u009f\u0000\u0000\u0577\u0579\u0003\u00ceg\u0000\u0578\u0576\u0001"+
-		"\u0000\u0000\u0000\u0578\u0579\u0001\u0000\u0000\u0000\u0579\u059a\u0001"+
-		"\u0000\u0000\u0000\u057a\u057b\u0005B\u0000\u0000\u057b\u057c\u0005A\u0000"+
-		"\u0000\u057c\u057d\u0005\u0002\u0000\u0000\u057d\u057e\u0003P(\u0000\u057e"+
-		"\u0581\u0005\u0003\u0000\u0000\u057f\u0580\u0005\u009f\u0000\u0000\u0580"+
-		"\u0582\u0003\u00ceg\u0000\u0581\u057f\u0001\u0000\u0000\u0000\u0581\u0582"+
-		"\u0001\u0000\u0000\u0000\u0582\u059a\u0001\u0000\u0000\u0000\u0583\u0584"+
-		"\u0005Y\u0000\u0000\u0584\u0585\u0005\u0002\u0000\u0000\u0585\u0588\u0005"+
-		"\u0003\u0000\u0000\u0586\u0587\u0005\u009f\u0000\u0000\u0587\u0589\u0003"+
+		"\u0000\u0000\u0000\u056d\u056e\u0005A\u0000\u0000\u056e\u056f\u0005\u0002"+
+		"\u0000\u0000\u056f\u0570\u0003P(\u0000\u0570\u0573\u0005\u0003\u0000\u0000"+
+		"\u0571\u0572\u0005\u009f\u0000\u0000\u0572\u0574\u0003\u00ceg\u0000\u0573"+
+		"\u0571\u0001\u0000\u0000\u0000\u0573\u0574\u0001\u0000\u0000\u0000\u0574"+
+		"\u059a\u0001\u0000\u0000\u0000\u0575\u0576\u0005B\u0000\u0000\u0576\u0577"+
+		"\u0005A\u0000\u0000\u0577\u0578\u0005\u0002\u0000\u0000\u0578\u0579\u0003"+
+		"P(\u0000\u0579\u057c\u0005\u0003\u0000\u0000\u057a\u057b\u0005\u009f\u0000"+
+		"\u0000\u057b\u057d\u0003\u00ceg\u0000\u057c\u057a\u0001\u0000\u0000\u0000"+
+		"\u057c\u057d\u0001\u0000\u0000\u0000\u057d\u059a\u0001\u0000\u0000\u0000"+
+		"\u057e\u057f\u0005Y\u0000\u0000\u057f\u0580\u0005\u0002\u0000\u0000\u0580"+
+		"\u0583\u0005\u0003\u0000\u0000\u0581\u0582\u0005\u009f\u0000\u0000\u0582"+
+		"\u0584\u0003\u00ceg\u0000\u0583\u0581\u0001\u0000\u0000\u0000\u0583\u0584"+
+		"\u0001\u0000\u0000\u0000\u0584\u059a\u0001\u0000\u0000\u0000\u0585\u0588"+
+		"\u0005Z\u0000\u0000\u0586\u0587\u0005\u009f\u0000\u0000\u0587\u0589\u0003"+
 		"\u00ceg\u0000\u0588\u0586\u0001\u0000\u0000\u0000\u0588\u0589\u0001\u0000"+
-		"\u0000\u0000\u0589\u059a\u0001\u0000\u0000\u0000\u058a\u058d\u0005Z\u0000"+
+		"\u0000\u0000\u0589\u059a\u0001\u0000\u0000\u0000\u058a\u058d\u0005[\u0000"+
 		"\u0000\u058b\u058c\u0005\u009f\u0000\u0000\u058c\u058e\u0003\u00ceg\u0000"+
 		"\u058d\u058b\u0001\u0000\u0000\u0000\u058d\u058e\u0001\u0000\u0000\u0000"+
-		"\u058e\u059a\u0001\u0000\u0000\u0000\u058f\u0592\u0005[\u0000\u0000\u0590"+
+		"\u058e\u059a\u0001\u0000\u0000\u0000\u058f\u0592\u0003\u00e8t\u0000\u0590"+
 		"\u0591\u0005\u009f\u0000\u0000\u0591\u0593\u0003\u00ceg\u0000\u0592\u0590"+
 		"\u0001\u0000\u0000\u0000\u0592\u0593\u0001\u0000\u0000\u0000\u0593\u059a"+
-		"\u0001\u0000\u0000\u0000\u0594\u0597\u0003\u00e8t\u0000\u0595\u0596\u0005"+
+		"\u0001\u0000\u0000\u0000\u0594\u0597\u0003\u00cae\u0000\u0595\u0596\u0005"+
 		"\u009f\u0000\u0000\u0596\u0598\u0003\u00ceg\u0000\u0597\u0595\u0001\u0000"+
 		"\u0000\u0000\u0597\u0598\u0001\u0000\u0000\u0000\u0598\u059a\u0001\u0000"+
 		"\u0000\u0000\u0599\u0559\u0001\u0000\u0000\u0000\u0599\u055e\u0001\u0000"+
 		"\u0000\u0000\u0599\u0563\u0001\u0000\u0000\u0000\u0599\u0568\u0001\u0000"+
-		"\u0000\u0000\u0599\u056d\u0001\u0000\u0000\u0000\u0599\u0572\u0001\u0000"+
-		"\u0000\u0000\u0599\u057a\u0001\u0000\u0000\u0000\u0599\u0583\u0001\u0000"+
+		"\u0000\u0000\u0599\u056d\u0001\u0000\u0000\u0000\u0599\u0575\u0001\u0000"+
+		"\u0000\u0000\u0599\u057e\u0001\u0000\u0000\u0000\u0599\u0585\u0001\u0000"+
 		"\u0000\u0000\u0599\u058a\u0001\u0000\u0000\u0000\u0599\u058f\u0001\u0000"+
 		"\u0000\u0000\u0599\u0594\u0001\u0000\u0000\u0000\u059a\u00bd\u0001\u0000"+
 		"\u0000\u0000\u059b\u059c\u0005\u00b2\u0000\u0000\u059c\u05a5\u0005\u0002"+
@@ -14533,8 +14533,8 @@ public class SimplifiedSqlParser extends Parser {
 		"\u044c\u0452\u0455\u045b\u045e\u0462\u0465\u046b\u046f\u0472\u0475\u047c"+
 		"\u0480\u0483\u048a\u048e\u0491\u0493\u04a8\u04b8\u04bf\u04c5\u04ca\u04cd"+
 		"\u04d3\u04e4\u04e9\u04f1\u04f7\u04fd\u0508\u0511\u0516\u0521\u0525\u0529"+
-		"\u052c\u0538\u053f\u054b\u0554\u0557\u055c\u0561\u0566\u056b\u0570\u0578"+
-		"\u0581\u0588\u058d\u0592\u0597\u0599\u05a2\u05a5\u05ab\u05c9\u05db\u05e9"+
+		"\u052c\u0538\u053f\u054b\u0554\u0557\u055c\u0561\u0566\u056b\u0573\u057c"+
+		"\u0583\u0588\u058d\u0592\u0597\u0599\u05a2\u05a5\u05ab\u05c9\u05db\u05e9"+
 		"\u05f1\u05f4\u05f9\u05fe\u0603\u060c\u0611\u0617\u061b\u062d\u0637\u0644"+
 		"\u064e\u0659\u0663\u066f\u0676\u067b\u068b\u0696\u069e\u06a0\u06e1\u06e8"+
 		"\u06f1\u06f7\u06fb\u0720\u072b\u0734\u073a\u074c\u0750\u0756\u075d\u0762"+

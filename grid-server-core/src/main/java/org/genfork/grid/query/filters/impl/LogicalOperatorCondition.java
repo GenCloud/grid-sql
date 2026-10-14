@@ -58,6 +58,11 @@ public class LogicalOperatorCondition implements FilterCondition {
 		EQ, NE, GT, GE, LT, LE, LIKE, BETWEEN, IN;
 	}
 
+	/** HashSet capacity floor for IN pointer union (avoids tiny default table). */
+	private static final int IN_UNION_CAPACITY_MIN = 16;
+	/** Load-factor headroom: capacity * max(MIN, values.length × 2). */
+	private static final int IN_UNION_CAPACITY_SHIFT = 1;
+
 	private final String field;
 	private final Operator operator;
 	private final Object[] values;
@@ -135,13 +140,16 @@ public class LogicalOperatorCondition implements FilterCondition {
 						}
 						yield bitmapIndex.searchIn(inKeys);
 					}
-					final Set<IndexPointerRef> union = new HashSet<>();
+					final int unionCap = Math.max(
+							IN_UNION_CAPACITY_MIN,
+							values.length << IN_UNION_CAPACITY_SHIFT);
+					final Set<IndexPointerRef> union = new HashSet<>(unionCap);
 					long processed = 0;
 					long size = 0;
 					for (Object value : values) {
 						final IndexOperationResult result = index.searchEq(createKey(index, value));
 						if (result != null) {
-							union.addAll(result.getPointers());
+							union.addAll(result.pointersOrExpand());
 							processed += result.getRowsProcessed();
 							size += result.getSize();
 						}
@@ -194,7 +202,7 @@ public class LogicalOperatorCondition implements FilterCondition {
 			final boolean eq = WireRangeOps.equals(
 					actual.blob(), actual.offset(), actual.length(),
 					expected, 0, expected == null ? 0 : expected.length);
-			return op == Operator.EQ ? eq : !eq;
+			return (op == Operator.EQ) == eq;
 		}
 		return matchWire(actual.toOwnedBytes(), op, values);
 	}
