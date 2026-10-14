@@ -25,6 +25,7 @@ import org.genfork.grid.antlr.SimplifiedSqlParser.FromItemContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.IdentContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinClauseContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinCondContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.JoinCondInnerContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinHeadContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.JoinTargetContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.TableNameContext;
@@ -171,7 +172,11 @@ public final class SqlIdentParseUtil {
 	 * Unqualified pairs keep textual order (legacy {@code ON id = a_id} convention).
 	 */
 	public static List<JoinEq> joinEqs(JoinCondContext cond, String rightTable, String rightAliasOrNull) {
-		final List<ColumnNameContext> cols = cond.columnName();
+		final JoinCondInnerContext inner = cond.joinCondInner();
+		if (inner == null) {
+			throw new IllegalArgumentException("JOIN ON requires column=column pairs");
+		}
+		final List<ColumnNameContext> cols = inner.columnName();
 		if (cols == null || cols.size() < 2 || (cols.size() % 2) != 0) {
 			throw new IllegalArgumentException("JOIN ON requires column=column pairs");
 		}

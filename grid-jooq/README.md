@@ -31,6 +31,18 @@ try (GridDataSource ds = new GridDataSource("jdbc:grid://user:pass@127.0.0.1:154
 }
 ```
 
+## Temporal (`TIMESTAMP` ↔ `LocalDateTime`)
+
+Grid JDBC owns the contract: `setObject(LocalDateTime)` / `getObject(…, LocalDateTime.class)` /
+`getTimestamp` (via `SqlTypeCoercion.toLocalDateTime`). jOOQ DEFAULT `LOCALDATETIME` works on that
+driver surface — no app Binding / proxy.
+
+## Batch binds / SKIP LOCKED
+
+Public docs: [docs/en/develop/jooq.md](../docs/en/develop/jooq.md) — `GridDialect` capability flags,
+`GridDSL.buildBatchStatements` / `executeBatchBound`, and `.forUpdate().skipLocked()` under
+`GridSQL.installProduct` (`GridForUpdateSkipLocked`).
+
 ## Consumer codegen
 
 Introspect via `JDBCDatabase` + `GridDriver` in the **application** (not library `-Pcodegen` shipping Tables). See [docs/en/develop/jooq.md](../docs/en/develop/jooq.md).

@@ -48,6 +48,7 @@ import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.exceptions.ConditionValidationException;
+import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.ByteArrayContainer;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
 import org.genfork.grid.mem.index.btree.AbstractBPTree;
@@ -109,7 +110,6 @@ public class GridCompositeIndex {
 	private final Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes = new ConcurrentHashMap<>();
 	private final Map<String, Map<ByteArrayContainer, RevertSingle>> revertProperty2Index = new ConcurrentHashMap<>();
 	private final Map<List<String>, Map<ByteArrayContainer, RevertComposite>> revertCompositeProperty2Index = new ConcurrentHashMap<>();
-
 
 	/**
 	 * Prior single-column posting for a PK (tree key + pointer) — used to replace LAX/STRICT upserts.
@@ -221,9 +221,22 @@ public class GridCompositeIndex {
 	}
 
 	/**
-	 * Remove a secondary index by catalog name (DROP INDEX).
+	 * Catalog {@link IndexDef} for a named secondary index, or {@code null}.
 	 */
-	public void dropNamedIndex(String indexName) {
+	public IndexDef findNamedIndex(String indexName) {
+		if (indexName == null || indexName.isBlank()) {
+			return null;
+		}
+		return namedIndexes.get(indexName.toLowerCase(Locale.ROOT));
+	}
+
+	/**
+	 * Remove a secondary index by catalog name (DROP INDEX).
+	 *
+	 * @return dropped definition (columns needed for sealed purge)
+	 * @throws IllegalStateException when named entry exists but the RAM tree is missing
+	 */
+	public IndexDef dropNamedIndex(String indexName) {
 		if (indexName == null || indexName.isBlank()) {
 			throw new IllegalArgumentException("index name required");
 		}
@@ -232,16 +245,47 @@ public class GridCompositeIndex {
 			throw new IllegalStateException("Index not found: " + indexName);
 		}
 		if (def.columns().size() == 1) {
-			final String fieldName = def.columns().getFirst();
-			property2Index.remove(fieldName);
-			revertProperty2Index.remove(fieldName);
+			removeSingleColumnTree(def.columns().getFirst(), def.name());
 		} else {
-			final List<String> combination = new ArrayList<>(def.columns());
-			compositeIndexes.remove(combination);
-			revertCompositeProperty2Index.remove(combination);
+			removeCompositeTree(def.columns(), def.name());
 		}
 		optimizedPlanCache.clear();
 		QueryParser.clearPlanCache();
+		return def;
+	}
+
+	private void removeSingleColumnTree(String fieldName, String indexName) {
+		if (property2Index.remove(fieldName) != null) {
+			revertProperty2Index.remove(fieldName);
+			return;
+		}
+		for (Entry<String, AbstractIndexOperation<byte[], SingleTreeKey>> entry : property2Index.entrySet()) {
+			if (entry.getKey().equalsIgnoreCase(fieldName)) {
+				property2Index.remove(entry.getKey());
+				revertProperty2Index.remove(entry.getKey());
+				return;
+			}
+		}
+		throw new IllegalStateException(
+				"Index tree missing after DROP named entry: " + indexName + " column=" + fieldName);
+	}
+
+	private void removeCompositeTree(List<String> columns, String indexName) {
+		final List<String> combination = IndexColumnKeyUtil.compositeKey(columns);
+		if (compositeIndexes.remove(combination) != null) {
+			revertCompositeProperty2Index.remove(combination);
+			return;
+		}
+		for (Entry<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> entry
+				: compositeIndexes.entrySet()) {
+			if (CompositeIndexProbeOps.columnsEqualIgnoreCaseOrdered(entry.getKey(), columns)) {
+				compositeIndexes.remove(entry.getKey());
+				revertCompositeProperty2Index.remove(entry.getKey());
+				return;
+			}
+		}
+		throw new IllegalStateException(
+				"Index tree missing after DROP named entry: " + indexName + " columns=" + columns);
 	}
 
 	public boolean hasSingleColumnIndex(String columnName) {
@@ -852,8 +896,10 @@ public class GridCompositeIndex {
 				} else if (indexType == IndexType.BITMAP) {
 					throw new IllegalArgumentException(IndexDef.BITMAP_SINGLE_COLUMN_ONLY);
 				} else {
-					final List<String> combination = Arrays.stream(fields).map(f -> f.field().getName()).collect(Collectors.toList());
+					final List<String> combination = IndexColumnKeyUtil.compositeKey(
+							Arrays.stream(fields).map(f -> f.field().getName()).collect(Collectors.toList()));
 					compositeIndexes.put(combination, new GridPointerCompositeBPTree(combination, combination + "-" + indexType.name(), strict));
+					revertCompositeProperty2Index.put(combination, new ConcurrentHashMap<>());
 				}
 			}
 		}
@@ -881,44 +927,59 @@ public class GridCompositeIndex {
 		}
 	}
 
-	public void putIndexKeyValues(long keyNativePointer, byte[] keyArray, Map<String, byte[]> fieldValues) {
+	/**
+	 * Index row fields; returns STRICT unique owners displaced by this upsert (empty when none).
+	 */
+	public List<byte[]> putIndexKeyValues(long keyNativePointer, byte[] keyArray, Map<String, byte[]> fieldValues) {
 		final IndexPointerRef keyPointerRef = new IndexPointerRef(keyNativePointer, keyArray);
+		List<byte[]> displaced = null;
 		removeIndexPointersForKey(keyArray);
-		putSingleColumnIndexValues(keyPointerRef, keyArray, fieldValues);
+		displaced = putSingleColumnIndexValues(keyPointerRef, keyArray, fieldValues, displaced);
 		for (List<String> indexFields : compositeIndexes.keySet()) {
-			putCompositeIndexValues(keyPointerRef, keyArray, indexFields, fieldValues);
+			displaced = putCompositeIndexValues(keyPointerRef, keyArray, indexFields, fieldValues, null, displaced);
 		}
+		return displaced == null ? List.of() : displaced;
 	}
 
 	/**
 	 * Insert into one named secondary index only (CREATE INDEX backfill).
 	 * Does not touch unrelated trees.
+	 *
+	 * @return STRICT unique owners displaced by this upsert (empty when none)
 	 */
-	public void putIndexKeyValuesForNamed(IndexDef def, long keyNativePointer, byte[] keyArray, Map<String, byte[]> fieldValues) {
+	public List<byte[]> putIndexKeyValuesForNamed(IndexDef def, long keyNativePointer, byte[] keyArray, Map<String, byte[]> fieldValues) {
 		Objects.requireNonNull(def, "def");
 		final IndexPointerRef keyPointerRef = new IndexPointerRef(keyNativePointer, keyArray);
 		if (def.columns().size() == 1) {
 			final String fieldName = def.columns().getFirst();
 			final byte[] value = fieldValues.get(fieldName);
 			if (value == null) {
-				return;
+				return List.of();
 			}
 			final AbstractIndexOperation<byte[], SingleTreeKey> tree = property2Index.get(fieldName);
 			if (tree == null) {
-				return;
+				return List.of();
 			}
 			removePriorSingleColumn(fieldName, keyArray);
 			final SingleTreeKey treeKey = new SingleTreeKey(value);
-			tree.insert(treeKey, keyPointerRef);
+			final List<byte[]> displaced = insertStrictAware(tree, def.name(), treeKey, keyPointerRef, null);
 			revertProperty2Index.computeIfAbsent(fieldName, _ -> new ConcurrentHashMap<>()).put(new ByteArrayContainer(keyArray), new RevertSingle(treeKey, keyPointerRef));
-			return;
+			return displaced == null ? List.of() : displaced;
 		}
-		final List<String> combination = new ArrayList<>(def.columns());
+		final List<String> combination = IndexColumnKeyUtil.compositeKey(def.columns());
 		removePriorComposite(combination, keyArray);
-		putCompositeIndexValues(keyPointerRef, keyArray, combination, fieldValues);
+		final List<byte[]> displaced =
+				putCompositeIndexValues(keyPointerRef, keyArray, combination, fieldValues, def.name(), null);
+		return displaced == null ? List.of() : displaced;
 	}
 
-	private void putSingleColumnIndexValues(IndexPointerRef keyPointerRef, byte[] keyArray, Map<String, byte[]> fieldValues) {
+	private List<byte[]> putSingleColumnIndexValues(
+			IndexPointerRef keyPointerRef,
+			byte[] keyArray,
+			Map<String, byte[]> fieldValues,
+			List<byte[]> displaced
+	) {
+		List<byte[]> acc = displaced;
 		for (Entry<String, byte[]> entry : fieldValues.entrySet()) {
 			final String fieldName = entry.getKey();
 			final AbstractIndexOperation<byte[], SingleTreeKey> tree = property2Index.get(fieldName);
@@ -926,23 +987,76 @@ public class GridCompositeIndex {
 				continue;
 			}
 			final SingleTreeKey treeKey = new SingleTreeKey(entry.getValue());
-			tree.insert(treeKey, keyPointerRef);
+			final String catalogName = catalogNameForSingleColumn(fieldName);
+			acc = insertStrictAware(
+					tree,
+					catalogName != null ? catalogName : tree.getIndexName(),
+					treeKey,
+					keyPointerRef,
+					acc);
 			revertProperty2Index.computeIfAbsent(fieldName, _ -> new ConcurrentHashMap<>()).put(new ByteArrayContainer(keyArray), new RevertSingle(treeKey, keyPointerRef));
 		}
+		return acc;
 	}
 
-	private void putCompositeIndexValues(IndexPointerRef keyPointerRef, byte[] keyArray, List<String> indexFields, Map<String, byte[]> fieldValues) {
+	private List<byte[]> putCompositeIndexValues(
+			IndexPointerRef keyPointerRef,
+			byte[] keyArray,
+			List<String> indexFields,
+			Map<String, byte[]> fieldValues,
+			String preferredIndexName,
+			List<byte[]> displaced
+	) {
 		final AbstractIndexOperation<byte[][], CompositeTreeKey> tree = compositeIndexes.get(indexFields);
 		if (tree == null) {
-			return;
+			return displaced;
 		}
 		final byte[][] valuesArray = new byte[indexFields.size()][];
 		for (int i = 0; i < indexFields.size(); i++) {
 			valuesArray[i] = fieldValues.getOrDefault(indexFields.get(i), ArrayUtils.EMPTY_BYTE_ARRAY);
 		}
 		final CompositeTreeKey treeKey = new CompositeTreeKey(valuesArray);
-		tree.insert(treeKey, keyPointerRef);
+		final String catalogName = preferredIndexName != null
+				? preferredIndexName
+				: catalogNameForCompositeColumns(indexFields);
+		final List<byte[]> acc = insertStrictAware(
+				tree,
+				catalogName != null ? catalogName : tree.getIndexName(),
+				treeKey,
+				keyPointerRef,
+				displaced);
 		revertCompositeProperty2Index.computeIfAbsent(indexFields, _ -> new ConcurrentHashMap<>()).put(new ByteArrayContainer(keyArray), new RevertComposite(treeKey, keyPointerRef));
+		return acc;
+	}
+
+	private <K, T extends TreeKey<K>> List<byte[]> insertStrictAware(
+			AbstractIndexOperation<K, T> tree,
+			String indexName,
+			T treeKey,
+			IndexPointerRef keyPointerRef,
+			List<byte[]> displaced
+	) {
+		try {
+			final byte[] foreignPk =
+					StrictUniqueUpsertUtil.insertOrReplaceOwner(tree, treeKey, keyPointerRef);
+			return StrictUniqueUpsertUtil.appendDisplaced(displaced, foreignPk);
+		} catch (NonUniqueValueException ex) {
+			final String domain = tableLabel != null && !tableLabel.isBlank()
+					? tableLabel
+					: schema.catalogKey();
+			throw new NonUniqueValueException(
+					NonUniqueValueException.formatMessage(domain, indexName, treeKey),
+					ex);
+		}
+	}
+
+	private String catalogNameForSingleColumn(String fieldName) {
+		for (IndexDef def : namedIndexes.values()) {
+			if (def.columns().size() == 1 && def.columns().getFirst().equalsIgnoreCase(fieldName)) {
+				return def.name();
+			}
+		}
+		return null;
 	}
 
 	public void startAnalyze() {

@@ -41,7 +41,10 @@ import org.slf4j.LoggerFactory;
 public final class SqlServer implements AutoCloseable {
 	private static final Logger log = LoggerFactory.getLogger(SqlServer.class);
 
-	private static final int DEFAULT_MAX_TX_CONTEXTS = 8;
+	/**
+	 * Default concurrent logical sessions per TCP channel when Boot/YAML omit the knob.
+	 */
+	public static final int DEFAULT_MAX_TX_CONTEXTS = 8;
 
 	private final String host;
 	/** Listen port; updated from the bound channel when ctor port is {@code 0}. */
@@ -96,8 +99,16 @@ public final class SqlServer implements AutoCloseable {
 		this.engine = engine;
 		this.user = user;
 		this.password = password;
-		this.maxTxContexts = Math.max(1, maxTxContexts);
+		/* <= 0 = unlimited (same contract as {@link SqlExecHandler}). */
+		this.maxTxContexts = maxTxContexts <= 0 ? Integer.MAX_VALUE : maxTxContexts;
 		this.replication = replication;
+	}
+
+	/**
+	 * Effective per-channel session cap ({@link Integer#MAX_VALUE} when unlimited).
+	 */
+	public int maxTxContexts() {
+		return maxTxContexts;
 	}
 
 	/**

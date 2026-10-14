@@ -28,4 +28,8 @@ public final class LockWaitCancelledException extends RuntimeException {
 	public LockWaitCancelledException() {
 		super(MESSAGE);
 	}
+
+	public LockWaitCancelledException(String message) {
+		super(message == null || message.isBlank() ? MESSAGE : message);
+	}
 }

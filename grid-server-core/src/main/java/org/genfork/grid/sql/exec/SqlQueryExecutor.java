@@ -325,7 +325,11 @@ public final class SqlQueryExecutor {
 	}
 
 	/**
-	 * Bare {@code SELECT fn(...)} / {@code SELECT EXISTS(...)} — one synthetic row, no table scan.
+	 * Bare {@code SELECT fn(...)} / {@code SELECT EXISTS(...)} / {@code SELECT lit… WHERE NOT EXISTS}
+	 * — zero or one synthetic row, no table scan.
+	 * <p>
+	 * Optional WHERE is gated at the result edge via {@link SqlResultResidualUtil} (residual only;
+	 * never {@code QueryParser.parseAndBuildCondition} index plan).
 	 */
 	private SqlResult selectExprOnly(SqlSession session, SelectSql s) {
 		final List<SelectItem> items = s.selectItems();
@@ -337,7 +341,9 @@ public final class SqlQueryExecutor {
 		}
 		final List<SqlResult.ColumnMeta> metas = SelectProjectionAssembler.metasExprOnly(items);
 		final Object[] row = SelectProjectionAssembler.assembleExprOnly(items);
-		return SqlResult.resultSet(metas, List.<Object[]>of(row));
+		final List<Object[]> gated = SqlResultResidualUtil.applyWhere(
+				s, metas, List.<Object[]>of(row), subqueryFiltersTls.get());
+		return SqlResult.resultSet(metas, gated);
 	}
 
 	private SqlResult selectExprExists(SqlSession session, List<SelectItem> items) {

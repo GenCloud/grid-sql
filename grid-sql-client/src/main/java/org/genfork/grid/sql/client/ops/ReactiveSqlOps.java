@@ -22,6 +22,7 @@ import java.util.Optional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import org.genfork.grid.sql.client.BatchStatement;
 import org.genfork.grid.sql.client.Connection;
 import org.genfork.grid.sql.client.Result;
 import org.genfork.grid.sql.client.Row;
@@ -187,6 +188,12 @@ public final class ReactiveSqlOps {
 		Objects.requireNonNull(conn, ERR_CONNECTION_REQUIRED);
 		Objects.requireNonNull(sqls, ERR_SQLS_REQUIRED);
 		return conn.executeBatch(sqls);
+	}
+
+	public static Flux<Result> executeBatchBoundAutocommit(Connection conn, List<BatchStatement> statements) {
+		Objects.requireNonNull(conn, ERR_CONNECTION_REQUIRED);
+		Objects.requireNonNull(statements, ERR_STEPS_REQUIRED);
+		return conn.executeBatchBound(statements);
 	}
 
 	/**

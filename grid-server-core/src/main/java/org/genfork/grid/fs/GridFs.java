@@ -244,6 +244,10 @@ public final class GridFs {
 
 	/**
 	 * Release a mapped buffer via {@code Unsafe.invokeCleaner}. Safe on null.
+	 * <p>
+	 * Hot remap / best-effort close path — failures are swallowed (channel close remains fallback).
+	 * Do <strong>not</strong> use before Windows {@code REPLACE} of a still-mapped sealed file;
+	 * use {@link #unmapForOverwrite(MappedByteBuffer)} on the overwrite path only.
 	 */
 	public static void unmap(MappedByteBuffer mapped) {
 		if (mapped == null) {
@@ -253,6 +257,22 @@ public final class GridFs {
 			UnsafeMemory.getUnsafe().invokeCleaner(mapped);
 		} catch (Throwable ignored) {
 			// Channel close remains the fallback when invokeCleaner is unavailable.
+		}
+	}
+
+	/**
+	 * Fail-closed unmap for sealed overwrite (G-00001): cleaner failure surfaces as {@link IOException}.
+	 * <p>
+	 * Overwrite / {@code closeForOverwrite} only — never hot window remap or best-effort {@code close()}.
+	 */
+	public static void unmapForOverwrite(MappedByteBuffer mapped) throws IOException {
+		if (mapped == null) {
+			return;
+		}
+		try {
+			UnsafeMemory.getUnsafe().invokeCleaner(mapped);
+		} catch (Throwable failure) {
+			throw new IOException("fail-closed unmap before sealed overwrite", failure);
 		}
 	}
 }

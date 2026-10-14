@@ -71,12 +71,13 @@ public enum SqlType {
 			case "DOUBLE", "FLOAT", "REAL" -> DOUBLE;
 			case "BOOLEAN", "BOOL" -> BOOLEAN;
 			case "VARCHAR", "STRING", "TEXT", "JSON" -> VARCHAR;
-			case "TIMESTAMP", "DATETIME" -> TIMESTAMP;
-			case "BYTES", "BYTEA", "BINARY", "BLOB" -> BYTES;
+			case "TIMESTAMP", "DATETIME", "TIMESTAMP WITHOUT TIME ZONE", "TIMESTAMPWITHOUTTIMEZONE"
+					-> TIMESTAMP;
+			case "BYTES", "BYTEA", "BINARY", "BLOB", "VARBINARY" -> BYTES;
 			case "UUID" -> UUID;
 			case "DATE" -> DATE;
 			case "TIME" -> TIME;
-			case "TIMESTAMPTZ", "TIMESTAMP WITH TIME ZONE" -> TIMESTAMPTZ;
+			case "TIMESTAMPTZ", "TIMESTAMP WITH TIME ZONE", "TIMESTAMPWITHTIMEZONE" -> TIMESTAMPTZ;
 			default -> throw new IllegalArgumentException("Unsupported SQL type: " + token);
 		};
 	}

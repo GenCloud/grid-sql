@@ -1121,6 +1121,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterJoinCondInner(SimplifiedSqlParser.JoinCondInnerContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitJoinCondInner(SimplifiedSqlParser.JoinCondInnerContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterSelectList(SimplifiedSqlParser.SelectListContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1613,6 +1625,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterJdbcEscapeValue(SimplifiedSqlParser.JdbcEscapeValueContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitJdbcEscapeValue(SimplifiedSqlParser.JdbcEscapeValueContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterCoalesceExpr(SimplifiedSqlParser.CoalesceExprContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1716,6 +1740,18 @@ public class SimplifiedSqlBaseListener implements SimplifiedSqlListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitLimitClause(SimplifiedSqlParser.LimitClauseContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterLimitAtom(SimplifiedSqlParser.LimitAtomContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitLimitAtom(SimplifiedSqlParser.LimitAtomContext ctx) { }
 
 	/**
 	 * {@inheritDoc}

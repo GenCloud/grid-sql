@@ -209,11 +209,12 @@ selectQuery
     ;
 
 /**
- * Bare SELECT of expressions (no FROM) — e.g. {@code SELECT fn(1, 2)} mutating UDF calls.
+ * Bare SELECT of expressions (no FROM) — e.g. {@code SELECT fn(1, 2)} mutating UDF calls,
+ * or jOOQ {@code INSERT … SELECT lit… WHERE NOT EXISTS (…)} (insert-if-absent).
  * Prefer {@link #selectQuery} when FROM is present (ordered first in {@code query}).
  */
 selectExprQuery
-    : SELECT selectItem (',' selectItem)*
+    : SELECT selectItem (',' selectItem)* (WHERE expression)?
     ;
 
 /** One or more GROUP BY columns (composite wire key in executor). */
@@ -390,6 +391,7 @@ updateAssign
 
 updateRhs
     : columnName (CONCAT_OP value)+
+    | '(' numericColPlus ')'
     | numericColPlus
     | CONCAT '(' columnName ',' value ')'
     ;
@@ -449,7 +451,9 @@ referentialAction
     ;
 
 typeName
-    : UUID_TYPE
+    : TIMESTAMP_TYPE WITHOUT TIME_TYPE ZONE
+    | TIMESTAMP_TYPE WITH TIME_TYPE ZONE
+    | UUID_TYPE
     | DATE_TYPE
     | TIME_TYPE
     | TIMESTAMP_TYPE
@@ -514,8 +518,16 @@ joinTarget
     | tableName
     ;
 
-/** One or more equality predicates joined by AND (composite join key). */
+/**
+ * One or more equality predicates joined by AND (composite join key).
+ * Optional outer parentheses match jOOQ DEFAULT render {@code ON (a = b)}.
+ */
 joinCond
+    : '(' joinCondInner ')'
+    | joinCondInner
+    ;
+
+joinCondInner
     : columnName '=' columnName (AND columnName '=' columnName)*
     ;
 
@@ -524,9 +536,14 @@ selectList
     | selectItem (',' selectItem)*
     ;
 
+/**
+ * Prefer {@code value} (NULL/TRUE/FALSE/?/literals) before {@code columnName} —
+ * TRUE/FALSE/NULL are also {@link #keywordAsIdent} and would otherwise parse as ColumnRef
+ * (breaks jOOQ {@code INSERT … SELECT … FALSE … WHERE NOT EXISTS} after bind materialize).
+ * Keep coalesce / fn / EXISTS alts above {@code value} (value also embeds coalesceExpr).
+ */
 selectItem
-    : columnName (AS alias=ident)?
-    | aggregateExpr (AS alias=ident)?
+    : aggregateExpr (AS alias=ident)?
     | windowExpr (AS alias=ident)?
     | functionCall (AS alias=ident)?
     | coalesceExpr (AS alias=ident)?
@@ -535,8 +552,8 @@ selectItem
     | NOW '(' ')' (AS alias=ident)?
     | CURRENT_TIMESTAMP (AS alias=ident)?
     | CURRENT_DATE (AS alias=ident)?
-    /** JOOQ {@code SELECT 1 AS one} inside EXISTS / fetchExists. */
     | value (AS alias=ident)?
+    | columnName (AS alias=ident)?
     ;
 
 functionCall
@@ -550,6 +567,7 @@ funcArg
 
 aggregateExpr
     : COUNT '(' '*' ')'
+    | COUNT '(' INT ')'
     | SUM '(' columnName ')'
     | AVG '(' columnName ')'
     | MIN '(' columnName ')'
@@ -600,7 +618,8 @@ keywordAsIdent
     : SELECT | EXPLAIN | ANALYZE | INSERT | UPSERT | INTO | VALUES | DELETE | UPDATE | SET
     | REMOTE_DIRTY | MERGE | CONFLICT | DO | NOTHING | MATCHED | CREATE | DROP | ALTER | ADD
     | COLUMN | SCHEMA | TABLE | VIEW | MATERIALIZED | REFRESH | FUNCTION | TRIGGER | RETURNS
-    | CLASS | METHOD | BEFORE | AFTER | EACH | WITH | RECURSIVE | UNION | INTERSECT | EXCEPT
+    | CLASS | METHOD | BEFORE | AFTER | EACH | WITH | WITHOUT | ZONE | RECURSIVE | UNION
+    | INTERSECT | EXCEPT
     | ALL | INDEX | UNIQUE | BITMAP | PRIMARY | KEY | IF | EXISTS | NOT | NULL | FROM | FOR
     | SKIP_KW | LOCKED | RETURNING | WHERE | GROUP | HAVING | ORDER | BY | LIMIT | OFFSET
     | DISTINCT | COUNT | SUM | AVG | MIN | MAX | CONCAT | CAST | UUID_TYPE | DATE_TYPE
@@ -689,6 +708,7 @@ operator
 value
     : '-'? INT
     | '-'? FLOAT
+    | HEX_BYTES
     | STRING
     | NULL
     | TRUE
@@ -706,8 +726,16 @@ value
     | TIME_TYPE STRING
     | TIMESTAMP_TYPE STRING
     | TIMESTAMPTZ_TYPE STRING
+    | jdbcEscapeValue
     | caseExpr
     | sequenceCall
+    ;
+
+/** JDBC escape call syntax ({@code {ts '…'}}, {@code {d '…'}}, {@code {t '…'}}). */
+jdbcEscapeValue
+    : JDBC_ESC_TS STRING '}'
+    | JDBC_ESC_D STRING '}'
+    | JDBC_ESC_T STRING '}'
     ;
 
 /** First non-null among args (column or value). */
@@ -751,9 +779,15 @@ orderItem
 /**
  * {@code LIMIT n} or MySQL-style {@code LIMIT offset, count}.
  * Prefer {@code LIMIT n OFFSET m} via the separate {@code OFFSET} clause on selectQuery.
+ * {@code PARAM} ({@code ?}) allowed for prepared / jOOQ indexed binds.
  */
 limitClause
-    : INT (',' INT)?
+    : limitAtom (',' limitAtom)?
+    ;
+
+limitAtom
+    : INT
+    | PARAM
     ;
 
 SELECT: 'SELECT';
@@ -793,6 +827,8 @@ BEFORE: 'BEFORE';
 AFTER: 'AFTER';
 EACH: 'EACH';
 WITH: 'WITH';
+WITHOUT: 'WITHOUT';
+ZONE: 'ZONE';
 RECURSIVE: 'RECURSIVE';
 UNION: 'UNION';
 INTERSECT: 'INTERSECT';
@@ -914,12 +950,17 @@ DDL: 'DDL';
 CONCAT_OP: '||';
 PARAM: '?';
 SEMI: ';';
+JDBC_ESC_TS: '{ts';
+JDBC_ESC_D: '{d';
+JDBC_ESC_T: '{t';
 
 ID: [a-z_][a-z0-9_]*;
 /** Double-quoted identifier; content is bare name (strip quotes in parse util). */
 QUOTED_ID: '"' (~'"')+ '"';
 INT: [0-9]+;
 FLOAT: [0-9]+ '.' [0-9]* | '.' [0-9]+;
+/** SQL-standard binary literal {@code X'AABB'}; must precede {@link #ID}. */
+HEX_BYTES: [Xx] '\'' [0-9a-fA-F]* '\'';
 STRING: '\'' ('\'\'' | ~'\'')* '\'';
 
 LINE_COMMENT: '--' ~[\r\n]* -> skip;

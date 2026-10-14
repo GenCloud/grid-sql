@@ -24,7 +24,7 @@
                  └─ Connection.close → канал в пул простоя; DataSource.close → отпустить фабрику
 ```
 
-Лимиты TCP / простоя / `maxTxContexts` задаются только в `SyncConnectionFactory` / `RemoteConnectionFactory` (клиент по умолчанию **256**; серверный потолок канала **8**, Boot не поднимает из YAML). Отдельного пула JDBC нет. **Не** подменяйте Hikari `maximumPoolSize=N`.
+Лимиты TCP / простоя / `maxTxContexts` задаются только в `SyncConnectionFactory` / `RemoteConnectionFactory` (клиент по умолчанию **256**; серверный потолок канала **8**, настраивается через `grid.sql-server.max-tx-contexts`). Отдельного пула JDBC нет. **Не** подменяйте Hikari `maximumPoolSize=N`.
 
 `grid-jooq` использует только `javax.sql` / `java.sql` + `GridSQL` / `GridDSL` — без прямых импортов синхронного фасада и `RemoteConnectionFactory`.
 
@@ -42,11 +42,26 @@
 
 ## API
 
-- `GridSQL` — `SQLDialect.DEFAULT` + Settings. Поверхность: EQ JOIN (INNER/LEFT/…), ORDER+LIMIT, INSERT/UPSERT/`INSERT … SELECT`/ON CONFLICT, UPDATE/DELETE с WHERE, скалярный `SELECT 1` / `EXISTS` (в т.ч. JOOQ `SELECT 1 AS one` внутри EXISTS). Кавычные идентификаторы из codegen сворачиваются без учёта регистра.
-  Предпочитайте `UPSERT` или plain `ON CONFLICT` — jOOQ `onConflict` при DEFAULT может выдать `ON DUPLICATE KEY` (SimplifiedSql отклонит).
-- `GridDSL` — render-only, `Connection`, `DataSource` (предпочтительно `GridDataSource`), `ConnectionProvider`, URL `jdbc:grid://`.
+- `GridSQL.installProduct(Configuration)` — host `SQLDialect.DEFAULT` + Settings; **fail-fast** на SQLITE/POSTGRES/MYSQL/…. **Не** регистрирует VisitListener / ExecuteListener SQL-rewrite.
+- Логический диалект = `GridDialect` (модуль `org.genfork.grid.jooq.dialect`), не enum `SQLDialect.GRID` (в OSS jOOQ закрытый enum).
+
+| Флаг `GridDialect` | Смысл |
+|--------------------|-------|
+| `supportsOnConflictDoUpdate` | `INSERT … ON CONFLICT (…) DO UPDATE SET …` / `EXCLUDED.col` |
+| `supportsOnConflictDoNothing` | `INSERT … ON CONFLICT (…) DO NOTHING` |
+| `supportsReturning` | Нативный `INSERT … RETURNING …` (без эмуляции `last_insert_rowid`) |
+| `supportsTruncate` | `TRUNCATE TABLE` |
+| `supportsForUpdateSkipLocked` | `FOR UPDATE SKIP LOCKED` |
+| `supportsIndexedBinds` | Индексированные binds `?` |
+
+- `GridDSL` — factory `DSLContext` + Grid QueryParts:
+  - `GridDSL.insertInto(dsl, table).set(…).onConflict(…).doUpdate().set(…)` → `ON CONFLICT … DO UPDATE` (не `ON DUPLICATE KEY`)
+  - `onConflictDoNothing` / `insertReturning` / `truncate`
+  - `GridDSL.buildBatchStatements(queries)` → слоты SPI `BatchStatement`; `GridDSL.executeBatchBound(dsl, queries)` → один bound `BATCH_EXEC` через `GridConnection`
+  - Под `installProduct` jOOQ `.forUpdate().skipLocked()` рендерит `FOR UPDATE SKIP LOCKED` (`GridForUpdateSkipLocked`); только на writer — [транзакции](transactions.md)
+- Запрещено в product path: `SQLDialect.SQLITE|POSTGRES|MYSQL`, VisitListener/ExecuteListener strip-rewrite как «диалект».
 - `GridConnectionProvider` — sync acquire/release для jOOQ.
-- Граница JDBC (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` только маппит исключения.
+- Граница JDBC (`grid-sql-client`): `GridDataSource` / `GridDriver` → `SyncConnectionFactory.shared` + `open()`; `JdbcSync` только маппит исключения. `RETURNING` через `executeUpdate` + `getGeneratedKeys()` — [JDBC-клиент](jdbc-tooling.md).
 
 ## Codegen у потребителя
 
@@ -72,9 +87,12 @@ Grid даёт `information_schema` + JDBC meta (tables/columns/PK/FK/indexes). �
 ```java
 try (GridDataSource ds = new GridDataSource("jdbc:grid://u:p@127.0.0.1:15432/public")) {
   DSLContext dsl = GridDSL.using(ds);
-  dsl.insertInto(table("accounts"))
-     .columns(field("id"), field("balance"))
-     .values(1, 100)
+  GridDSL.insertInto(dsl, table("accounts"))
+     .set(field("id"), 1)
+     .set(field("balance"), 100)
+     .onConflict(field("id"))
+     .doUpdate()
+     .set(field("balance"), 100)
      .execute();
 }
 ```

@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
+import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
 
 import java.io.IOException;
@@ -58,24 +59,45 @@ public final class SealedBPTreeService implements AutoCloseable {
 		final ReaderKey key = new ReaderKey(domain, shard, indexName);
 		// Unmap live reader before REPLACE — Windows AccessDenied on mmap'd *.sbpt (G-00001 class).
 		final SealedBPTreeReader previous = readers.remove(key);
-		closeQuietly(previous);
+		closeForOverwriteOrThrow(previous);
 		SealedBPTreeWriter.write(file, domain, shard, indexName, ordered);
 		final SealedBPTreeReader replacement = SealedBPTreeReader.open(file);
 		readers.put(key, replacement);
 	}
 
 	/**
-	 * Drop and unmap all open {@code .sbpt} readers for {@code domain#shard} before rewrite.
+	 * Unmap reader and delete sealed {@code .sbpt} for one index (DROP INDEX purge).
 	 */
-	public void releaseShard(String domain, int shard) {
+	public void deleteIndex(String domain, int shard, String indexName) {
+		final ReaderKey key = new ReaderKey(domain, shard, indexName);
+		closeQuietly(readers.remove(key));
+		GridFs.deleteQuietly(indexFile(domain, shard, indexName));
+	}
+
+	/**
+	 * Drop and fail-closed unmap all open {@code .sbpt} readers for {@code domain#shard} before rewrite.
+	 */
+	public void releaseShard(String domain, int shard) throws IOException {
 		final List<ReaderKey> keys = new ArrayList<>();
 		for (ReaderKey key : readers.keySet()) {
 			if (key.domain().equals(domain) && key.shard() == shard) {
 				keys.add(key);
 			}
 		}
+		IOException failure = null;
 		for (ReaderKey key : keys) {
-			closeQuietly(readers.remove(key));
+			try {
+				closeForOverwriteOrThrow(readers.remove(key));
+			} catch (IOException closeFailure) {
+				if (failure == null) {
+					failure = closeFailure;
+				} else {
+					failure.addSuppressed(closeFailure);
+				}
+			}
+		}
+		if (failure != null) {
+			throw failure;
 		}
 	}
 
@@ -125,6 +147,13 @@ public final class SealedBPTreeService implements AutoCloseable {
 		} catch (IOException ignored) {
 			// Replacement remains authoritative.
 		}
+	}
+
+	private static void closeForOverwriteOrThrow(SealedBPTreeReader reader) throws IOException {
+		if (reader == null) {
+			return;
+		}
+		reader.closeForOverwrite();
 	}
 
 	private record ReaderKey(String domain, int shard, String indexName) {

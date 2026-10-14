@@ -36,6 +36,7 @@ public final class CatalogDdlCompactor {
 	private static final String CREATE_VIEW_PREFIX = "CREATE VIEW ";
 	private static final String CREATE_MAT_VIEW_PREFIX = "CREATE MATERIALIZED VIEW ";
 	private static final String CREATE_INDEX = "CREATE INDEX ";
+	private static final String CREATE_UNIQUE_INDEX = "CREATE UNIQUE INDEX ";
 	private static final String CREATE_BITMAP_INDEX = "CREATE BITMAP INDEX ";
 	private static final String ON_KW = " ON ";
 	private static final String AS_KW = " AS ";
@@ -141,8 +142,15 @@ public final class CatalogDdlCompactor {
 	}
 
 	private static String renderCreateIndex(String table, IndexDef idx) {
-		final StringBuilder sb = new StringBuilder(
-				idx.kind() == IndexType.BITMAP ? CREATE_BITMAP_INDEX : CREATE_INDEX);
+		final String prefix;
+		if (idx.kind() == IndexType.BITMAP) {
+			prefix = CREATE_BITMAP_INDEX;
+		} else if (idx.kind() == IndexType.STRICT) {
+			prefix = CREATE_UNIQUE_INDEX;
+		} else {
+			prefix = CREATE_INDEX;
+		}
+		final StringBuilder sb = new StringBuilder(prefix);
 		sb.append(CatalogPersistUtil.sanitizeIndexName(idx.name()))
 				.append(ON_KW)
 				.append(table)

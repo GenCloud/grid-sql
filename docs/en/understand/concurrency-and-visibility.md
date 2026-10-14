@@ -52,7 +52,7 @@ Inside an open transaction, `savepoint` / `rollbackTo` / `release` affect only t
 | `TxContext` | Independent transaction plus PREPARE handle. |
 | `maxTxContexts` | Client soft cap on concurrent logical sessions on that TCP (default **256**); server hard-cap **8** — open another `Connection` when exhausted. |
 
-Parallel application work = several `begin()` / `TxContext`s on one connection, not a new socket per parallel worker. One `ConnectionFactory` (or DataSource) per process; `dispose()` on shutdown. The **server** channel default is **8** and Boot does not raise it from YAML — beyond that open another `Connection` ([SQL server](../configure-and-operate/configuration/sql-server.md)).
+Parallel application work = several `begin()` / `TxContext`s on one connection, not a new socket per parallel worker. One `ConnectionFactory` (or DataSource) per process; `dispose()` on shutdown. The **server** channel default is **8** and configurable via `grid.sql-server.max-tx-contexts` — beyond that open another `Connection` ([SQL server](../configure-and-operate/configuration/sql-server.md)).
 
 `.block()` only on the application edge (`main`, CLI, tests), never inside library reactive pipelines.
 

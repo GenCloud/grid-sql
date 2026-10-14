@@ -59,10 +59,12 @@ public class NotCondition implements FilterCondition {
 			return null;
 		}
 		final IndexOperationResult allResult = PkIndexScanUtil.searchAllPrimaryKeys(property2Index, compositeIndexes, primaryKeyColumns);
-		if (allResult == null || allResult.getPointers() == null) {
+		if (allResult == null) {
 			return IndexOperationResult.EMPTY;
 		}
-		final Sets.SetView<IndexPointerRef> diff = Sets.difference(allResult.getPointers(), childResult.getPointers());
+		final Sets.SetView<IndexPointerRef> diff = Sets.difference(
+				allResult.pointersOrExpand(),
+				childResult.pointersOrExpand());
 		final IndexOperationResult result = new IndexOperationResult();
 		result.setPointers(diff);
 		result.setRowsProcessed(allResult.getRowsProcessed() - childResult.getRowsProcessed());

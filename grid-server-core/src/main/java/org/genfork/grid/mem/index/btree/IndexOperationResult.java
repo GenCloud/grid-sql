@@ -29,10 +29,10 @@ import org.genfork.grid.mem.index.bitmap.Bitmap;
  * @since: 1.0
  */
 public class IndexOperationResult {
-	public static final IndexOperationResult EMPTY = new IndexOperationResult(Collections.emptySet());
+	/** Shared miss / no-hit result: empty pointers, zero size/processed. Do not mutate. */
+	public static final IndexOperationResult EMPTY = createEmpty();
 
 	private Set<IndexPointerRef> pointers;
-
 	private long size;
 	private long rowsProcessed;
 
@@ -50,6 +50,12 @@ public class IndexOperationResult {
 		this.pointers = pointers;
 		size = pointers.size();
 		rowsProcessed = 1;
+	}
+
+	private static IndexOperationResult createEmpty() {
+		final IndexOperationResult empty = new IndexOperationResult();
+		empty.setPointers(Collections.emptySet());
+		return empty;
 	}
 
 	public Set<IndexPointerRef> getPointers() {

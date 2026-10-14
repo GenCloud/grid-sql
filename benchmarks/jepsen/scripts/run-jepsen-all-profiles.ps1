@@ -16,6 +16,13 @@ $SummaryPath = Join-Path $Lab ($StampPrefix + "-summary.md")
 $Utf8 = [Text.UTF8Encoding]::new($false)
 New-Item -ItemType Directory -Force -Path $Lab | Out-Null
 $env:JEPSEN_TIME_LIMIT = "$TimeLimit"
+# Compose interpolates ${JEPSEN_M2} for the control profile volume even when only n1/n2/n3 start.
+if (-not $env:HOME -or $env:HOME -eq "") {
+  $env:HOME = $env:USERPROFILE
+}
+if (-not $env:JEPSEN_M2 -or $env:JEPSEN_M2 -eq "") {
+  $env:JEPSEN_M2 = Join-Path $env:USERPROFILE ".m2"
+}
 $rows = New-Object System.Collections.Generic.List[object]
 
 function Find-GitBash {

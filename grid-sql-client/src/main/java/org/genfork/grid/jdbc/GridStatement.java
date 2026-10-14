@@ -16,6 +16,7 @@
 package org.genfork.grid.jdbc;
 
 import org.genfork.grid.sql.SqlScriptStatements;
+import org.genfork.grid.sql.client.DefaultRowMetadata;
 import org.genfork.grid.sql.client.Row;
 import org.genfork.grid.sql.client.RowMetadata;
 import org.genfork.grid.sql.client.sync.SyncResult;
@@ -55,6 +56,11 @@ public class GridStatement implements Statement {
 	protected final GridConnection connection;
 	private volatile boolean closed;
 	private volatile GridResultSet currentResult;
+	/**
+	 * Result of {@code INSERT/UPDATE/DELETE … RETURNING} when callers use {@link #executeUpdate}
+	 * then {@link #getGeneratedKeys} (jOOQ {@code SQLDialect.DEFAULT} returning path).
+	 */
+	private volatile GridResultSet generatedKeys;
 	private volatile long updateCount = NO_UPDATE_COUNT;
 	private volatile int maxRows;
 	private volatile int queryTimeoutSeconds;
@@ -90,12 +96,7 @@ public class GridStatement implements Statement {
 	public int executeUpdate(String sql) throws SQLException {
 		ensureOpen();
 		final ExecOutcome outcome = runSql(sql);
-		if (outcome.resultSet() != null) {
-			throw new SQLException(
-					"SQL produced a result set (use executeQuery for RETURNING / SELECT)",
-					SQLSTATE_GENERAL);
-		}
-		return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, outcome.updateCount()));
+		return acceptUpdateOrReturning(outcome);
 	}
 
 	@Override
@@ -141,7 +142,7 @@ public class GridStatement implements Statement {
 		return applySyncResult(results.getFirst(), parts.getFirst());
 	}
 
-	private Duration queryTimeoutDuration() {
+	Duration queryTimeoutDuration() {
 		if (queryTimeoutSeconds <= 0) {
 			return null;
 		}
@@ -172,6 +173,20 @@ public class GridStatement implements Statement {
 			pendingSyncResults.add(results.get(i));
 		}
 		return applySyncResult(results.getFirst(), sqlOrNull);
+	}
+
+	/**
+	 * Materialize a {@link GridResultSet} from a completed sync outcome (no pending batch state).
+	 */
+	ResultSet openSyncResultSet(SyncResult syncResult, String sqlOrNull) throws SQLException {
+		if (syncResult == null || !syncResult.isResultSet()) {
+			throw new SQLException("Expected a result set", SQLSTATE_GENERAL);
+		}
+		final ExecOutcome outcome = applySyncResult(syncResult, sqlOrNull);
+		if (outcome.resultSet() == null) {
+			throw new SQLException("Expected a result set", SQLSTATE_GENERAL);
+		}
+		return outcome.resultSet();
 	}
 
 	private ExecOutcome applySyncResult(SyncResult first, String sqlOrNull) throws SQLException {
@@ -231,11 +246,36 @@ public class GridStatement implements Statement {
 		return new ExecOutcome(null, count);
 	}
 
+	/**
+	 * DML update count, or RETURNING rows as generated-keys (jOOQ DEFAULT {@code returning()}).
+	 */
+	int acceptUpdateOrReturning(ExecOutcome outcome) throws SQLException {
+		clearGeneratedKeys();
+		if (outcome.resultSet() != null) {
+			final GridResultSet rs = outcome.resultSet();
+			generatedKeys = rs;
+			/* Not a current query ResultSet — jOOQ reads via getGeneratedKeys only. */
+			currentResult = null;
+			final int rows = rs.bufferedRowCount();
+			updateCount = rows;
+			return rows;
+		}
+		return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, outcome.updateCount()));
+	}
+
+	private void clearGeneratedKeys() {
+		if (generatedKeys != null && generatedKeys != currentResult) {
+			generatedKeys.close();
+		}
+		generatedKeys = null;
+	}
+
 	private void clearCurrent() {
 		if (currentResult != null) {
 			currentResult.close();
 			currentResult = null;
 		}
+		clearGeneratedKeys();
 		cancelHook = null;
 		activeSyncResult = null;
 		pendingSyncResults.clear();
@@ -436,7 +476,11 @@ public class GridStatement implements Statement {
 
 	@Override
 	public ResultSet getGeneratedKeys() throws SQLException {
-		throw new SQLFeatureNotSupportedException("getGeneratedKeys");
+		ensureOpen();
+		if (generatedKeys != null) {
+			return generatedKeys;
+		}
+		return new GridResultSet(this, new DefaultRowMetadata(List.of()), List.of());
 	}
 
 	@Override

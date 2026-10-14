@@ -13,5 +13,5 @@ command -v lein
 command -v git
 pkill -9 -f 'jamoa-jepsen.core' 2>/dev/null || true
 sleep 1
-lein run -m jamoa-jepsen.core test --workload append --time-limit 45 --no-nemesis
+lein run -m jamoa-jepsen.core test --workload append --time-limit 60 --no-nemesis
 echo LEIN_EXIT=$?

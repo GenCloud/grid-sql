@@ -135,6 +135,13 @@ public final class GridResultSet implements ResultSet {
 		this.insertFlags = new boolean[cols];
 	}
 
+	/**
+	 * Buffered row count for RETURNING / generated-keys update count (before cursor consume).
+	 */
+	int bufferedRowCount() {
+		return rows.size();
+	}
+
 	@Override
 	public boolean next() throws SQLException {
 		ensureOpen();
@@ -396,14 +403,17 @@ public final class GridResultSet implements ResultSet {
 	@Override
 	public Timestamp getTimestamp(int columnIndex) throws SQLException {
 		final Object v = cell(columnIndex);
-        return switch (v) {
-            case null -> null;
-            case Timestamp ts -> ts;
-            case Instant i -> Timestamp.from(i);
-            case LocalDateTime ldt -> Timestamp.valueOf(ldt);
-            case LocalDate ld -> Timestamp.valueOf(ld.atStartOfDay());
-            default -> Timestamp.valueOf(Objects.requireNonNull(SqlTypeCoercion.toTimestampString(v)).replace('T', ' '));
-        };
+		if (v == null) {
+			return null;
+		}
+		if (v instanceof Timestamp ts) {
+			return ts;
+		}
+		if (v instanceof Instant i) {
+			return Timestamp.from(i);
+		}
+		// Via LocalDateTime — ISO may omit seconds (…T12:00); Timestamp.valueOf(String) rejects that.
+		return Objects.requireNonNull(SqlTypeCoercion.toSqlTimestamp(v));
     }
 
 	@Override
@@ -1386,7 +1396,15 @@ public final class GridResultSet implements ResultSet {
 
 	@Override
 	public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
-		final Object v = getObject(columnIndex);
+		return coerceObject(getObject(columnIndex), type);
+	}
+
+	@Override
+	public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
+		return coerceObject(getObject(columnLabel), type);
+	}
+
+	private static <T> T coerceObject(Object v, Class<T> type) {
 		if (v == null) {
 			return null;
 		}
@@ -1399,17 +1417,14 @@ public final class GridResultSet implements ResultSet {
 		if (type == LocalTime.class) {
 			return type.cast(SqlTypeCoercion.toTime(v));
 		}
+		if (type == LocalDateTime.class) {
+			return type.cast(SqlTypeCoercion.toLocalDateTime(v));
+		}
 		if (type == Instant.class) {
 			return type.cast(SqlTypeCoercion.toTimestamptz(v, ZoneOffset.UTC));
 		}
-        return type.cast(v);
-	}
-
-	@Override
-	public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
-		final Object v = getObject(columnLabel);
-		if (v == null) {
-			return null;
+		if (type == Timestamp.class) {
+			return type.cast(SqlTypeCoercion.toSqlTimestamp(v));
 		}
 		return type.cast(v);
 	}

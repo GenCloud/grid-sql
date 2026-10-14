@@ -128,7 +128,7 @@ CREATE BITMAP INDEX idx_orders_status ON orders (status);
 DROP INDEX idx_orders_customer ON orders;
 ```
 
-Одна колонка — B+ дерево указателей, несколько — составное дерево. `BITMAP` включается **только** явным `CREATE BITMAP INDEX` и только на одной колонке; через конфигурацию YAML его включить нельзя. Когда bitmap уместен и как индекс участвует в плане — [индексы](indexes.md).
+Одна колонка — B+ дерево указателей, несколько — составное дерево. `BITMAP` включается **только** явным `CREATE BITMAP INDEX` и только на одной колонке; через конфигурацию YAML его включить нельзя. `DROP INDEX` также best-effort чистит sealed `.sbpt` / `.sbm` этого индекса, чтобы LAZY hydrate не воскрешал его — подробно в [индексы](indexes.md). Когда bitmap уместен и как индекс участвует в плане — там же.
 
 ## ALTER TABLE
 

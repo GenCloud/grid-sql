@@ -184,7 +184,7 @@ grid:
 | `op-log.fsync` | Сохранность данных; пакетная запись амортизирует групповой fsync |
 | `orchid.tick-ms` и `order-threshold` | Допуск записи; держите произведение `2*pi*freq*tick/1000` заметно меньше единицы |
 | `sql.default-shards` | Параллелизм шардов при CREATE TABLE |
-| Параллельные TX на одном TCP | Жёсткий потолок канала **8**; Boot не применяет `grid.sql.max-tx-contexts` к слушателю — откройте больше `Connection` ([SQL-сервер](../configuration/sql-server.md)) |
+| Параллельные TX на одном TCP | Жёсткий потолок канала **8**; поднимите `grid.sql-server.max-tx-contexts` — откройте больше `Connection` ([SQL-сервер](../configuration/sql-server.md)) |
 | `durability.working-set-max-entries` и `hydrate-mode` | Компромисс между потолком RAM и промахами в запечатанном хранилище |
 | `swarm`, `placement-optimizer` | Подсказки по размещению; `apply-auto-cutover` по умолчанию **true** ([overlay и размещение](../../understand/overlay-and-swarm.md); `false` — только временное подавление migrate) |
 

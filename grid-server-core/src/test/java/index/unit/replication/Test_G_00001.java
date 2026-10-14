@@ -22,6 +22,7 @@ import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapReader;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
+import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
 import org.genfork.grid.utils.ArrayUtil;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -82,6 +83,35 @@ class Test_G_00001 {
 		final SealedGridMapReader after = service.reader(DOMAIN_DOUBLE_DUMP, SHARD_ZERO);
 		assertNotNull(after);
 		assertArrayEquals(VALUE_V2, after.get(key));
+		service.closeAll();
+	}
+
+	@Test
+	@DisplayName("test_G_00001_unpackWithLiveReader_doesNotThrow")
+	void test_G_00001_unpackWithLiveReader_doesNotThrow() throws Exception {
+		final Path sealedRoot = tmp.resolve("sealed-unpack");
+		GridFs.createDirs(sealedRoot);
+		final SealedGridMapService service = new SealedGridMapService(sealedRoot);
+		final GridEntriesProcessor processor = new GridEntriesProcessor(
+				SHARD_ZERO, new GridScalableMap(), null, null);
+		service.bindProcessor(DOMAIN_DOUBLE_DUMP, shard -> shard == SHARD_ZERO ? processor : null);
+
+		final byte[] key = "unpack-key".getBytes(StandardCharsets.UTF_8);
+		processor.installCommitted(key, VALUE_V1, false);
+		assertTrue(service.dumpDomain(DOMAIN_DOUBLE_DUMP, null, null) > 0);
+
+		final SealedGridMapReader live = service.reader(DOMAIN_DOUBLE_DUMP, SHARD_ZERO);
+		assertNotNull(live);
+		assertArrayEquals(VALUE_V1, live.get(key));
+
+		final byte[] packed = SealedShardPack.pack(sealedRoot, DOMAIN_DOUBLE_DUMP, SHARD_ZERO);
+		assertDoesNotThrow(() ->
+				service.unpackShardArtifacts(DOMAIN_DOUBLE_DUMP, SHARD_ZERO, packed));
+
+		service.openShardLazy(DOMAIN_DOUBLE_DUMP, SHARD_ZERO);
+		final SealedGridMapReader after = service.reader(DOMAIN_DOUBLE_DUMP, SHARD_ZERO);
+		assertNotNull(after);
+		assertArrayEquals(VALUE_V1, after.get(key));
 		service.closeAll();
 	}
 

@@ -43,7 +43,7 @@ Details: [write path](../understand/write-path-staging.md), [architecture overvi
 
 ## Client
 
-Applications depend on `grid-sql-client` and connect over `grid://` or `jdbc:grid://` — one protocol, two APIs. One TCP carries many logical transactions: client URL default `maxTxContexts` **256**, server channel hard-cap **8** (Boot does not raise it from YAML) — open another `Connection` when exhausted. See [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling.md).
+Applications depend on `grid-sql-client` and connect over `grid://` or `jdbc:grid://` — one protocol, two APIs. One TCP carries many logical transactions: client URL default `maxTxContexts` **256**, server channel hard-cap **8** (configurable via `grid.sql-server.max-tx-contexts`) — open another `Connection` when exhausted. See [connect clients](connect-clients.md), [JDBC client](../develop/jdbc-tooling.md).
 
 ## What not to expect
 

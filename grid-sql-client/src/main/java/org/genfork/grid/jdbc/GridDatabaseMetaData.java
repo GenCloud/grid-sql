@@ -796,6 +796,8 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 				final String identity = rs.getString(8);
 				final SqlType sqlType = GridJdbcTypeSupport.parseSqlType(dataType);
 				final int jdbcType = GridJdbcTypeSupport.toJdbcType(sqlType);
+				/* jOOQ MetaImpl resolves by TYPE_NAME only — use JDBC name, not DDL synonym. */
+				final String jdbcTypeName = GridJdbcTypeSupport.typeName(sqlType);
 				final int columnSize = GridJdbcTypeSupport.precisionFor(sqlType);
 				final int decimalDigits = GridJdbcTypeSupport.scaleFor(sqlType);
 				final int nullableFlag = "YES".equalsIgnoreCase(nullable)
@@ -809,9 +811,9 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 						schema,
 						table,
 						column,
-                        jdbcType,
-						dataType,
-                        columnSize,
+						jdbcType,
+						jdbcTypeName,
+						columnSize,
                         0,
                         decimalDigits,
                         10,
@@ -1120,25 +1122,27 @@ public final class GridDatabaseMetaData implements DatabaseMetaData {
 	public ResultSet getTypeInfo() throws SQLException {
 		final List<Object[]> rows = new ArrayList<>();
 		for (SqlType t : SqlType.values()) {
+			final String typeName = GridJdbcTypeSupport.typeName(t);
+			final int precision = GridJdbcTypeSupport.precisionFor(t);
 			rows.add(new Object[]{
-					t.name(),
-                    GridJdbcTypeSupport.toJdbcType(t),
-                    0,
+					typeName,
+					GridJdbcTypeSupport.toJdbcType(t),
+					precision,
 					null,
 					null,
 					null,
-                    typeNullable,
+					typeNullable,
 					Boolean.FALSE,
-                    typeSearchable,
+					typeSearchable,
 					Boolean.FALSE,
 					Boolean.FALSE,
 					Boolean.FALSE,
-					t.name(),
-                    0,
-                    0,
-                    0,
-                    0,
-                    10
+					typeName,
+					0,
+					0,
+					0,
+					0,
+					10
 			});
 		}
 		return MetaResultSets.typeInfo(connection, rows);

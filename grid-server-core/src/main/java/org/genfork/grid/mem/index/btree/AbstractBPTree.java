@@ -144,7 +144,14 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 
 	@Override
 	public void insert(T key, IndexPointerRef pointerRef) {
-		final LeafSplit<K, T> split = root.insert(key, pointerRef, DEFAULT_ORDER, strict);
+		final LeafSplit<K, T> split;
+		try {
+			split = root.insert(key, pointerRef, DEFAULT_ORDER, strict);
+		} catch (NonUniqueValueException ex) {
+			throw new NonUniqueValueException(
+					NonUniqueValueException.formatMessage(NonUniqueValueException.DOMAIN_UNKNOWN, indexName, key),
+					ex);
+		}
 		if (split != null) {
 			final InternalNode<K, T> newRoot = createInternalNode();
 			newRoot.keys.add(split.getSplitKey());
@@ -201,7 +208,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 	@Override
 	public IndexOperationResult searchEq(T key) {
 		if (key == null) {
-			return new IndexOperationResult();
+			return IndexOperationResult.EMPTY;
 		}
 		return root.searchEq(key);
 	}
@@ -961,7 +968,11 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			int idx = indexedBinarySearch(keys, key, true);
 			if (idx >= 0) {
 				if (strict) {
-					throw new NonUniqueValueException("Value [" + key + "] not unique for strict index.");
+					throw new NonUniqueValueException(
+							NonUniqueValueException.formatMessage(
+									NonUniqueValueException.DOMAIN_UNKNOWN,
+									"?",
+									key));
 				}
 				final Set<IndexPointerRef> valueList = values.get(idx);
 				valueList.add(pointerRef);
@@ -1069,11 +1080,12 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 				return operationResult;
 			}
 			final int idx = indexedBinarySearch(keys, key, false);
-			if (idx >= 0) {
-				final Set<IndexPointerRef> currentPointers = values.get(idx);
-				operationResult.addSize(currentPointers.size());
-				operationResult.setPointers(currentPointers);
+			if (idx < 0) {
+				return IndexOperationResult.EMPTY;
 			}
+			final Set<IndexPointerRef> currentPointers = values.get(idx);
+			operationResult.addSize(currentPointers.size());
+			operationResult.setPointers(currentPointers);
 			return operationResult;
 		}
 
@@ -1083,15 +1095,15 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 				return searchEq(key);
 			}
 			if (!key.isPartial()) {
-				final IndexOperationResult operationResult = new IndexOperationResult();
 				final int idx = indexedBinarySearch(keys, key, false);
 				if (idx < 0) {
-					return operationResult;
+					return IndexOperationResult.EMPTY;
 				}
 				final Set<IndexPointerRef> currentPointers = values.get(idx);
 				if (currentPointers == null || currentPointers.isEmpty()) {
-					return operationResult;
+					return IndexOperationResult.EMPTY;
 				}
+				final IndexOperationResult operationResult = new IndexOperationResult();
 				if (currentPointers.size() <= maxResults) {
 					operationResult.addSize(currentPointers.size());
 					operationResult.setPointers(currentPointers);

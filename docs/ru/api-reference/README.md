@@ -10,7 +10,7 @@
 |--------|----------------|
 | AUTH / отказ connect | Неверный user/pass или узел ещё не готов (`readiness` DOWN) |
 | `bad frameLen` | Клиент попал на порт репликации (**5615**/**5616**), а не SQL |
-| `maxTxContexts=N exhausted` (код кадра 5) | Больше восьми открытых сессий на одном TCP (жёсткий потолок сервера **8**); Boot не поднимает его из YAML — откройте ещё один `Connection` или закройте простаивающие `TxContext` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md)) |
+| `maxTxContexts=N exhausted` (код кадра 5) | Больше восьми открытых сессий на одном TCP (жёсткий потолок сервера **8**); задаётся `grid.sql-server.max-tx-contexts` — откройте ещё один `Connection` или закройте простаивающие `TxContext` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md)) |
 | Stale / `applyLagStale` на чтении с реплики | Отставание apply; при превышении порога — **отказ** (подождать или читать с пишущего) ([чтение с реплики](../configure-and-operate/operations/replica-reads.md)) |
 | Отказ записи после повышения роли | Клиент не сделал `rediscoverWriter()` — [повышение роли](../configure-and-operate/operations/ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | URL записи указывает на Hold/Witness или клиент перебирает следующий адрес в URL без `rediscoverWriter()` |
@@ -71,7 +71,7 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 
 Приложения **не** встраивают удалённый `SqlEngine` — говорят по `grid://` со starter/node. Boot: [Spring Boot](../develop/spring-boot.md).
 
-Потолок открытых сессий на TCP-канале слушателя — **8** (Boot не поднимает его из `grid.sql.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` (на каждом узле; репликация не доставляет) — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
+Потолок открытых сессий на TCP-канале слушателя — **8** (задаётся `grid.sql-server.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` (на каждом узле; репликация не доставляет) — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC-клиент
 

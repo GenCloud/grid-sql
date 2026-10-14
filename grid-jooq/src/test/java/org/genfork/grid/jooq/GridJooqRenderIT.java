@@ -215,7 +215,8 @@ class GridJooqRenderIT {
 	void sqlTypeMappingRoundTripBasics() {
 		assertEquals(SQLDataType.INTEGER, GridSqlTypes.toDataType(SqlType.INT));
 		assertEquals(SQLDataType.BIGINT, GridSqlTypes.toDataType(SqlType.BIGINT));
-		assertEquals(SQLDataType.VARCHAR, GridSqlTypes.toDataType(SqlType.TIMESTAMP));
+		assertEquals(SQLDataType.LOCALDATETIME, GridSqlTypes.toDataType(SqlType.TIMESTAMP));
+		assertEquals(SqlType.TIMESTAMP, GridSqlTypes.toSqlType(SQLDataType.LOCALDATETIME));
 		assertEquals(SqlType.INT, GridSqlTypes.toSqlType(SQLDataType.INTEGER));
 		assertEquals(SqlType.UUID, GridSqlTypes.toSqlType(SQLDataType.UUID));
 		assertEquals(SqlType.VARCHAR, GridSqlTypes.toSqlType(SQLDataType.VARCHAR));

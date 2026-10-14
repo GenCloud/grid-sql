@@ -45,7 +45,7 @@ The `gridReadiness` component reports the following keys. Values marked `n/a` me
 | `promoteHint` | string, `n/a` | Same promote hint as wire `ServerMeta` |
 | `regionEpoch` / `regionRole` | long / int, `n/a` | Multi-site region claim |
 | `oplogArchiveEnabled` | boolean, `n/a` | OpLog archive path present |
-| `maxTxContexts` | integer | May appear when `grid.sql.max-tx-contexts` is set in YAML; Boot does **not** apply it to the TCP listener (hard channel cap stays **8**) — [SQL server](configuration/sql-server.md) |
+| `maxTxContexts` | integer | From `grid.sql-server.max-tx-contexts` (default **8**) — [SQL server](configuration/sql-server.md) |
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Record-lock and cancellation counters |
 
 Liveness (`gridLiveness`) reports `logicExecutor`, `uptimeMs`, `pid`, and the same consensus and repair gauges. It has no `reason` key: a live process with an unsynced cluster is alive but not ready.

@@ -38,7 +38,55 @@ import org.genfork.grid.store.TableStore;
  * @since: 1.0
  */
 public final class SqlMergeMatchOps {
+	/**
+	 * Prefix so UNIQUE-target arbiter lock keys never collide with primary-key wire bytes.
+	 */
+	private static final byte CONFLICT_ARBITER_MAGIC_0 = (byte) 0xC0;
+	private static final byte CONFLICT_ARBITER_MAGIC_1 = (byte) 0xFF;
+	private static final int CONFLICT_ARBITER_MAGIC_LEN = 2;
+	private static final int LEN_PREFIX_BYTES = 4;
+
 	private SqlMergeMatchOps() {
+	}
+
+	/**
+	 * Lock key that serializes concurrent {@code ON CONFLICT} on the same UNIQUE target
+	 * (PK target reuses PK bytes; secondary UNIQUE uses a tagged wire blob).
+	 */
+	static byte[] conflictArbiterLockKey(TableStore store, Object[] row, OnConflict conflict) {
+		final TableSchema schema = store.schema();
+		final List<String> targets = conflict.targetColumns() == null
+				? List.of()
+				: conflict.targetColumns();
+		if (targets.isEmpty()
+				|| (targets.size() == 1
+				&& targets.getFirst().equalsIgnoreCase(schema.pkColumn().name()))) {
+			final Object pk = row[schema.pkColumn().ordinal()];
+			return store.keyBytesForPk(pk);
+		}
+		validateUniqueTarget(schema, targets);
+		int total = CONFLICT_ARBITER_MAGIC_LEN;
+		final byte[][] parts = new byte[targets.size()][];
+		for (int i = 0; i < targets.size(); i++) {
+			parts[i] = SqlWireUtil.toGenericArray(row[schema.requireColumn(targets.get(i)).ordinal()]);
+			total += LEN_PREFIX_BYTES + (parts[i] == null ? 0 : parts[i].length);
+		}
+		final byte[] out = new byte[total];
+		out[0] = CONFLICT_ARBITER_MAGIC_0;
+		out[1] = CONFLICT_ARBITER_MAGIC_1;
+		int pos = CONFLICT_ARBITER_MAGIC_LEN;
+		for (byte[] part : parts) {
+			final int len = part == null ? 0 : part.length;
+			out[pos++] = (byte) (len >>> 24);
+			out[pos++] = (byte) (len >>> 16);
+			out[pos++] = (byte) (len >>> 8);
+			out[pos++] = (byte) len;
+			if (len > 0) {
+				System.arraycopy(part, 0, out, pos, len);
+				pos += len;
+			}
+		}
+		return out;
 	}
 
 	static boolean namedHasNonNull(Map<String, Object> named, String col) {

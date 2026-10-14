@@ -54,7 +54,7 @@ DDL внутри открытой транзакции отклоняется: �
 | Шаблон | `колонка LIKE 'шаблон'` |
 | Проверка на NULL | `колонка IS NULL`, `колонка IS NOT NULL` |
 | Составление | `AND`, `OR`, `NOT`, скобки, отдельные `TRUE` / `FALSE` |
-| Значения | целое, дробное, строка, `NULL`, `TRUE`, `FALSE`, `?`, `CAST(значение AS тип)`, `COALESCE(a, b, …)`, `NOW()`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `DATE '…'`, `TIME '…'`, `TIMESTAMP '…'`, `TIMESTAMPTZ '…'`, `UUID '…'`, `CASE WHEN … END`, `NEXTVAL`/`CURRVAL`, `EXCLUDED.колонка` (только в ON CONFLICT DO UPDATE) |
+| Значения | целое, дробное, строка, `NULL`, `TRUE`, `FALSE`, `?`, `CAST(значение AS тип)`, `COALESCE(a, b, …)`, `NOW()`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `DATE '…'`, `TIME '…'`, `TIMESTAMP '…'`, `TIMESTAMPTZ '…'`, `UUID '…'`, `X'…'` (`HEX_BYTES` для `BYTES`/`BYTEA`), `CASE WHEN … END`, `NEXTVAL`/`CURRVAL`, `EXCLUDED.колонка` (только в ON CONFLICT DO UPDATE) |
 
 Три следствия, о которых стоит знать до того, как писать фильтр:
 
@@ -69,7 +69,7 @@ DDL внутри открытой транзакции отклоняется: �
 | Оператор | Что принимается | Ограничение |
 |----------|-----------------|-------------|
 | `INSERT` / `UPSERT` | `VALUES (…), (…)`, `INSERT … SELECT …`, необязательный список колонок, `ON CONFLICT`, `RETURNING` | Один apply-row / conflict / TX путь для VALUES и SELECT; set-op источники отклоняются; пропущенные колонки берут `DEFAULT`, если он объявлен |
-| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET колонка = значение, …` | Значения: литералы, `EXCLUDED.колонка`, `COALESCE(…)`, clock-builtin; список колонок — PK или уникальный индекс |
+| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET колонка = значение, …` | Значения: литералы (в т.ч. `TIMESTAMP`), `EXCLUDED.колонка`, `COALESCE(…)`, clock-builtin; список колонок — PK или вторичный UNIQUE; повторный конфликт UNIQUE + `IDENTITY` обновляет на месте (без ghost PK) |
 | `UPDATE` | Присваивания `SET`, необязательный `FROM`, обязательный `WHERE`, необязательный `RETURNING` | См. таблицу присваиваний ниже; отсутствующий PK → 0 строк, без empty seed (для upsert — `UPSERT`) |
 | `DELETE` | Обязательный `WHERE` | Удаления без условия нет, `RETURNING` тоже |
 | `TRUNCATE TABLE` | Полная очистка таблицы | Тот же путь журнала / TX, что у DELETE: при сбое — отказ клиенту, без частичной видимости |

@@ -114,4 +114,48 @@ public class SqlUpdateColumnCopyAndCaseIT {
 		final SqlResult row = engine.execute("SELECT vitality_points FROM player_data WHERE id = 4");
 		assertEquals(MAX_VITALITY, ((Number) cell(row, 0)).intValue());
 	}
+
+	/**
+	 * jOOQ {@code updateVitality} shape: CASE with {@code col + ?} and WHEN binds (app_log addend NPE).
+	 */
+	@Test
+	void vitalityCaseWithBindParams() {
+		final int points = 1000;
+		engine.execute("INSERT INTO player_data VALUES (5, 2000, 0, 0, 0, 0)");
+		engine.execute(
+				engine.newSession(),
+				"UPDATE player_data SET vitality_points = CASE "
+						+ "WHEN player_data.vitality_points = ? THEN ? "
+						+ "WHEN (player_data.vitality_points + ?) >= ? THEN ? "
+						+ "ELSE (player_data.vitality_points + ?) END WHERE id = ?",
+				new Object[]{
+						MAX_VITALITY, MAX_VITALITY,
+						points, MAX_VITALITY, MAX_VITALITY,
+						points,
+						5
+				});
+		final SqlResult row = engine.execute("SELECT vitality_points FROM player_data WHERE id = 5");
+		assertEquals(3000, ((Number) cell(row, 0)).intValue());
+	}
+
+	@Test
+	void vitalityCaseWithBindParamsCapsAtMax() {
+		final int points = 1000;
+		final int start = MAX_VITALITY - 500;
+		engine.execute("INSERT INTO player_data VALUES (6, " + start + ", 0, 0, 0, 0)");
+		engine.execute(
+				engine.newSession(),
+				"UPDATE player_data SET vitality_points = CASE "
+						+ "WHEN player_data.vitality_points = ? THEN ? "
+						+ "WHEN (player_data.vitality_points + ?) >= ? THEN ? "
+						+ "ELSE (player_data.vitality_points + ?) END WHERE id = ?",
+				new Object[]{
+						MAX_VITALITY, MAX_VITALITY,
+						points, MAX_VITALITY, MAX_VITALITY,
+						points,
+						6
+				});
+		final SqlResult row = engine.execute("SELECT vitality_points FROM player_data WHERE id = 6");
+		assertEquals(MAX_VITALITY, ((Number) cell(row, 0)).intValue());
+	}
 }

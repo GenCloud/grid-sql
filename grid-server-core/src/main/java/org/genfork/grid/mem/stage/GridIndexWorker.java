@@ -35,6 +35,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.util.CollectionUtils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -77,9 +79,21 @@ public class GridIndexWorker implements Runnable {
 	private static final ThreadLocal<LinkedHashMap<String, byte[]>> FIELD_VALUES_SCRATCH =
 			ThreadLocal.withInitial(() -> new LinkedHashMap<>(FIELD_MAP_INITIAL_CAPACITY));
 
+	/**
+	 * Tombstone map+index for PKs displaced from a STRICT UNIQUE slot (shard-routed by TableStore).
+	 */
+	private volatile Consumer<byte[]> displacedStrictOwnerTombstone;
+
 	public GridIndexWorker(GridCompositeIndex index, TableSchema tableSchema) {
 		this.index = index;
 		this.tableSchema = Objects.requireNonNull(tableSchema, "tableSchema");
+	}
+
+	/**
+	 * Register tombstone callback for STRICT unique-owner replace (routed by row PK shard).
+	 */
+	public void setDisplacedStrictOwnerTombstone(Consumer<byte[]> tombstone) {
+		this.displacedStrictOwnerTombstone = tombstone;
 	}
 
 	public void replaceSchema(TableSchema schema) {
@@ -152,7 +166,9 @@ public class GridIndexWorker implements Runnable {
 					fieldValues.put(col, cursor.indexKeyBytes(cursor.ordinalOf(col)));
 				}
 				final long keyNativePointer = BPValueHelper.toNativeValueRef(key, null);
-				index.putIndexKeyValuesForNamed(def, keyNativePointer, key, fieldValues);
+				final List<byte[]> displaced =
+						index.putIndexKeyValuesForNamed(def, keyNativePointer, key, fieldValues);
+				tombstoneDisplacedStrictOwners(key, displaced);
 			}
 			index.startAnalyze();
 		});
@@ -191,7 +207,11 @@ public class GridIndexWorker implements Runnable {
 			fieldValues.put(col, cursor.indexKeyBytes(cursor.ordinalOf(col)));
 		}
 		final long keyNativePointer = BPValueHelper.toNativeValueRef(key, null);
-		runMutationAndAwait(() -> index.putIndexKeyValuesForNamed(def, keyNativePointer, key, fieldValues));
+		runMutationAndAwait(() -> {
+			final List<byte[]> displaced =
+					index.putIndexKeyValuesForNamed(def, keyNativePointer, key, fieldValues);
+			tombstoneDisplacedStrictOwners(key, displaced);
+		});
 	}
 
 	/**
@@ -225,7 +245,10 @@ public class GridIndexWorker implements Runnable {
 				}
 			}
 		}
-		runMutationAndAwait(() -> index.putIndexKeyValues(keyNativePointer, key, fieldValues));
+		runMutationAndAwait(() -> {
+			final List<byte[]> displaced = index.putIndexKeyValues(keyNativePointer, key, fieldValues);
+			tombstoneDisplacedStrictOwners(key, displaced);
+		});
 	}
 
 	public void start() {
@@ -350,7 +373,25 @@ public class GridIndexWorker implements Runnable {
 			}
 		}
 
-		index.putIndexKeyValues(keyNativePointer, keyArray, fieldValues);
+		final List<byte[]> displaced = index.putIndexKeyValues(keyNativePointer, keyArray, fieldValues);
+		tombstoneDisplacedStrictOwners(keyArray, displaced);
+	}
+
+	private void tombstoneDisplacedStrictOwners(byte[] upsertPk, List<byte[]> displaced) {
+		final Consumer<byte[]> tombstone = displacedStrictOwnerTombstone;
+		if (tombstone == null || displaced == null || displaced.isEmpty()) {
+			return;
+		}
+		for (int i = 0, n = displaced.size(); i < n; i++) {
+			final byte[] pk = displaced.get(i);
+			if (pk == null) {
+				continue;
+			}
+			if (upsertPk != null && Arrays.equals(pk, upsertPk)) {
+				continue;
+			}
+			tombstone.accept(pk);
+		}
 	}
 
 	private void removeFromIndexUnlocked(RemoveEntry entry) {

@@ -8,6 +8,7 @@ grid:
     port: 15434
     user: "grid"
     password: "grid"
+    max-tx-contexts: 256
   codec:
     duplex:
       enabled: true

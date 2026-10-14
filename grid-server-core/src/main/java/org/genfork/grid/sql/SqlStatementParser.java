@@ -15,16 +15,6 @@
  */
 package org.genfork.grid.sql;
 
-import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-
 import org.antlr.v4.runtime.BailErrorStrategy;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
@@ -34,29 +24,7 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.misc.ParseCancellationException;
 import org.genfork.grid.antlr.SimplifiedSqlLexer;
 import org.genfork.grid.antlr.SimplifiedSqlParser;
-import org.genfork.grid.antlr.SimplifiedSqlParser.AlterUserStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.ColumnDefContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.ColumnNameContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.CreateIndexStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.CreateTableStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.CreateUserStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.DeleteStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.DropIndexStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.DropTableStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.GrantStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.InsertStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.PrivilegeNameContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.QueryContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.RevokeStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.SelectListContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.SetOperatorContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.StatementContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.TableElementContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.UpdateAssignContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.UpdateRhsContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.UpdateStmtContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.ValueContext;
-import org.genfork.grid.antlr.SimplifiedSqlParser.ValueTupleContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.*;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.SqlPrivilege;
 import org.genfork.grid.mem.index.IndexType;
@@ -64,80 +32,16 @@ import org.genfork.grid.query.plan.UpdatePlan;
 import org.genfork.grid.query.util.SetOpKind;
 import org.genfork.grid.replication.codec.ModifyPayload;
 import org.genfork.grid.sql.SqlBuiltinExpr.ColumnRef;
-import org.genfork.grid.sql.ast.AdminAst.AlterUserPasswordSql;
-import org.genfork.grid.sql.ast.AdminAst.CreateRoleSql;
-import org.genfork.grid.sql.ast.AdminAst.CreateUserSql;
-import org.genfork.grid.sql.ast.AdminAst.DropRoleSql;
-import org.genfork.grid.sql.ast.AdminAst.DropUserSql;
-import org.genfork.grid.sql.ast.AdminAst.GrantRoleMembershipSql;
-import org.genfork.grid.sql.ast.AdminAst.GrantSql;
-import org.genfork.grid.sql.ast.AdminAst.GrantToRoleSql;
-import org.genfork.grid.sql.ast.AdminAst.PinSql;
-import org.genfork.grid.sql.ast.AdminAst.RevokeSql;
-import org.genfork.grid.sql.ast.AdminAst.UnpinSql;
-import org.genfork.grid.sql.ast.DdlAst.AlterTableSql;
-import org.genfork.grid.sql.ast.DdlAst.CheckSpec;
-import org.genfork.grid.sql.ast.DdlAst.ColumnSpec;
-import org.genfork.grid.sql.ast.DdlAst.CreateFunctionSql;
-import org.genfork.grid.sql.ast.DdlAst.CreateTriggerSql;
-import org.genfork.grid.sql.ast.DdlAst.CreateIndexSql;
-import org.genfork.grid.sql.ast.DdlAst.CreateMaterializedViewSql;
-import org.genfork.grid.sql.ast.DdlAst.CreateSchemaSql;
-import org.genfork.grid.sql.ast.DdlAst.CreateSequenceSql;
-import org.genfork.grid.sql.ast.DdlAst.CreateTableSql;
-import org.genfork.grid.sql.ast.DdlAst.CreateViewSql;
-import org.genfork.grid.sql.ast.DdlAst.DropFunctionSql;
-import org.genfork.grid.sql.ast.DdlAst.DropTriggerSql;
-import org.genfork.grid.sql.ast.DdlAst.DropIndexSql;
-import org.genfork.grid.sql.ast.DdlAst.DropSchemaSql;
-import org.genfork.grid.sql.ast.DdlAst.DropSequenceSql;
-import org.genfork.grid.sql.ast.DdlAst.DropTableSql;
-import org.genfork.grid.sql.ast.DdlAst.DropViewSql;
-import org.genfork.grid.sql.ast.DdlAst.FkSpec;
-import org.genfork.grid.sql.ast.DdlAst.RefreshMaterializedViewSql;
-import org.genfork.grid.sql.ast.DdlAst.SequenceValueSql;
-import org.genfork.grid.sql.ast.DdlAst.SetRemoteDirtySql;
-import org.genfork.grid.sql.ast.DdlAst.SetSchemaSql;
-import org.genfork.grid.sql.ast.DmlAst.AnalyzeSql;
-import org.genfork.grid.sql.ast.DmlAst.ConflictAction;
-import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
-import org.genfork.grid.sql.ast.DmlAst.InsertSql;
-import org.genfork.grid.sql.ast.DmlAst.MergeSql;
-import org.genfork.grid.sql.ast.DmlAst.OnConflict;
-import org.genfork.grid.sql.ast.DmlAst.SequenceCallExpr;
-import org.genfork.grid.sql.ast.DmlAst.TruncateSql;
-import org.genfork.grid.sql.ast.DmlAst.UpdateSql;
-import org.genfork.grid.sql.ast.SelectAst.AggregateSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.ColumnFuncArg;
-import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.ExistsSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.ExplainSql;
-import org.genfork.grid.sql.ast.SelectAst.FuncArg;
-import org.genfork.grid.sql.ast.SelectAst.FunctionFrom;
-import org.genfork.grid.sql.ast.SelectAst.FunctionSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.HavingPredicate;
-import org.genfork.grid.sql.ast.SelectAst.JoinEdge;
-import org.genfork.grid.sql.ast.SelectAst.JoinKind;
-import org.genfork.grid.sql.ast.SelectAst.LiteralFuncArg;
-import org.genfork.grid.sql.ast.SelectAst.LiteralSelectItem;
-import org.genfork.grid.sql.ast.SelectAst.CteBinding;
-import org.genfork.grid.sql.ast.SelectAst.RecursiveCteSql;
-import org.genfork.grid.sql.ast.SelectAst.SelectItem;
-import org.genfork.grid.sql.ast.SelectAst.SelectSql;
-import org.genfork.grid.sql.ast.SelectAst.SetOpSql;
-import org.genfork.grid.sql.ast.SelectAst.WithSelectSql;
-import org.genfork.grid.sql.ast.SelectAst.WhereSubquery;
-import org.genfork.grid.sql.ast.SelectAst.WindowSelectItem;
+import org.genfork.grid.sql.ast.AdminAst.*;
+import org.genfork.grid.sql.ast.DdlAst.*;
+import org.genfork.grid.sql.ast.DmlAst.*;
+import org.genfork.grid.sql.ast.SelectAst.*;
 import org.genfork.grid.sql.ast.Stmt;
-import org.genfork.grid.sql.ast.TxAst.BeginSql;
-import org.genfork.grid.sql.ast.TxAst.CommitSql;
-import org.genfork.grid.sql.ast.TxAst.DeallocateSql;
-import org.genfork.grid.sql.ast.TxAst.ExecuteSql;
-import org.genfork.grid.sql.ast.TxAst.PrepareSql;
-import org.genfork.grid.sql.ast.TxAst.ReleaseSavepointSql;
-import org.genfork.grid.sql.ast.TxAst.RollbackSql;
-import org.genfork.grid.sql.ast.TxAst.RollbackToSavepointSql;
-import org.genfork.grid.sql.ast.TxAst.SavepointSql;
+import org.genfork.grid.sql.ast.TxAst.*;
+
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.*;
 
 /**
  * ANTLR front-end for {@link SqlEngine}: parses {@code statement} into typed plans.
@@ -591,6 +495,10 @@ public final class SqlStatementParser {
 				throw new IllegalArgumentException("unsupported select item in expression SELECT: " + itemCtx.getText());
 			}
 		}
+		final List<WhereSubquery> whereSubs = new ArrayList<>();
+		if (expr.WHERE() != null && expr.expression() != null) {
+			collectWhereSubqueries(expr.expression(), whereSubs);
+		}
 		return new SelectSql(
 				sql,
 				null,
@@ -613,7 +521,7 @@ public final class SqlStatementParser {
 				null,
 				List.of(),
 				null,
-				List.of(),
+				List.copyOf(whereSubs),
 				null,
 				false,
 				false);
@@ -772,27 +680,27 @@ public final class SqlStatementParser {
 			pkCol = simpleColumn(cmp.columnName());
 			pkVal = SqlParseSupport.literal(cmp.value());
 		}
-		int offset = 0;
-		Integer limitOrNull = null;
+		Object offsetValue = Integer.valueOf(0);
+		Object limitValueOrNull = null;
 		if (query.LIMIT() != null && query.limitClause() != null) {
 			final SimplifiedSqlParser.LimitClauseContext lim = query.limitClause();
-			if (lim.INT(1) != null) {
-				offset = Math.max(0, Integer.parseInt(lim.INT(0).getText()));
-				limitOrNull = Math.max(0, Integer.parseInt(lim.INT(1).getText()));
-			} else if (lim.INT(0) != null) {
-				limitOrNull = Math.max(0, Integer.parseInt(lim.INT(0).getText()));
+			if (lim.limitAtom(1) != null) {
+				offsetValue = SqlParseSupport.limitAtom(lim.limitAtom(0));
+				limitValueOrNull = SqlParseSupport.limitAtom(lim.limitAtom(1));
+			} else if (lim.limitAtom(0) != null) {
+				limitValueOrNull = SqlParseSupport.limitAtom(lim.limitAtom(0));
 			}
 		}
 		if (query.OFFSET() != null && query.offsetInt != null) {
-			if (query.LIMIT() != null && query.limitClause() != null && query.limitClause().INT(1) != null) {
+			if (query.LIMIT() != null && query.limitClause() != null && query.limitClause().limitAtom(1) != null) {
 				throw new IllegalArgumentException("cannot combine LIMIT offset,count with OFFSET clause");
 			}
-			offset = Math.max(0, Integer.parseInt(query.offsetInt.getText()));
+			offsetValue = Integer.valueOf(Math.max(0, Integer.parseInt(query.offsetInt.getText())));
 		}
 		final boolean distinct = query.DISTINCT() != null;
 		return new SelectSql(
 				sql, table, projection, List.copyOf(selectItems), pkCol, pkVal, List.copyOf(joins),
-				aggregate, countStar, sumCol, avg, groupByColumns, offset, limitOrNull,
+				aggregate, countStar, sumCol, avg, groupByColumns, offsetValue, limitValueOrNull,
 				distinct, having, minAgg, maxAgg,
 				windowFunc, windowPartition, windowOrderCol,
 				List.copyOf(whereSubs), fromFunction, query.forUpdateClause() != null,
@@ -803,91 +711,94 @@ public final class SqlStatementParser {
 			SimplifiedSqlParser.ExpressionContext expr,
 			List<WhereSubquery> out
 	) {
-		if (expr == null) {
-			return;
-		}
-		if (expr instanceof SimplifiedSqlParser.AndExpressionContext and) {
-			collectWhereSubqueries(and.expression(0), out);
-			collectWhereSubqueries(and.expression(1), out);
-			return;
-		}
-		if (expr instanceof SimplifiedSqlParser.OrExpressionContext or) {
-			collectWhereSubqueries(or.expression(0), out);
-			collectWhereSubqueries(or.expression(1), out);
-			return;
-		}
-		if (expr instanceof SimplifiedSqlParser.NotExpressionContext not) {
-			collectWhereSubqueries(not.expression(), out);
-			return;
-		}
-		if (expr instanceof SimplifiedSqlParser.ParenExpressionContext paren) {
-			collectWhereSubqueries(paren.expression(), out);
-			return;
-		}
-		if (expr instanceof SimplifiedSqlParser.PredicateExpressionContext pred) {
-			if (pred.predicate() instanceof SimplifiedSqlParser.InSubqueryContext inSub) {
-				final SimplifiedSqlParser.SelectQueryContext sq = inSub.selectQuery();
-				final String subSql = SqlParseSupport.textOf(sq);
-				out.add(new WhereSubquery(
-						simpleColumn(inSub.columnName()),
-						true,
-						false,
-						"IN",
-						parseSelect(sq, subSql),
-						subSql));
-				return;
-			}
-			if (pred.predicate() instanceof SimplifiedSqlParser.ExistsSubqueryContext existsSub) {
-				final SimplifiedSqlParser.SelectQueryContext sq = existsSub.selectQuery();
-				final String subSql = SqlParseSupport.textOf(sq);
-				out.add(new WhereSubquery(
-						null,
-						false,
-						true,
-						"EXISTS",
-						parseSelect(sq, subSql),
-						subSql));
-				return;
-			}
-			if (pred.predicate() instanceof SimplifiedSqlParser.ComparisonSubqueryContext cmpSub) {
-				final String op = cmpSub.operator().getText();
-				if (!"=".equals(op)) {
-					throw new IllegalArgumentException(
-							"scalar subquery supports only = comparison, got: " + op);
-				}
-				final SimplifiedSqlParser.SelectQueryContext sq = cmpSub.selectQuery();
-				final String subSql = SqlParseSupport.textOf(sq);
-				out.add(new WhereSubquery(
-						simpleColumn(cmpSub.columnName()),
-						false,
-						false,
-						op,
-						parseSelect(sq, subSql),
-						subSql));
-			}
-		}
-	}
+        switch (expr) {
+            case null -> {
+            }
+            case SimplifiedSqlParser.AndExpressionContext and -> {
+                collectWhereSubqueries(and.expression(0), out);
+                collectWhereSubqueries(and.expression(1), out);
+            }
+            case SimplifiedSqlParser.OrExpressionContext or -> {
+                collectWhereSubqueries(or.expression(0), out);
+                collectWhereSubqueries(or.expression(1), out);
+            }
+            case SimplifiedSqlParser.NotExpressionContext not -> {
+                collectWhereSubqueries(not.expression(), out);
+            }
+            case SimplifiedSqlParser.ParenExpressionContext paren -> {
+                collectWhereSubqueries(paren.expression(), out);
+            }
+            case SimplifiedSqlParser.PredicateExpressionContext pred -> {
+                if (pred.predicate() instanceof SimplifiedSqlParser.InSubqueryContext inSub) {
+                    final SimplifiedSqlParser.SelectQueryContext sq = inSub.selectQuery();
+                    final String subSql = SqlParseSupport.textOf(sq);
+                    out.add(new WhereSubquery(
+                            simpleColumn(inSub.columnName()),
+                            true,
+                            false,
+                            "IN",
+                            parseSelect(sq, subSql),
+                            subSql));
+                    return;
+                }
+                if (pred.predicate() instanceof SimplifiedSqlParser.ExistsSubqueryContext existsSub) {
+                    final SimplifiedSqlParser.SelectQueryContext sq = existsSub.selectQuery();
+                    final String subSql = SqlParseSupport.textOf(sq);
+                    out.add(new WhereSubquery(
+                            null,
+                            false,
+                            true,
+                            "EXISTS",
+                            parseSelect(sq, subSql),
+                            subSql));
+                    return;
+                }
+                if (pred.predicate() instanceof SimplifiedSqlParser.ComparisonSubqueryContext cmpSub) {
+                    final String op = cmpSub.operator().getText();
+                    if (!"=".equals(op)) {
+                        throw new IllegalArgumentException(
+                                "scalar subquery supports only = comparison, got: " + op);
+                    }
+                    final SimplifiedSqlParser.SelectQueryContext sq = cmpSub.selectQuery();
+                    final String subSql = SqlParseSupport.textOf(sq);
+                    out.add(new WhereSubquery(
+                            simpleColumn(cmpSub.columnName()),
+                            false,
+                            false,
+                            op,
+                            parseSelect(sq, subSql),
+                            subSql));
+                }
+            }
+            default -> {
+            }
+        }
+    }
 
 	private static HavingPredicate parseHaving(SimplifiedSqlParser.ExpressionContext expr) {
-		if (expr == null) {
-			return null;
-		}
-		if (expr instanceof SimplifiedSqlParser.ParenExpressionContext paren) {
-			return parseHaving(paren.expression());
-		}
-		if (expr instanceof SimplifiedSqlParser.PredicateExpressionContext pred) {
-			if (pred.predicate() instanceof SimplifiedSqlParser.AggComparisonContext agg) {
-				final AggregateSelectItem item = parseAggregateItem(agg.aggregateExpr());
-				return new HavingPredicate(item.label(), agg.operator().getText(), SqlParseSupport.literal(agg.value()));
-			}
-			if (pred.predicate() instanceof SimplifiedSqlParser.ComparisonContext cmp) {
-				return new HavingPredicate(
-						simpleColumn(cmp.columnName()),
-						cmp.operator().getText(),
-						SqlParseSupport.literal(cmp.value()));
-			}
-		}
-		throw new IllegalArgumentException("unsupported HAVING expression: " + SqlParseSupport.textOf(expr));
+        switch (expr) {
+            case null -> {
+                return null;
+            }
+            case SimplifiedSqlParser.ParenExpressionContext paren -> {
+                return parseHaving(paren.expression());
+            }
+            case SimplifiedSqlParser.PredicateExpressionContext pred -> {
+                if (pred.predicate() instanceof SimplifiedSqlParser.AggComparisonContext agg) {
+                    final AggregateSelectItem item = parseAggregateItem(agg.aggregateExpr());
+                    return new HavingPredicate(item.label(), agg.operator().getText(), SqlParseSupport.literal(agg.value()));
+                }
+                if (pred.predicate() instanceof SimplifiedSqlParser.ComparisonContext cmp) {
+                    return new HavingPredicate(
+                            simpleColumn(cmp.columnName()),
+                            cmp.operator().getText(),
+                            SqlParseSupport.literal(cmp.value()));
+                }
+            }
+            default -> {
+            }
+        }
+        throw new IllegalArgumentException("unsupported HAVING expression: " + SqlParseSupport.textOf(expr));
 	}
 
 	private static AggregateSelectItem parseAggregateItem(SimplifiedSqlParser.AggregateExprContext agg) {
@@ -1145,10 +1056,10 @@ public final class SqlStatementParser {
 				sb.append(',');
 			}
 			final FuncArg a = args.get(i);
-			if (a instanceof ColumnFuncArg c) {
-				sb.append(c.column());
-			} else if (a instanceof LiteralFuncArg lit) {
-				sb.append(lit.value());
+			if (a instanceof ColumnFuncArg(String column)) {
+				sb.append(column);
+			} else if (a instanceof LiteralFuncArg(Object value)) {
+				sb.append(value);
 			}
 		}
 		return sb.append(')').toString();
@@ -1216,26 +1127,37 @@ public final class SqlStatementParser {
 		if (upsertKeyword && ctx.onConflictClause() != null) {
 			throw new IllegalArgumentException("UPSERT cannot combine with ON CONFLICT");
 		}
+		// VALUES / SELECT before ON CONFLICT so SqlBindParam indices match JDBC left-to-right ?.
+		final SelectSql selectSource;
+		final List<List<Object>> rows;
+		if (ctx.query() != null) {
+			final Stmt source = parseQuery(ctx.query(), SqlParseSupport.textOf(ctx.query()));
+			if (!(source instanceof SelectSql selectSql)) {
+				throw new IllegalArgumentException("INSERT … SELECT requires a single SELECT (set ops not supported)");
+			}
+			selectSource = selectSql;
+			rows = List.of();
+		} else {
+			selectSource = null;
+			rows = new ArrayList<>();
+			for (ValueTupleContext tuple : ctx.valueTuple()) {
+				final List<Object> vals = new ArrayList<>();
+				for (ValueContext v : tuple.value()) {
+					vals.add(SqlParseSupport.literal(v));
+				}
+				rows.add(vals);
+			}
+		}
 		final OnConflict conflict = upsertKeyword
 				? new OnConflict(List.of(), ConflictAction.DO_UPSERT_VALUES, Map.of())
 				: parseOnConflict(ctx.onConflictClause());
-		final List<String> returning = parseReturning(ctx.returningClause());
-		if (ctx.query() != null) {
-			final Stmt source = parseQuery(ctx.query(), SqlParseSupport.textOf(ctx.query()));
-			if (!(source instanceof SelectSql selectSource)) {
-				throw new IllegalArgumentException("INSERT … SELECT requires a single SELECT (set ops not supported)");
-			}
-			return new InsertSql(table, cols, List.of(), conflict, returning, selectSource);
-		}
-		final List<List<Object>> rows = new ArrayList<>();
-		for (ValueTupleContext tuple : ctx.valueTuple()) {
-			final List<Object> vals = new ArrayList<>();
-			for (ValueContext v : tuple.value()) {
-				vals.add(SqlParseSupport.literal(v));
-			}
-			rows.add(vals);
-		}
-		return new InsertSql(table, cols, rows, conflict, returning, null);
+		return new InsertSql(
+				table,
+				cols,
+				rows,
+				conflict,
+				parseReturning(ctx.returningClause()),
+				selectSource);
 	}
 
 	private static ExistsSelectItem parseExistsSelectItem(SimplifiedSqlParser.SelectItemContext itemCtx) {
@@ -1280,7 +1202,10 @@ public final class SqlStatementParser {
 		for (UpdateAssignContext a : actionCtx.updateAssign()) {
 			putLiteralAssign(sets, a, "ON CONFLICT DO UPDATE");
 		}
-		return new OnConflict(List.copyOf(targets), ConflictAction.DO_UPDATE, Map.copyOf(sets));
+		return new OnConflict(
+				List.copyOf(targets),
+				ConflictAction.DO_UPDATE,
+				SqlNullSafeCollections.freezeMap(sets));
 	}
 
 	private static MergeSql parseMerge(SimplifiedSqlParser.MergeStmtContext ctx) {
@@ -1324,12 +1249,12 @@ public final class SqlStatementParser {
 		return new MergeSql(
 				target,
 				sourceTable,
-				sourceRow == null ? null : List.copyOf(sourceRow),
+				sourceRow == null ? null : SqlNullSafeCollections.freezeList(sourceRow),
 				targetOn,
 				sourceOn,
-				matchedSets == null ? null : Map.copyOf(matchedSets),
+				matchedSets == null ? null : SqlNullSafeCollections.freezeMap(matchedSets),
 				insertCols == null ? null : List.copyOf(insertCols),
-				insertVals == null ? null : List.copyOf(insertVals)
+				insertVals == null ? null : SqlNullSafeCollections.freezeList(insertVals)
 		);
 	}
 
@@ -1345,9 +1270,7 @@ public final class SqlStatementParser {
 		final String whereSql = ctx.expression() == null
 				? SqlIdentParseUtil.fullTableWhereSql()
 				: SqlParseSupport.textOf(ctx.expression());
-		final PkEq pk = ctx.expression() == null ? null : extractPkEq(ctx.expression());
-		final String pkCol = pk == null ? null : pk.column();
-		final Object pkVal = pk == null ? null : pk.value();
+		// SET/RMW before WHERE so SqlBindParam indices match JDBC / materialize left-to-right order.
 		final List<UpdatePlan.FieldAssign> rmw = new ArrayList<>();
 		final Map<String, Object> lits = new LinkedHashMap<>();
 		for (UpdateAssignContext a : ctx.updateAssign()) {
@@ -1360,6 +1283,9 @@ public final class SqlStatementParser {
 				lits.put(col, new ColumnRef(simpleColumn(a.columnName(1))));
 			}
 		}
+		final PkEq pk = ctx.expression() == null ? null : extractPkEq(ctx.expression());
+		final String pkCol = pk == null ? null : pk.column();
+		final Object pkVal = pk == null ? null : pk.value();
 		final String sourceTable = ctx.sourceTable == null ? null : ctx.sourceTable.getText();
 		String targetJoinColumn = null;
 		String sourceJoinColumn = null;
@@ -1385,10 +1311,10 @@ public final class SqlStatementParser {
 			}
 			final String templateKey = "antlr:" + table + ":" + rmw.size() + ":lit" + lits.size();
 			return new UpdateSql(table, new UpdatePlan(table, rmw, pkCol, pkVal, templateKey),
-					Map.copyOf(lits),
+					SqlNullSafeCollections.freezeMap(lits),
 					whereSql, pkCol, pkVal, null, null, null, parseReturning(ctx.returningClause()));
 		}
-		return new UpdateSql(table, null, lits, whereSql, pkCol, pkVal,
+		return new UpdateSql(table, null, SqlNullSafeCollections.freezeMap(lits), whereSql, pkCol, pkVal,
 				sourceTable, targetJoinColumn, sourceJoinColumn,
 				parseReturning(ctx.returningClause()));
 	}
@@ -1423,7 +1349,7 @@ public final class SqlStatementParser {
 		}
 		return null;
 	}
-	
+
 	/** Literal / column-copy / CASE SET (no RMW) into {@code sets}. */
 	private static void putLiteralAssign(Map<String, Object> sets, UpdateAssignContext a, String context) {
 		final String col = simpleColumn(a.columnName(0));
@@ -1709,7 +1635,7 @@ public final class SqlStatementParser {
 			}
 			return new AlterTableSql(table, col, ifNotExists, null, null, null, null, null, null);
 		}
-		return new AlterTableSql(table, null, false, ctx.columnName().get(0).getText(), null, null, null, null, null);
+		return new AlterTableSql(table, null, false, ctx.columnName().getFirst().getText(), null, null, null, null, null);
 	}
 
 }

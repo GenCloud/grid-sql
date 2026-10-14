@@ -122,6 +122,13 @@ public final class TableStore {
 			worker.start();
 		}
 
+		indexWorker.setDisplacedStrictOwnerTombstone(pk -> {
+			final GridEntriesProcessor processor = getProcessor(pk);
+			if (processor != null) {
+				processor.tombstoneDisplacedStrictOwner(pk);
+			}
+		});
+
 		index.setRowResolver(key -> getProcessor(key).get(key));
 		index.setTableRowStatsSupplier(this::approxRowStats);
 
@@ -173,18 +180,54 @@ public final class TableStore {
 	}
 
 	public void addIndex(IndexDef indexDef, long newEpoch) {
+		addIndex(indexDef, newEpoch, true);
+	}
+
+	/**
+	 * Wire a secondary index; {@code backfill} is false during OpLog/ddl replay so CREATE…DROP
+	 * history cannot NonUnique against already-hydrated stackable rows.
+	 */
+	public void addIndex(IndexDef indexDef, long newEpoch, boolean backfill) {
 		Objects.requireNonNull(indexDef, "indexDef");
 		final TableSchema next = schema.withIndex(indexDef, newEpoch);
 		index.addNamedIndex(indexDef, next);
 		applySchema(next);
-		backfillIndex(indexDef);
+		if (backfill) {
+			backfillIndex(indexDef);
+		}
 	}
 
 	public void dropIndex(String indexName, long newEpoch) {
-		final TableSchema next = schema.withoutIndex(indexName, newEpoch);
-		index.dropNamedIndex(indexName);
-		applySchema(next);
-		// Existing trees for remaining indexes keep their entries; dropped tree discarded.
+		IndexDef def = schema.findIndex(indexName);
+		if (def == null) {
+			def = index.findNamedIndex(indexName);
+		}
+		final String catalogName = def != null ? def.name() : indexName;
+		final List<String> columns = def != null ? def.columns() : List.of();
+		if (index.hasNamedIndex(indexName)) {
+			index.dropNamedIndex(indexName);
+		}
+		if (schema.findIndex(indexName) != null) {
+			applySchema(schema.withoutIndex(indexName, newEpoch));
+		}
+		purgeSealedIndexArtifacts(catalogName, columns.isEmpty() ? null : columns);
+	}
+
+	/**
+	 * Best-effort sealed purge when DROP INDEX IF EXISTS finds no schema/RAM entry.
+	 */
+	public void purgeOrphanSealedIndex(String indexName) {
+		if (indexName == null || indexName.isBlank()) {
+			return;
+		}
+		purgeSealedIndexArtifacts(indexName, null);
+	}
+
+	private void purgeSealedIndexArtifacts(String catalogIndexName, List<String> columns) {
+		if (replicationCoordinator == null) {
+			return;
+		}
+		replicationCoordinator.purgeIndexArtifacts(schema.catalogKey(), catalogIndexName, columns);
 	}
 
 	/**
@@ -273,8 +316,9 @@ public final class TableStore {
 	 * <p>
 	 * Skips the synthetic PRIMARY KEY tree ({@code table_pk}): {@link #forEachPrimaryKey} walks that
 	 * tree, so dropping it mid-rebuild would empty the backfill source.
+	 * Used after ALTER DROP COLUMN and after FULL catalog recover (not LAZY boot).
 	 */
-	private void rebuildAllSecondaryIndexes() {
+	public void rebuildAllSecondaryIndexes() {
 		final List<IndexDef> defs = new ArrayList<>(schema.indexes());
 		for (IndexDef def : defs) {
 			if (isSyntheticPrimaryKeyIndex(def)) {
@@ -366,8 +410,7 @@ public final class TableStore {
 	public long upsert(Object[] values, boolean rejectExistingPk) {
 		final Object[] coerced = coerceRow(values);
 		final byte[] keyBytes = PrimaryKeyCodec.encodeRow(schema, coerced);
-		validateConstraints(coerced, keyBytes, rejectExistingPk);
-		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
+		final byte[] valueBytes = validateConstraintsEncoded(coerced, keyBytes, rejectExistingPk);
 		final int shard = getShard(keyBytes);
 		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
@@ -633,8 +676,7 @@ public final class TableStore {
 				final ColumnDef col = schema.requireColumn(e.getKey());
 				values[col.ordinal()] = RowEncoder.coerce(col, e.getValue());
 			}
-			validateConstraints(values, keyBytes, false);
-			final byte[] merged = RowEncoder.encode(schema, values);
+			final byte[] merged = validateConstraintsEncoded(values, keyBytes, false);
 			if (mutationRecorder == null) {
 				processor.installCommitted(keyBytes, merged, false);
 				return 1L;
@@ -793,68 +835,26 @@ public final class TableStore {
 	 * Fail-closed NOT NULL (via {@link RowEncoder#coerce}) + UNIQUE/STRICT + duplicate PK on insert.
 	 */
 	public void validateConstraints(Object[] coerced, byte[] keyBytes, boolean rejectExistingPk) {
+		validateConstraintsEncoded(coerced, keyBytes, rejectExistingPk);
+	}
+
+	/**
+	 * Encode once, then CHECK + STRICT secondary unique (wire EQ) + optional PK reject.
+	 */
+	private byte[] validateConstraintsEncoded(Object[] coerced, byte[] keyBytes, boolean rejectExistingPk) {
 		Objects.requireNonNull(coerced, "coerced");
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		if (rejectExistingPk && getCommittedBytes(keyBytes) != null) {
 			throw new NonUniqueValueException(
-					"duplicate primary key for table " + schema.catalogKey());
+					NonUniqueValueException.formatMessage(
+							schema.catalogKey(),
+							CatalogPersistUtil.syntheticPkIndexName(schema.catalogKey()),
+							"pk"));
 		}
-		validateChecks(coerced);
-		final String pkName = schema.pkColumn().name();
-		for (IndexDef idx : schema.indexes()) {
-			if (idx.kind() != IndexType.STRICT) {
-				continue;
-			}
-			if (idx.columns().size() == 1 && idx.columns().getFirst().equalsIgnoreCase(pkName)) {
-				continue;
-			}
-			boolean anyNull = false;
-			for (String colName : idx.columns()) {
-				final ColumnDef col = schema.requireColumn(colName);
-				if (coerced[col.ordinal()] == null) {
-					anyNull = true;
-					break;
-				}
-			}
-			if (anyNull) {
-				continue;
-			}
-			for (Object[] existing : allRows()) {
-				boolean same = true;
-				for (String colName : idx.columns()) {
-					final ColumnDef col = schema.requireColumn(colName);
-					final Object left = coerced[col.ordinal()];
-					final Object right = existing[col.ordinal()];
-					if (left == null ? right != null : !left.equals(right)) {
-						same = false;
-						break;
-					}
-				}
-				if (!same) {
-					continue;
-				}
-				boolean samePrimaryKey = true;
-				for (ColumnDef pkColumn : schema.pkColumns()) {
-					final Object existingPk = existing[pkColumn.ordinal()];
-					final Object newPk = coerced[pkColumn.ordinal()];
-					if (existingPk == null ? newPk != null : !existingPk.equals(newPk)) {
-						samePrimaryKey = false;
-						break;
-					}
-				}
-				if (!samePrimaryKey) {
-					throw new NonUniqueValueException(
-							"duplicate value for unique index " + idx.name());
-				}
-			}
-		}
-	}
-
-	private void validateChecks(Object[] coerced) {
-		if (schema.checks().isEmpty()) {
-			return;
-		}
-		validateEncodedChecks(RowEncoder.encode(schema, coerced));
+		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
+		validateEncodedChecks(valueBytes);
+		StrictUniqueConstraintUtil.validateSecondaryStrict(this, schema, valueBytes, keyBytes);
+		return valueBytes;
 	}
 
 	private void validateEncodedChecks(byte[] valueBytes) {
@@ -927,8 +927,7 @@ public final class TableStore {
 	public EncodedRow encodeUpsert(Object[] values, boolean rejectExistingPk) {
 		final Object[] coerced = coerceRow(values);
 		final byte[] keyBytes = PrimaryKeyCodec.encodeRow(schema, coerced);
-		validateConstraints(coerced, keyBytes, rejectExistingPk);
-		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
+		final byte[] valueBytes = validateConstraintsEncoded(coerced, keyBytes, rejectExistingPk);
 		return new EncodedRow(keyBytes, valueBytes, getShard(keyBytes));
 	}
 
@@ -961,8 +960,7 @@ public final class TableStore {
 			final ColumnDef col = schema.requireColumn(e.getKey());
 			values[col.ordinal()] = RowEncoder.coerce(col, e.getValue());
 		}
-		validateConstraints(values, keyBytes, false);
-		final byte[] merged = RowEncoder.encode(schema, values);
+		final byte[] merged = validateConstraintsEncoded(values, keyBytes, false);
 		return new EncodedRow(keyBytes, merged, getShard(keyBytes));
 	}
 

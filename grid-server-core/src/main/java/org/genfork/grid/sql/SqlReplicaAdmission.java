@@ -84,25 +84,30 @@ public final class SqlReplicaAdmission {
 
 	/**
 	 * Map admission failures to wire error codes (named constants).
+	 * Walks past EXEC context wrappers so typed causes keep their codes.
 	 */
 	public static int wireErrorCode(Throwable ex) {
-		if (ex instanceof SqlReplicaDmlDeniedException) {
-			return SqlWireErrorCodes.READ_REPLICA_DML_DENIED;
-		}
-		if (ex instanceof LockWaitTimeoutException) {
-			return SqlWireErrorCodes.LOCK_WAIT_TIMEOUT;
-		}
-		if (ex instanceof LockWaitCancelledException) {
-			return SqlWireErrorCodes.LOCK_WAIT_CANCELLED;
-		}
-		if (ex instanceof OrchidNotSyncedException) {
-			final String msg = ex.getMessage() == null ? "" : ex.getMessage();
-			if (msg.contains(MSG_REPLICA_READS_DISABLED)) {
-				return SqlWireErrorCodes.REPLICA_READ_DISABLED;
+		Throwable cur = SqlExecErrorContextUtil.unwrap(ex);
+		while (cur != null) {
+			if (cur instanceof SqlReplicaDmlDeniedException) {
+				return SqlWireErrorCodes.READ_REPLICA_DML_DENIED;
 			}
-			if (msg.contains(MSG_STALE_REPLICA) || msg.contains(MSG_APPLY_LAG)) {
-				return SqlWireErrorCodes.REPLICA_READ_STALE;
+			if (cur instanceof LockWaitTimeoutException) {
+				return SqlWireErrorCodes.LOCK_WAIT_TIMEOUT;
 			}
+			if (cur instanceof LockWaitCancelledException) {
+				return SqlWireErrorCodes.LOCK_WAIT_CANCELLED;
+			}
+			if (cur instanceof OrchidNotSyncedException) {
+				final String msg = cur.getMessage() == null ? "" : cur.getMessage();
+				if (msg.contains(MSG_REPLICA_READS_DISABLED)) {
+					return SqlWireErrorCodes.REPLICA_READ_DISABLED;
+				}
+				if (msg.contains(MSG_STALE_REPLICA) || msg.contains(MSG_APPLY_LAG)) {
+					return SqlWireErrorCodes.REPLICA_READ_STALE;
+				}
+			}
+			cur = cur.getCause();
 		}
 		return SqlWireErrorCodes.EXEC_FAILED;
 	}

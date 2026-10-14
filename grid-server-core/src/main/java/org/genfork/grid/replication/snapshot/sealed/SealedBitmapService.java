@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
+import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
 
 import java.io.IOException;
@@ -50,6 +51,13 @@ public final class SealedBitmapService implements AutoCloseable {
 		Objects.requireNonNull(bitmap, "bitmap");
 		final Path file = indexFile(domain, shard, indexName);
 		SealedBitmapWriter.write(file, domain, shard, indexName, bitmap.serialize());
+	}
+
+	/**
+	 * Delete sealed {@code .sbm} for one index (DROP INDEX purge).
+	 */
+	public void deleteIndex(String domain, int shard, String indexName) {
+		GridFs.deleteQuietly(indexFile(domain, shard, indexName));
 	}
 
 	/**

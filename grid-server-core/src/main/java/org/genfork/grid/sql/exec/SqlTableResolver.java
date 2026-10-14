@@ -194,6 +194,23 @@ public final class SqlTableResolver {
 		openStore(schema.catalogKey(), schema);
 	}
 
+	/**
+	 * After FULL catalog recover: fill secondary trees from committed rows.
+	 * <p>
+	 * OpLog/ddl replay wires {@code CREATE INDEX} without backfill (CREATE…DROP + stackable).
+	 * FULL hydrate installs rows at {@code CREATE TABLE} before secondary indexes exist, so
+	 * postings must be rebuilt once after replay. Must not run on LAZY — that forces
+	 * {@code ensureAllShardsHydrated} and trips the huge OpLog fail-closed gate.
+	 */
+	public void rebuildSecondaryIndexesAfterCatalogRecover() {
+		for (String table : catalog.tableNames()) {
+			final TableStore store = catalog.getStore(table);
+			if (store != null) {
+				store.rebuildAllSecondaryIndexes();
+			}
+		}
+	}
+
 	private void openStore(String tableName, TableSchema schema) {
 		try {
 			catalog.computeStoreIfAbsent(tableName, () -> {

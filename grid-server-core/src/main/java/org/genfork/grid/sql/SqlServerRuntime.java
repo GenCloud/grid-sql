@@ -129,9 +129,18 @@ public final class SqlServerRuntime implements AutoCloseable {
 		private int catalogMetaCacheSize = CatalogMetaCache.DEFAULT_SIZE;
 		private int recursiveCteMaxDepth = SqlEngine.DEFAULT_RECURSIVE_CTE_MAX_DEPTH;
 		private String timezone = "UTC";
+		private int maxTxContexts = SqlServer.DEFAULT_MAX_TX_CONTEXTS;
 
 		public Builder dataDir(Path dataDir) {
 			this.dataDir = dataDir;
+			return this;
+		}
+
+		/**
+		 * Max concurrent logical sessions per SQL TCP channel ({@code <= 0} = unlimited).
+		 */
+		public Builder maxTxContexts(int maxTxContexts) {
+			this.maxTxContexts = maxTxContexts;
 			return this;
 		}
 
@@ -261,8 +270,14 @@ public final class SqlServerRuntime implements AutoCloseable {
 			}
 			engine.setOverlay(overlayStore, autoPinTtlMs);
 			engine.recoverPersistedCatalog();
+			if (effective != null) {
+				// HELLO sealed packs deferred until catalog bind + recover (boot race vs nested FULL hydrate).
+				effective.markCatalogBootstrapComplete();
+			}
 			seedBootstrapAdministrator(engine.privileges(), user, password);
-			final SqlServer tcp = listen ? new SqlServer(host, port, engine, user, password, effective) : null;
+			final SqlServer tcp = listen
+					? new SqlServer(host, port, engine, user, password, maxTxContexts, effective)
+					: null;
 			return new SqlServerRuntime(catalog, engine, tcp, owned);
 		}
 

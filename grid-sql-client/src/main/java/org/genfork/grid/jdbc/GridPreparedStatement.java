@@ -42,14 +42,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
+import org.genfork.grid.sql.SqlBinds;
+import org.genfork.grid.sql.client.sync.SyncResult;
 import org.genfork.grid.sql.client.sync.SyncStatement;
+import org.genfork.grid.sql.netty.SqlWire;
 
 /**
  * JDBC {@link PreparedStatement} using SPI positional binds.
  * <p>
- * {@link #executeBatch()} runs per-bind {@code EXEC} via Sync* because wire
- * {@code BATCH_EXEC} accepts only {@code List<String>} (no bind payloads). Statement-level
- * string batch still uses {@code syncBatch} → {@code BATCH_EXEC}.
+ * {@link #executeBatch()} sends one bound {@code BATCH_EXEC} (same SQL, N bind rows).
+ * Statement-level string batch uses {@code syncBatch} → {@code BATCH_EXEC} with bindCount=0.
  *
  * @author: GenCloud
  * @date: 2026/09
@@ -72,14 +74,27 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 	private SyncStatement boundSpi(TreeMap<Integer, Object> bindMap) throws SQLException {
 		ensureOpen();
 		final SyncStatement statement = connection.syncStatement(sql);
+		final Object[] dense = denseJdbcBinds(bindMap);
+		for (int i = 0; i < dense.length; i++) {
+			statement.bind(i, dense[i]);
+		}
+		return statement;
+	}
+
+	/** JDBC 1-based parameter map → dense 0-based wire binds. */
+	private static Object[] denseJdbcBinds(TreeMap<Integer, Object> bindMap) throws SQLException {
+		if (bindMap == null || bindMap.isEmpty()) {
+			return new Object[0];
+		}
+		final TreeMap<Integer, Object> zeroBased = new TreeMap<>();
 		for (Map.Entry<Integer, Object> e : bindMap.entrySet()) {
 			final int jdbcIndex = e.getKey();
 			if (jdbcIndex < 1) {
 				throw new SQLException("Parameter index must be >= 1", "HY000");
 			}
-			statement.bind(jdbcIndex - 1, e.getValue());
+			zeroBased.put(jdbcIndex - 1, e.getValue());
 		}
-		return statement;
+		return SqlBinds.dense(zeroBased);
 	}
 
 	@Override
@@ -93,11 +108,7 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 
 	@Override
 	public int executeUpdate() throws SQLException {
-		final ExecOutcome outcome = run(boundSpi(), sql);
-		if (outcome.resultSet() != null) {
-			throw new SQLException("SQL produced a result set", "HY000");
-		}
-		return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, outcome.updateCount()));
+		return acceptUpdateOrReturning(run(boundSpi(), sql));
 	}
 
 	@Override
@@ -172,7 +183,7 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 
 	@Override
 	public void setTimestamp(int parameterIndex, Timestamp x) {
-		binds.put(parameterIndex, x == null ? null : x.toInstant());
+		binds.put(parameterIndex, GridJdbcTemporalBindUtil.fromTimestamp(x));
 	}
 
 	@Override
@@ -197,12 +208,12 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 
 	@Override
 	public void setObject(int parameterIndex, Object x, int targetSqlType) {
-		setObject(parameterIndex, x);
+		binds.put(parameterIndex, GridJdbcTemporalBindUtil.normalizeObject(x, targetSqlType));
 	}
 
 	@Override
 	public void setObject(int parameterIndex, Object x) {
-		binds.put(parameterIndex, x);
+		binds.put(parameterIndex, GridJdbcTemporalBindUtil.normalizeObject(x));
 	}
 
 	@Override
@@ -225,13 +236,18 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 		}
 		final List<TreeMap<Integer, Object>> snapshot = List.copyOf(batchBinds);
 		batchBinds.clear();
-		final int[] counts = new int[snapshot.size()];
-		for (int i = 0; i < snapshot.size(); i++) {
-			final ExecOutcome outcome = run(boundSpi(snapshot.get(i)), sql);
-			if (outcome.resultSet() != null) {
+		final List<SqlWire.BatchStatement> statements = new ArrayList<>(snapshot.size());
+		for (TreeMap<Integer, Object> bindMap : snapshot) {
+			statements.add(new SqlWire.BatchStatement(sql, denseJdbcBinds(bindMap)));
+		}
+		final List<SyncResult> results = connection.syncBatchBound(statements, queryTimeoutDuration());
+		final int[] counts = new int[results.size()];
+		for (int i = 0; i < results.size(); i++) {
+			final SyncResult result = results.get(i);
+			if (result.isResultSet()) {
 				counts[i] = Statement.SUCCESS_NO_INFO;
 			} else {
-				counts[i] = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, outcome.updateCount()));
+				counts[i] = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, result.rowsUpdated()));
 			}
 		}
 		return counts;
@@ -279,7 +295,7 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 
 	@Override
 	public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) {
-		setTimestamp(parameterIndex, x);
+		binds.put(parameterIndex, GridJdbcTemporalBindUtil.fromTimestamp(x, cal));
 	}
 
 	@Override
@@ -339,7 +355,7 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 
 	@Override
 	public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) {
-		setObject(parameterIndex, x);
+		setObject(parameterIndex, x, targetSqlType);
 	}
 
 	@Override

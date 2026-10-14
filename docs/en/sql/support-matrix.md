@@ -54,7 +54,7 @@ Window functions: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG(col)`, `LEAD(co
 | Pattern | `col LIKE 'pattern'` |
 | Null test | `col IS NULL`, `col IS NOT NULL` |
 | Composition | `AND`, `OR`, `NOT`, parentheses, bare `TRUE` / `FALSE` |
-| Values | integer, decimal, string, `NULL`, `TRUE`, `FALSE`, `?`, `CAST(value AS type)`, `COALESCE(a, b, …)`, `NOW()`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `DATE '…'`, `TIME '…'`, `TIMESTAMP '…'`, `TIMESTAMPTZ '…'`, `UUID '…'`, `CASE WHEN … END`, `NEXTVAL`/`CURRVAL`, `EXCLUDED.col` (ON CONFLICT DO UPDATE only) |
+| Values | integer, decimal, string, `NULL`, `TRUE`, `FALSE`, `?`, `CAST(value AS type)`, `COALESCE(a, b, …)`, `NOW()`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `DATE '…'`, `TIME '…'`, `TIMESTAMP '…'`, `TIMESTAMPTZ '…'`, `UUID '…'`, `X'…'` (`HEX_BYTES` for `BYTES`/`BYTEA`), `CASE WHEN … END`, `NEXTVAL`/`CURRVAL`, `EXCLUDED.col` (ON CONFLICT DO UPDATE only) |
 
 Two consequences worth knowing before you write a filter:
 
@@ -69,7 +69,7 @@ Positional `?` parameters are materialized into SQL literals before parsing, so 
 | Statement | Accepted | Restriction |
 |-----------|----------|-------------|
 | `INSERT` / `UPSERT` | `VALUES (…), (…)`, `INSERT … SELECT …`, optional column list, `ON CONFLICT`, `RETURNING` | Same apply-row / conflict / TX path for VALUES and SELECT; set-op SELECT sources rejected; omitted columns take column `DEFAULT` when declared |
-| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET col = value, …` | Values may be literals, `EXCLUDED.col`, `COALESCE(…)`, or clock builtins; the optional column list names the primary key or a unique index |
+| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET col = value, …` | Values may be literals (incl. `TIMESTAMP`), `EXCLUDED.col`, `COALESCE(…)`, or clock builtins; optional column list = PK or secondary UNIQUE; repeated conflict on UNIQUE + `IDENTITY` updates in place (no ghost PK) |
 | `UPDATE` | `SET` assignments, optional `FROM source`, mandatory `WHERE`, optional `RETURNING` | See the assignment table below; missing PK → 0 rows, no empty seed (use `UPSERT` to insert) |
 | `DELETE` | Mandatory `WHERE` | No unconditional delete, no `RETURNING` |
 | `TRUNCATE TABLE` | Unconditional clear of all rows | Same journal / TX path as DELETE: on failure, reject to the client with no partial visibility |

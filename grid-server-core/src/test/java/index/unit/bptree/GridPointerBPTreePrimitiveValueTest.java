@@ -132,7 +132,8 @@ public class GridPointerBPTreePrimitiveValueTest extends AbstractGridPointerBPTr
 	public void _08_expect_not_exists() {
 		final byte[] valueArray = SqlWireUtil.toGenericArray(15);
 		final IndexOperationResult result = laxTree.searchEq(new SingleTreeKey(valueArray));
-		Assertions.assertNull(result.getPointers());
+		Assertions.assertTrue(result.pointersOrExpand().isEmpty());
+		Assertions.assertEquals(0, result.getSize());
 	}
 
 	@Test
@@ -141,7 +142,8 @@ public class GridPointerBPTreePrimitiveValueTest extends AbstractGridPointerBPTr
 		laxTree.delete(new SingleTreeKey(valueArray));
 
 		final IndexOperationResult result = laxTree.searchEq(new SingleTreeKey(valueArray));
-		Assertions.assertNull(result.getPointers());
+		Assertions.assertTrue(result.pointersOrExpand().isEmpty());
+		Assertions.assertEquals(0, result.getSize());
 	}
 
 	@Test

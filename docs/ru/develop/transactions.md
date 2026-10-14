@@ -50,12 +50,22 @@ Mono<Void> transfer = Mono.usingWhen(
 Пакетный вариант, когда несколько запросов делят одну транзакцию и один RTT:
 
 ```java
+// Только текст SQL — без binds на слот
 tx.executeBatch(List.of(
         "UPDATE accounts SET balance = balance - 10 WHERE id = 1",
         "UPDATE accounts SET balance = balance + 10 WHERE id = 2"));
+
+// Индексированный SQL + binds — один RTT BATCH_EXEC с binds
+tx.executeBatchBound(List.of(
+        new BatchStatement(
+                "UPDATE accounts SET balance = balance - ? WHERE id = ?",
+                new Object[]{10L, 1L}),
+        new BatchStatement(
+                "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+                new Object[]{10L, 2L})));
 ```
 
-Все запросы батча видят один и тот же грязный буфер; при ошибке остаток не выполняется.
+`BatchStatement` — `org.genfork.grid.sql.client.BatchStatement` (SQL + `Object[]` binds). Зеркало в autocommit: `Connection.executeBatch` / `executeBatchBound`. Все слоты батча видят один и тот же грязный буфер; при ошибке остаток не выполняется.
 
 ## Параллельные транзакции
 
@@ -64,9 +74,9 @@ tx.executeBatch(List.of(
 | Потолок | Где | По умолчанию | Роль |
 |---------|-----|--------------|------|
 | Клиентский `maxTxContexts` | URL / `ConnectionOptions` | **256** | Мягкий предел логических сессий, которые клиент откроет на одном TCP |
-| Серверный канал | SQL TCP listen (`SqlServer`) | **8** | Жёсткий предел на принятый канал; Boot **не** прокидывает `grid.sql.max-tx-contexts` |
+| Серверный канал | SQL TCP listen (`SqlServer`) | **8** | Жёсткий предел на принятый канал; задаётся `grid.sql-server.max-tx-contexts` |
 
-Если сервер отвечает `maxTxContexts=8 exhausted`, откройте ещё один `Connection` — Boot не поднимает потолок слушателя из `grid.sql.max-tx-contexts`. Подробнее: [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
+Если сервер отвечает `maxTxContexts=N exhausted`, поднимите `grid.sql-server.max-tx-contexts` и/или откройте ещё один `Connection`. Подробнее: [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
 Это не пул JDBC: не заводите N соединений, чтобы получить N транзакций. Изоляция между ними держится на блокировках записей, маркерах `TX_*` в журнале и дескрипторе PREPARE, а не на отдельных TCP-каналах.
 

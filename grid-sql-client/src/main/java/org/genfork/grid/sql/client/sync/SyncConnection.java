@@ -40,6 +40,7 @@ import org.genfork.grid.sql.client.SqlClientRouteUtil;
 import org.genfork.grid.sql.client.SqlClientSql;
 import org.genfork.grid.sql.client.transport.TransportConnection;
 import org.genfork.grid.sql.client.transport.TransportOutcome;
+import org.genfork.grid.sql.netty.SqlWire;
 
 /**
  * Blocking facade over {@link TransportConnection} (CompletionStage / RowPortal only).
@@ -178,6 +179,49 @@ public final class SyncConnection implements AutoCloseable {
 		final List<TransportOutcome> outcomes =
 				SyncAwait.await(transport.batchAutocommit(sqls), effective, null, syncExecutor);
 		return wrapOutcomes(outcomes, effective, syncExecutor);
+	}
+
+	public List<SyncResult> executeBatchBound(List<SqlWire.BatchStatement> statements) {
+		return executeBatchBound(statements, timeout);
+	}
+
+	public List<SyncResult> executeBatchBound(List<SqlWire.BatchStatement> statements, Duration execTimeout) {
+		final Duration effective = execTimeout == null || execTimeout.isZero() || execTimeout.isNegative()
+				? timeout
+				: execTimeout;
+		if (readFactory != null
+				&& !SqlClientRouteContext.suppressReplicaReads()
+				&& SqlClientRouteUtil.allRead(prepareRouteCache, sqlsFromStatements(statements))) {
+			final Connection borrowed =
+					SyncAwait.await(readFactory.obtainStage(), effective, null, syncExecutor);
+			if (!(borrowed instanceof RemoteConnection readRemote)) {
+				throw new IllegalStateException("read obtainStage must return RemoteConnection");
+			}
+			try {
+				final List<TransportOutcome> outcomes = SyncAwait.await(
+						readRemote.transport().batchAutocommitStatements(statements),
+						effective,
+						null,
+						syncExecutor);
+				return wrapOutcomes(outcomes, effective, syncExecutor);
+			} finally {
+				SyncAwait.awaitVoid(readRemote.transport().parkStage(), effective, syncExecutor);
+			}
+		}
+		final List<TransportOutcome> outcomes =
+				SyncAwait.await(transport.batchAutocommitStatements(statements), effective, null, syncExecutor);
+		return wrapOutcomes(outcomes, effective, syncExecutor);
+	}
+
+	private static List<String> sqlsFromStatements(List<SqlWire.BatchStatement> statements) {
+		if (statements == null || statements.isEmpty()) {
+			return List.of();
+		}
+		final List<String> sqls = new ArrayList<>(statements.size());
+		for (SqlWire.BatchStatement st : statements) {
+			sqls.add(st.sql());
+		}
+		return sqls;
 	}
 
 	public long executeUpdate(String sql) {

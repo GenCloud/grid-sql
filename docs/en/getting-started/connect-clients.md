@@ -55,7 +55,7 @@ Common options:
 | `timezone` | `UTC` | Zone applied to temporal types |
 | `readEndpoints` / `readPreference` / `staleReadPolicy` | — / `PRIMARY` / reject-on-stale | Replica routing; see [replica reads](../configure-and-operate/operations/replica-reads.md) |
 
-The **server** accepts at most **8** open sessions per TCP channel by default. Spring Boot does **not** forward `grid.sql.max-tx-contexts` into the listener — if the client asks for more than eight on one socket, open additional `Connection`s ([SQL server](../configure-and-operate/configuration/sql-server.md), [transactions](../develop/transactions.md)).
+The **server** accepts at most **8** open sessions per TCP channel by default. Spring set via `grid.sql-server.max-tx-contexts` into the listener — if the client asks for more than eight on one socket, open additional `Connection`s ([SQL server](../configure-and-operate/configuration/sql-server.md), [transactions](../develop/transactions.md)).
 
 Full list (including HA helpers): [Java client](../develop/java-client.md). JDBC and Sync without JDBC: [JDBC client](../develop/jdbc-tooling.md). Writer hand-off: [promote](../configure-and-operate/operations/ha-promote.md).
 

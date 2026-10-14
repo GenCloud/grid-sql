@@ -76,4 +76,26 @@ class SqlLimitOffsetIT {
 		assertThrows(IllegalArgumentException.class, () ->
 				engine.execute("SELECT id FROM t LIMIT 1, 2 OFFSET 3"));
 	}
+
+	@Test
+	void limitParamBindReturnsRows() {
+		final SqlResult r = engine.execute(
+				engine.newSession(),
+				"SELECT id FROM t ORDER BY id LIMIT ?",
+				new Object[]{2});
+		assertEquals(2, r.rows().size());
+		assertEquals(1, r.rows().get(0)[0]);
+		assertEquals(2, r.rows().get(1)[0]);
+	}
+
+	@Test
+	void limitOffsetCommaParamBind() {
+		final SqlResult r = engine.execute(
+				engine.newSession(),
+				"SELECT id FROM t ORDER BY id LIMIT ?, ?",
+				new Object[]{2, 2});
+		assertEquals(2, r.rows().size());
+		assertEquals(3, r.rows().get(0)[0]);
+		assertEquals(4, r.rows().get(1)[0]);
+	}
 }

@@ -96,7 +96,7 @@ For a Custom Driver, take `grid-sql-client/target/grid-sql-client-*-dbeaver.jar`
 
 The URL format is the same as `grid://`, just with a `jdbc:` prefix: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. The path after the hosts is the **default schema** (not a separate database catalog). The `?hosts=` parameter is not supported — multiple hosts go comma-separated in the authority.
 
-The driver strips `jdbc:` and parses with the same URL parser as the reactive client. Entry is **`SyncConnectionFactory.fromUrl` / `shared`** (same URL rules as `ConnectionFactory.fromUrl`): when `readEndpoints` + `readPreference=REPLICA` are present, autocommit SELECT/EXPLAIN route to replica channels. Inherited `grid://` options: `maxTxContexts` (client default **256**; server channel hard-cap **8**, Boot does not raise from YAML), `readEndpoints`, `readPreference`, `fetchWindow`, HA host ring. URL details: [connect clients](../getting-started/connect-clients.md).
+The driver strips `jdbc:` and parses with the same URL parser as the reactive client. Entry is **`SyncConnectionFactory.fromUrl` / `shared`** (same URL rules as `ConnectionFactory.fromUrl`): when `readEndpoints` + `readPreference=REPLICA` are present, autocommit SELECT/EXPLAIN route to replica channels. Inherited `grid://` options: `maxTxContexts` (client default **256**; server channel hard-cap **8**, configurable via `grid.sql-server.max-tx-contexts`), `readEndpoints`, `readPreference`, `fetchWindow`, HA host ring. URL details: [connect clients](../getting-started/connect-clients.md).
 
 Example replica URL:
 
@@ -125,7 +125,8 @@ DBeaver often defaults to `Auto-commit = OFF` (`Connection.setAutoCommit(false)`
   - `CREATE USER` / `DROP USER` / `GRANT` / `REVOKE`
   - `SELECT * FROM information_schema.users|roles|role_members|table_privileges`
 - SQL Editor: one-off `SELECT` and DML within the simplified dialect.
-- **Multi-statement scripts** (semicolon-separated): ANTLR `script` split → `BATCH_EXEC` (DBeaver script without Bad SQL).
+- **Multi-statement scripts** (semicolon-separated): ANTLR `script` split → `BATCH_EXEC` of SQL text only (DBeaver script without Bad SQL). Not the same as a bound prepared batch.
+- **`PreparedStatement.addBatch()` + `executeBatch()`**: same SQL, N bind rows → one bound `BATCH_EXEC` (SPI `BatchStatement` / wire binds). Prefer this for repeated DML with parameters.
 - Transactions, including savepoints. Parallel TX = N JDBC `Connection`s from the same factory (multiplex), not one TX per socket.
 - A scrollable `ResultSet` and the Data Editor — for a single table with a primary key (rows materialized for IDE navigation). On a **composite PK**, Data Editor update/delete WHERE uses the **leading PK column only** (not the full composite key).
 - `Statement.cancel()` cancels the in-flight SyncAwait and sends wire `CANCEL`.
@@ -133,6 +134,9 @@ DBeaver often defaults to `Auto-commit = OFF` (`Connection.setAutoCommit(false)`
 - Unwrap: `SyncConnection`, `ServerMeta`, `SyncConnectionFactory`; helpers `pin` / `unpin` on `GridConnection`.
 - Column metadata comes from `RowMetadata` / `ROW_DESC`; JDBC catalog hints are used only as a fallback.
 - `isValid()` checks the channel lifecycle instead of round-tripping `SELECT 1`.
+- **`BYTES` / `BYTEA` binds:** `PreparedStatement.setBytes` / `byte[]`. JDBC meta and codegen report **`VARBINARY`**; DDL and `information_schema` keep the product name **`BYTEA`** (synonym of `BYTES`).
+- **Temporal (`TIMESTAMP`):** `setObject(LocalDateTime)`, `getObject(…, LocalDateTime.class)`, `getTimestamp` (same contract as [grid-jooq README](../../../grid-jooq/README.md)).
+- **`RETURNING` → generated keys:** DML with `RETURNING` via `Statement.executeUpdate` / `PreparedStatement.executeUpdate`, then `getGeneratedKeys()` (jOOQ `SQLDialect.DEFAULT` + `returning()` path). Not a separate ResultSet from `executeQuery`.
 
 ## A common error: `bad frameLen …`
 

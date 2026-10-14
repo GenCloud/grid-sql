@@ -55,6 +55,8 @@ public final class SealedBPTreeReader implements AutoCloseable {
 	private static final boolean METRICS_ENABLED = !"false".equalsIgnoreCase(System.getProperty("sealed.metrics", "true"));
 	private static final int LEAF_HEADER_SKIP = 1 + Short.BYTES + Integer.BYTES * 2;
 	private static final int NEXT_LEAF_OFFSET = 1 + Short.BYTES + Integer.BYTES;
+	/** Minimum bytes for a readable sealed BPTree header (magic/version/pageSize + fields). */
+	public static final int MIN_FILE_BYTES = 48;
 
 	private final Path path;
 	private final FileChannel channel;
@@ -104,7 +106,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		final FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
 		try {
 			final long size = channel.size();
-			if (size < 48) {
+			if (size < MIN_FILE_BYTES) {
 				throw new IOException("sealed BPTree file is too small: " + path);
 			}
 			final int initialSize = (int) Math.min(size, 1L << 20);
@@ -613,6 +615,19 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		}
 	}
 
+	private void unmapAllForOverwrite() throws IOException {
+		if (mappedPage != null) {
+			GridFs.unmapForOverwrite(mappedPage);
+			mappedPage = null;
+			mappedPageId = -1;
+		}
+		if (pagesMap != null) {
+			GridFs.unmapForOverwrite(pagesMap);
+			pagesMap = null;
+			pageCache = null;
+		}
+	}
+
 	public int shard() {
 		return shard;
 	}
@@ -626,6 +641,24 @@ public final class SealedBPTreeReader implements AutoCloseable {
 			}
 			closed = true;
 			unmapAll();
+			channel.close();
+		} finally {
+			lifecycle.unlockWrite();
+		}
+	}
+
+	/**
+	 * Fail-closed close before sealed {@code .sbpt} {@code REPLACE} (G-00001).
+	 * Overwrite path only — not hot index remap.
+	 */
+	public void closeForOverwrite() throws IOException {
+		lifecycle.lockWrite();
+		try {
+			if (closed) {
+				return;
+			}
+			closed = true;
+			unmapAllForOverwrite();
 			channel.close();
 		} finally {
 			lifecycle.unlockWrite();

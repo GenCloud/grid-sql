@@ -28,8 +28,10 @@ import org.genfork.grid.antlr.SimplifiedSqlParser.CaseExprContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.CaseScalarContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.CoalesceArgContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.CoalesceExprContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.LimitAtomContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.NumericColPlusContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.NumericPlusAtomContext;
+import org.genfork.grid.antlr.SimplifiedSqlParser.JdbcEscapeValueContext;
 import org.genfork.grid.antlr.SimplifiedSqlParser.ValueContext;
 import org.genfork.grid.catalog.SqlTypeCoercion;
 import org.genfork.grid.query.filters.FilterCondition;
@@ -110,6 +112,42 @@ public final class SqlParseSupport {
 		return ctx.getStart().getInputStream().getText(Interval.of(a, b));
 	}
 
+	/**
+	 * Decode {@code LIMIT}/{@code OFFSET} atom: literal {@code INT} or prepare-time {@link SqlBindParam}.
+	 */
+	public static Object limitAtom(LimitAtomContext atom) {
+		if (atom == null) {
+			throw new IllegalArgumentException("missing LIMIT atom");
+		}
+		if (atom.PARAM() != null) {
+			final int[] counter = PREPARE_BIND_COUNTER.get();
+			if (counter == null) {
+				throw new IllegalArgumentException("unresolved bind placeholder ?");
+			}
+			return new SqlBindParam(counter[0]++);
+		}
+		if (atom.INT() != null) {
+			return Integer.valueOf(Math.max(0, Integer.parseInt(atom.INT().getText())));
+		}
+		throw new IllegalArgumentException("unsupported LIMIT atom: " + atom.getText());
+	}
+
+	/**
+	 * Coerce a resolved paging value to a non-negative int (rejects unresolved {@link SqlBindParam}).
+	 */
+	public static int resolvedPagingInt(Object value, String label) {
+		if (value instanceof SqlBindParam) {
+			throw new IllegalStateException("unresolved bind in " + label);
+		}
+		if (value == null) {
+			return 0;
+		}
+		if (value instanceof Number n) {
+			return Math.max(0, n.intValue());
+		}
+		throw new IllegalArgumentException(label + " must be an integer, got " + value.getClass().getSimpleName());
+	}
+
 	/** Decode a grammar {@code value} into a Java literal / bind / sequence call / builtin marker. */
 	public static Object literal(ValueContext v) {
 		if (v.oldNewRef() != null) {
@@ -148,6 +186,9 @@ public final class SqlParseSupport {
 		if (v.CAST() != null) {
 			return castLiteral(literal(v.value()), v.typeName().getText());
 		}
+		if (v.HEX_BYTES() != null) {
+			return SqlBytesLiterals.parseXHexToken(v.HEX_BYTES().getText());
+		}
 		if (v.UUID_TYPE() != null && v.STRING() != null) {
 			return SqlTypeCoercion.toUuid(unquote(v.STRING().getText()));
 		}
@@ -162,6 +203,9 @@ public final class SqlParseSupport {
 		}
 		if (v.TIMESTAMPTZ_TYPE() != null && v.STRING() != null) {
 			return SqlTypeCoercion.toTimestamptz(unquote(v.STRING().getText()), PARSE_ZONE.get());
+		}
+		if (v.jdbcEscapeValue() != null) {
+			return jdbcEscapeLiteral(v.jdbcEscapeValue());
 		}
 		if (v.caseExpr() != null) {
 			return caseExpr(v.caseExpr());
@@ -230,8 +274,19 @@ public final class SqlParseSupport {
 			case "TIME" -> SqlTypeCoercion.toTime(value);
 			case "TIMESTAMP", "DATETIME" -> SqlTypeCoercion.toTimestampString(value);
 			case "TIMESTAMPTZ" -> SqlTypeCoercion.toTimestamptz(value, PARSE_ZONE.get());
+			case "BYTES", "BYTEA", "BINARY", "BLOB", "VARBINARY" -> castToBytes(value);
 			default -> throw new IllegalArgumentException("Unsupported CAST type: " + typeToken);
 		};
+	}
+
+	private static byte[] castToBytes(Object value) {
+		if (value instanceof byte[] b) {
+			return b;
+		}
+		if (value instanceof String s) {
+			return SqlBytesLiterals.parseHex(s);
+		}
+		return SqlTypeCoercion.toBytes(value);
 	}
 
 	/** String form of a value context (empty string for SQL NULL). */
@@ -344,6 +399,20 @@ public final class SqlParseSupport {
 		return new NumericColPlus(
 				SqlIdentParseUtil.simpleColumn(plus.columnName()),
 				literal(plus.value()));
+	}
+
+	private static Object jdbcEscapeLiteral(JdbcEscapeValueContext ctx) {
+		final String text = unquote(ctx.STRING().getText());
+		if (ctx.JDBC_ESC_TS() != null) {
+			return SqlTypeCoercion.toTimestamptz(text, PARSE_ZONE.get());
+		}
+		if (ctx.JDBC_ESC_D() != null) {
+			return SqlTypeCoercion.toDate(text);
+		}
+		if (ctx.JDBC_ESC_T() != null) {
+			return SqlTypeCoercion.toTime(text);
+		}
+		throw new IllegalArgumentException("unsupported JDBC escape: " + ctx.getText());
 	}
 
 	private static Boolean constantBool(SimplifiedSqlParser.ExpressionContext expr) {

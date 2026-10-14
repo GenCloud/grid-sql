@@ -96,7 +96,7 @@ mvn -pl grid-sql-client -am package -DskipTests
 
 Формат URL тот же, что у `grid://`, только с префиксом `jdbc:`: `jdbc:grid://user:pass@h1:15432,h2:15433/public`. Path после хостов — **default schema** (не отдельный database catalog). Параметр `?hosts=` не поддерживается — несколько хостов пишутся через запятую в authority.
 
-Драйвер снимает префикс `jdbc:` и разбирает URL тем же парсером, что и реактивный клиент. Точка входа — **`SyncConnectionFactory.fromUrl` / `shared`** (те же правила URL, что у `ConnectionFactory.fromUrl`): при `readEndpoints` + `readPreference=REPLICA` autocommit SELECT/EXPLAIN уходят на каналы к репликам. Наследуются опции `grid://`: `maxTxContexts` (у клиента по умолчанию **256**; на сервере жёсткий потолок канала **8**, Boot не поднимает из YAML), `readEndpoints`, `readPreference`, `fetchWindow`, кольцо хостов для HA. Подробности URL: [подключение клиентов](../getting-started/connect-clients.md).
+Драйвер снимает префикс `jdbc:` и разбирает URL тем же парсером, что и реактивный клиент. Точка входа — **`SyncConnectionFactory.fromUrl` / `shared`** (те же правила URL, что у `ConnectionFactory.fromUrl`): при `readEndpoints` + `readPreference=REPLICA` autocommit SELECT/EXPLAIN уходят на каналы к репликам. Наследуются опции `grid://`: `maxTxContexts` (у клиента по умолчанию **256**; на сервере жёсткий потолок канала **8**, настраивается через `grid.sql-server.max-tx-contexts`), `readEndpoints`, `readPreference`, `fetchWindow`, кольцо хостов для HA. Подробности URL: [подключение клиентов](../getting-started/connect-clients.md).
 
 Пример replica URL:
 
@@ -125,7 +125,8 @@ Grid **отклоняет DDL внутри открытой транзакции
   - `CREATE USER` / `DROP USER` / `GRANT` / `REVOKE`
   - `SELECT * FROM information_schema.users|roles|role_members|table_privileges`
 - SQL Editor: разовые `SELECT` и DML в пределах упрощённого диалекта.
-- **Многооператорные скрипты** (через `;`): ANTLR `script` → `BATCH_EXEC` (DBeaver script без Bad SQL).
+- **Многооператорные скрипты** (через `;`): ANTLR `script` → `BATCH_EXEC` только из текста SQL (DBeaver script без Bad SQL). Это не то же самое, что bound prepared batch.
+- **`PreparedStatement.addBatch()` + `executeBatch()`**: один и тот же SQL, N строк binds → один bound `BATCH_EXEC` (SPI `BatchStatement` / wire binds). Предпочтительный путь для повторяемого DML с параметрами.
 - Транзакции, в том числе точки сохранения. Параллельные TX = N JDBC `Connection` с одной фабрики (multiplex), не один TX на сокет.
 - Прокручиваемый `ResultSet` и Data Editor — для одиночной таблицы с первичным ключом (materialize для IDE). При **составном PK** UPDATE/DELETE в Data Editor строит WHERE только по **ведущей колонке PK**, не по полному составному ключу.
 - `Statement.cancel()` отменяет незавершённый SyncAwait и отправляет по протоколу кадр `CANCEL`.
@@ -133,6 +134,9 @@ Grid **отклоняет DDL внутри открытой транзакции
 - Unwrap: `SyncConnection`, `ServerMeta`, `SyncConnectionFactory`; `pin` / `unpin` на `GridConnection`.
 - Метаданные колонок приходят из `RowMetadata` / `ROW_DESC`; JDBC-подсказки каталога используются только как запасной путь.
 - `isValid()` проверяет жизненный цикл канала и не гоняет `SELECT 1`.
+- **Binds для `BYTES` / `BYTEA`:** `PreparedStatement.setBytes` / `byte[]`. JDBC meta и codegen отдают **`VARBINARY`**; DDL и `information_schema` сохраняют продуктовое имя **`BYTEA`** (синоним `BYTES`).
+- **Temporal (`TIMESTAMP`):** `setObject(LocalDateTime)`, `getObject(…, LocalDateTime.class)`, `getTimestamp` (тот же контракт, что в [grid-jooq README](../../../grid-jooq/README.md)).
+- **`RETURNING` → generated keys:** DML с `RETURNING` через `Statement.executeUpdate` / `PreparedStatement.executeUpdate`, затем `getGeneratedKeys()` (путь jOOQ `SQLDialect.DEFAULT` + `returning()`). Это не отдельный ResultSet от `executeQuery`.
 
 ## Частая ошибка: `bad frameLen …`
 

@@ -169,8 +169,12 @@ public final class TransportConnection {
 			int requestId,
 			PendingExchange exchange,
 			int sessionId,
-			List<String> sqls
+			List<SqlWire.BatchStatement> statements
 	) {
+		public List<String> sqls() {
+			return statements.stream().map(SqlWire.BatchStatement::sql).toList();
+		}
+
 		public SyncBatchExchange syncExchange() {
 			return (SyncBatchExchange) exchange;
 		}
@@ -343,6 +347,20 @@ public final class TransportConnection {
 	public PreparedBatch prepareReactiveBatch(int sessionId, List<String> sqls) {
 		requireOpen();
 		final List<String> list = sqls == null ? List.of() : List.copyOf(sqls);
+		final List<SqlWire.BatchStatement> statements = new ArrayList<>(list.size());
+		for (String sql : list) {
+			statements.add(new SqlWire.BatchStatement(sql, EMPTY_BINDS));
+		}
+		return prepareReactiveBatchExchange(sessionId, statements);
+	}
+
+	public PreparedBatch prepareReactiveBatchStatements(
+			int sessionId,
+			List<SqlWire.BatchStatement> statements
+	) {
+		requireOpen();
+		final List<SqlWire.BatchStatement> list =
+				statements == null ? List.of() : List.copyOf(statements);
 		return prepareReactiveBatchExchange(sessionId, list);
 	}
 
@@ -387,6 +405,17 @@ public final class TransportConnection {
 	public PreparedBatch prepareBatch(int sessionId, List<String> sqls) {
 		requireOpen();
 		final List<String> list = sqls == null ? List.of() : List.copyOf(sqls);
+		final List<SqlWire.BatchStatement> statements = new ArrayList<>(list.size());
+		for (String sql : list) {
+			statements.add(new SqlWire.BatchStatement(sql, EMPTY_BINDS));
+		}
+		return prepareSyncBatchExchange(sessionId, statements);
+	}
+
+	public PreparedBatch prepareBatchStatements(int sessionId, List<SqlWire.BatchStatement> statements) {
+		requireOpen();
+		final List<SqlWire.BatchStatement> list =
+				statements == null ? List.of() : List.copyOf(statements);
 		return prepareSyncBatchExchange(sessionId, list);
 	}
 
@@ -426,7 +455,7 @@ public final class TransportConnection {
 	public void writePrepared(PreparedBatch prepared) {
 		try {
 			SqlFrames.writeAndFlush(channel, SqlOpcode.BATCH_EXEC, prepared.requestId(),
-					out -> SqlWire.batchExecInto(out, prepared.sessionId(), prepared.sqls()));
+					out -> SqlWire.batchExecStatementsInto(out, prepared.sessionId(), prepared.statements()));
 		} catch (RuntimeException ex) {
 			pending.remove(prepared.requestId());
 			prepared.exchange().fail(ex);
@@ -497,6 +526,14 @@ public final class TransportConnection {
 		if (!isOpen()) {
 			return CompletableFuture.failedFuture(new IllegalStateException(ERR_NOT_CONNECTED));
 		}
+		/*
+		 * Reuse parked autocommit sessions before SESSION_OPEN. Idle slots count toward
+		 * the server channel hard-cap; TX begin must not open a 9th session on a full TCP.
+		 */
+		final Integer idle = pollAutocommitIdle();
+		if (idle != null) {
+			return CompletableFuture.completedFuture(idle);
+		}
 		if (!sessionOpenBudgetAvailable()) {
 			return CompletableFuture.failedFuture(new IllegalStateException(
 					ERR_MAX_TX + " maxTxContexts=" + maxTxContexts));
@@ -557,10 +594,26 @@ public final class TransportConnection {
 		if (list.isEmpty()) {
 			return CompletableFuture.completedFuture(List.of());
 		}
+		final List<SqlWire.BatchStatement> statements = new ArrayList<>(list.size());
+		for (String sql : list) {
+			statements.add(new SqlWire.BatchStatement(sql, EMPTY_BINDS));
+		}
+		return batchExecStatements(sessionId, statements);
+	}
+
+	public CompletionStage<List<TransportOutcome>> batchExecStatements(
+			int sessionId,
+			List<SqlWire.BatchStatement> statements
+	) {
+		final List<SqlWire.BatchStatement> list =
+				statements == null ? List.of() : List.copyOf(statements);
+		if (list.isEmpty()) {
+			return CompletableFuture.completedFuture(List.of());
+		}
 		if (!isOpen()) {
 			return CompletableFuture.failedFuture(new IllegalStateException(ERR_NOT_CONNECTED));
 		}
-		final PreparedBatch prepared = prepareBatch(sessionId, list);
+		final PreparedBatch prepared = prepareBatchStatements(sessionId, list);
 		writePrepared(prepared);
 		return track(prepared.syncExchange().outcomes());
 	}
@@ -635,13 +688,32 @@ public final class TransportConnection {
 	}
 
 	public CompletionStage<List<TransportOutcome>> batchAutocommit(List<String> sqls) {
+		final List<String> list = sqls == null ? List.of() : List.copyOf(sqls);
+		if (list.isEmpty()) {
+			return CompletableFuture.completedFuture(List.of());
+		}
+		final List<SqlWire.BatchStatement> statements = new ArrayList<>(list.size());
+		for (String sql : list) {
+			statements.add(new SqlWire.BatchStatement(sql, EMPTY_BINDS));
+		}
+		return batchAutocommitStatements(statements);
+	}
+
+	public CompletionStage<List<TransportOutcome>> batchAutocommitStatements(
+			List<SqlWire.BatchStatement> statements
+	) {
+		final List<SqlWire.BatchStatement> list =
+				statements == null ? List.of() : List.copyOf(statements);
+		if (list.isEmpty()) {
+			return CompletableFuture.completedFuture(List.of());
+		}
 		final CompletableFuture<List<TransportOutcome>> result = new CompletableFuture<>();
 		acquireAutocommitSession().whenComplete((sessionId, acquireErr) -> {
 			if (acquireErr != null) {
 				result.completeExceptionally(acquireErr);
 				return;
 			}
-			batchExec(sessionId, sqls).whenComplete((outcomes, err) ->
+			batchExecStatements(sessionId, list).whenComplete((outcomes, err) ->
 					releaseAutocommitSession(sessionId).whenComplete((ignored, releaseErr) -> {
 						if (err != null) {
 							result.completeExceptionally(err);
@@ -707,24 +779,27 @@ public final class TransportConnection {
 		}
 	}
 
-	private PreparedBatch prepareReactiveBatchExchange(int sessionId, List<String> sqls) {
+	private PreparedBatch prepareReactiveBatchExchange(
+			int sessionId,
+			List<SqlWire.BatchStatement> statements
+	) {
 		final int id = requestIds.getAndIncrement();
 		final IntConsumer fetchSender = fetchSender(id);
 		final Runnable cancelSender = cancelSender(id);
 		final ReactiveBatchExchange collector =
-				new ReactiveBatchExchange(sqls.size(), fetchWindow, fetchSender, cancelSender);
+				new ReactiveBatchExchange(statements.size(), fetchWindow, fetchSender, cancelSender);
 		pending.put(id, collector);
-		return new PreparedBatch(id, collector, sessionId, sqls);
+		return new PreparedBatch(id, collector, sessionId, statements);
 	}
 
-	private PreparedBatch prepareSyncBatchExchange(int sessionId, List<String> sqls) {
+	private PreparedBatch prepareSyncBatchExchange(int sessionId, List<SqlWire.BatchStatement> statements) {
 		final int id = requestIds.getAndIncrement();
 		final IntConsumer fetchSender = fetchSender(id);
 		final Runnable cancelSender = cancelSender(id);
 		final SyncBatchExchange collector =
-				new SyncBatchExchange(sqls.size(), fetchWindow, fetchSender, cancelSender);
+				new SyncBatchExchange(statements.size(), fetchWindow, fetchSender, cancelSender);
 		pending.put(id, collector);
-		return new PreparedBatch(id, collector, sessionId, sqls);
+		return new PreparedBatch(id, collector, sessionId, statements);
 	}
 
 	private PreparedExec prepareReactiveExecBody(int sessionId, String sql, Object[] binds, int window) {

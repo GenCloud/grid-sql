@@ -52,6 +52,7 @@ grid:
     enabled: true
     host: 0.0.0.0
     port: 15432
+    max-tx-contexts: 8          # жёсткий потолок открытых TX-контекстов на SQL TCP-канал
   codec:
     duplex:
       enabled: true
@@ -179,7 +180,7 @@ spring:
 
 - **Не** включайте `grid.sql-server.enabled` и не тащите `grid-server-core` в каждый сервис — движок не должен подниматься в процессе приложения.
 - Одна фабрика на процесс (или на соседний узел), а не фабрика на запрос.
-- URL `maxTxContexts` — **клиентский** мягкий потолок (по умолчанию 256). На SQL-слушателе жёсткий потолок **8** открытых контекстов на TCP; Boot не поднимает его из `grid.sql.max-tx-contexts`. См. [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
+- URL `maxTxContexts` — **клиентский** мягкий потолок (по умолчанию 256). На SQL-слушателе жёсткий потолок **8** открытых контекстов на TCP; задаётся `grid.sql-server.max-tx-contexts`. См. [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 - Чтения с реплик: в URL клиента — `readEndpoints`; на **сервере** ещё `grid.replication.ha.replica-reads-enabled: true` (в library по умолчанию выключено; профили starter `primary`/`replica` включают). См. [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 - Не блокируйте реактивные цепочки внутри сервиса; `.block()` — только на границе приложения. См. [Java-клиент](java-client.md).
 

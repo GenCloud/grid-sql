@@ -61,7 +61,7 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<опции>
 |-------|--------------|-------|
 | `minConnections` | `1` | TCP, открываемые на прогрев / первом `obtain` (clamp до `maxConnections`) |
 | `maxConnections` | `1` | Верхняя граница TCP-сокетов в пуле фабрики |
-| `maxTxContexts` | `256` | Мягкий потолок клиента на логические сессии на одном сокете (`0` — без предела на клиенте). На сервере жёсткий потолок канала **8**; Boot не применяет YAML к слушателю — [SQL-сервер](../configure-and-operate/configuration/sql-server.md) |
+| `maxTxContexts` | `256` | Мягкий потолок клиента на логические сессии на одном сокете (`0` — без предела на клиенте). На сервере потолок канала по умолчанию **8** (`grid.sql-server.max-tx-contexts`) — [SQL-сервер](../configure-and-operate/configuration/sql-server.md) |
 | `connectTimeoutMs` | `5000` | Таймаут установления соединения |
 | `execTimeoutMs` | `0` (выкл.) | Таймаут выполнения запроса |
 | `readTimeoutMs` / `writeTimeoutMs` | `0` (выкл.) | Таймауты канала |
@@ -106,7 +106,14 @@ Flux<String> names = connection
         .flatMap(result -> result.map((row, meta) -> row.get("name", String.class)));
 ```
 
-Несколько запросов одним RTT — `connection.executeBatch(List.of(...))`. В autocommit каждый запрос коммитится сам по себе; общей транзакции у них нет.
+Несколько запросов одним RTT:
+
+| API | Полезная нагрузка | Провод |
+|-----|-------------------|--------|
+| `connection.executeBatch(List.of(...))` | Только текст SQL | `BATCH_EXEC` без binds на слот |
+| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Индексированный SQL + `Object[]` binds на слот (`org.genfork.grid.sql.client.BatchStatement`) | Один RTT `BATCH_EXEC` с binds |
+
+В autocommit каждый слот коммитится сам по себе; общей транзакции у них нет. Для общей TX — `TxContext.executeBatch` / `executeBatchBound` после `begin()` — [транзакции](transactions.md).
 
 ## Транзакции
 
@@ -188,7 +195,7 @@ Mono<Void> parallel = Mono.zip(
 ).then();
 ```
 
-Это принципиально другая модель, чем пул JDBC-соединений: не нужно `maxTxContexts` сокетов, нужен один сокет и несколько логических сессий. Потолок **клиента** ограничивает `SESSION_OPEN`; **сервер** всё равно отклоняет сверх **8** открытых сессий на этом TCP — откройте ещё один `Connection`, а не только поднимайте значение в URL.
+Это принципиально другая модель, чем пул JDBC-соединений: не нужно `maxTxContexts` сокетов, нужен один сокет и несколько логических сессий. Потолок **клиента** ограничивает `SESSION_OPEN`; **сервер** отклоняет сверх `grid.sql-server.max-tx-contexts` на этом TCP — поднимите YAML и/или откройте ещё один `Connection`.
 
 ## Чтение с реплик
 

@@ -61,7 +61,7 @@ The `/<schema>` path is the default session schema on `SESSION_OPEN` (same as `S
 |--------|---------|---------|
 | `minConnections` | `1` | TCP sockets opened on warmup / first `obtain` (clamped to `maxConnections`) |
 | `maxConnections` | `1` | Upper bound of TCP sockets in the factory pool |
-| `maxTxContexts` | `256` | Client soft cap on concurrent logical sessions over one socket (`0` — unlimited on the client). Server channel hard-cap is **8**; Boot does not apply YAML to the listener — [SQL server](../configure-and-operate/configuration/sql-server.md) |
+| `maxTxContexts` | `256` | Client soft cap on concurrent logical sessions over one socket (`0` — unlimited on the client). Server channel hard-cap is **8**; set `grid.sql-server.max-tx-contexts` on the listener — [SQL server](../configure-and-operate/configuration/sql-server.md) |
 | `connectTimeoutMs` | `5000` | Connection establishment timeout |
 | `execTimeoutMs` | `0` (off) | Statement execution timeout |
 | `readTimeoutMs` / `writeTimeoutMs` | `0` (off) | Channel timeouts |
@@ -106,7 +106,14 @@ Flux<String> names = connection
         .flatMap(result -> result.map((row, meta) -> row.get("name", String.class)));
 ```
 
-Several statements in one RTT — `connection.executeBatch(List.of(...))`. In autocommit each statement commits on its own; there is no shared transaction around them.
+Several statements in one RTT:
+
+| API | Payload | Wire |
+|-----|---------|------|
+| `connection.executeBatch(List.of(...))` | SQL text only | `BATCH_EXEC` without per-slot binds |
+| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Indexed SQL + `Object[]` binds per slot (`org.genfork.grid.sql.client.BatchStatement`) | One RTT `BATCH_EXEC` with binds |
+
+In autocommit each slot commits on its own; there is no shared transaction around them. For a shared TX use `TxContext.executeBatch` / `executeBatchBound` after `begin()` — [transactions](transactions.md).
 
 ## Transactions
 

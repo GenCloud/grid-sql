@@ -18,7 +18,6 @@ package org.genfork.grid.query.plan;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -27,9 +26,8 @@ import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.atn.PredictionMode;
 import org.antlr.v4.runtime.misc.ParseCancellationException;
-import org.antlr.v4.runtime.tree.TerminalNode;
-
 import org.genfork.grid.sql.SqlIdentParseUtil;
+import org.genfork.grid.sql.SqlParseSupport;
 import org.genfork.grid.antlr.SimplifiedSqlBaseVisitor;
 import org.genfork.grid.antlr.SimplifiedSqlLexer;
 import org.genfork.grid.antlr.SimplifiedSqlParser;
@@ -130,6 +128,49 @@ public class QueryParser {
 		return built;
 	}
 
+	/**
+	 * Residual WHERE tree for any SELECT text (table {@code SELECT … FROM} or bare
+	 * {@code SELECT lit… WHERE …}).
+	 * <p>
+	 * Single ANTLR parse + {@link SqlFilterVisitor} only — never the index/plan path
+	 * ({@link #parseAndBuildCondition}). Used by {@code SqlResultResidualUtil} for result-edge
+	 * gating (e.g. jOOQ {@code INSERT … SELECT lit WHERE NOT EXISTS}).
+	 */
+	public static FilterCondition residualWhere(String sql, List<FilterCondition> resolvedWhereSubqueries) {
+		if (sql == null || sql.isBlank()) {
+			return AlwaysTrueCondition.getInstance();
+		}
+		final SimplifiedSqlLexer lexer = new SimplifiedSqlLexer(CharStreams.fromString(sql));
+		final CommonTokenStream tokenStream = new CommonTokenStream(lexer);
+		final SimplifiedSqlParser parser = new SimplifiedSqlParser(tokenStream);
+		final QueryContext queryRoot = parser.query();
+		if (queryRoot.selectExprQuery() != null) {
+			return residualFromSelectExpr(queryRoot.selectExprQuery(), resolvedWhereSubqueries);
+		}
+		final SelectQueryContext query = queryRoot.selectQuery();
+		if (query == null) {
+			throw new IllegalArgumentException("expected SELECT for residual WHERE");
+		}
+		if (query.WHERE() != null && !query.expression().isEmpty()) {
+			final SqlFilterVisitor filterVisitor = new SqlFilterVisitor(resolvedWhereSubqueries);
+			final FilterCondition base = filterVisitor.visit(query.expression(0));
+			return base == null ? AlwaysTrueCondition.getInstance() : base;
+		}
+		return AlwaysTrueCondition.getInstance();
+	}
+
+	private static FilterCondition residualFromSelectExpr(
+			SimplifiedSqlParser.SelectExprQueryContext expr,
+			List<FilterCondition> resolvedWhereSubqueries
+	) {
+		if (expr.WHERE() == null || expr.expression() == null) {
+			return AlwaysTrueCondition.getInstance();
+		}
+		final SqlFilterVisitor filterVisitor = new SqlFilterVisitor(resolvedWhereSubqueries);
+		final FilterCondition condition = filterVisitor.visit(expr.expression());
+		return condition == null ? AlwaysTrueCondition.getInstance() : condition;
+	}
+
 	private static QueryData parseAndBuildConditionUncached(ExplainQuery.QueryPlan queryPlan,
 	                                                        String sql,
 	                                                        Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
@@ -142,7 +183,14 @@ public class QueryParser {
 		if (queryRoot.unionTail() != null && !queryRoot.unionTail().isEmpty()) {
 			throw new IllegalArgumentException("set op is not supported in index plan path; execute via SqlEngine");
 		}
+		if (queryRoot.selectExprQuery() != null) {
+			throw new IllegalArgumentException(
+					"FROM-less SELECT is residual-only; use QueryParser.residualWhere / SqlEngine");
+		}
 		final SelectQueryContext query = queryRoot.selectQuery();
+		if (query == null) {
+			throw new IllegalArgumentException("expected SELECT … FROM in index plan path");
+		}
 
 		String[] fieldSelection = null;
 		boolean countStar = false;
@@ -253,19 +301,19 @@ public class QueryParser {
 
 		if (query.LIMIT() != null) {
 			final LimitClauseContext limitClauseContext = query.limitClause();
-			final TerminalNode first = limitClauseContext.INT(0);
-			final TerminalNode second = limitClauseContext.INT(1);
-			if (second != null) {
-				// LIMIT offset, count
-				offset = Math.max(0, Integer.parseInt(first.getSymbol().getText()));
-				limit = Math.max(0, Integer.parseInt(second.getSymbol().getText()));
-			} else if (first != null) {
-				// LIMIT count
-				limit = Math.max(0, Integer.parseInt(first.getSymbol().getText()));
+			if (limitClauseContext.limitAtom(1) != null) {
+				// LIMIT offset, count — residual path requires literal INT (binds materialize first)
+				offset = SqlParseSupport.resolvedPagingInt(
+						SqlParseSupport.limitAtom(limitClauseContext.limitAtom(0)), "LIMIT offset");
+				limit = SqlParseSupport.resolvedPagingInt(
+						SqlParseSupport.limitAtom(limitClauseContext.limitAtom(1)), "LIMIT count");
+			} else if (limitClauseContext.limitAtom(0) != null) {
+				limit = SqlParseSupport.resolvedPagingInt(
+						SqlParseSupport.limitAtom(limitClauseContext.limitAtom(0)), "LIMIT");
 			}
 		}
 		if (query.OFFSET() != null && query.offsetInt != null) {
-			if (query.LIMIT() != null && query.limitClause() != null && query.limitClause().INT(1) != null) {
+			if (query.LIMIT() != null && query.limitClause() != null && query.limitClause().limitAtom(1) != null) {
 				throw new IllegalArgumentException("cannot combine LIMIT offset,count with OFFSET clause");
 			}
 			offset = Math.max(0, Integer.parseInt(query.offsetInt.getText()));
@@ -523,66 +571,12 @@ public class QueryParser {
 		}
 
 		private Object parseValue(ValueContext ctx) {
-			if (ctx.CAST() != null) {
-				return castValue(parseValue(ctx.value()), ctx.typeName().getText());
-			}
 			if (ctx.caseExpr() != null) {
 				throw new IllegalArgumentException(
 						"non-constant CASE in WHERE not supported; use CAST or literal");
 			}
-			// value : '-'? INT | '-'? FLOAT — use full text so leading minus is kept
-			if (ctx.INT() != null) {
-				final String text = ctx.getText();
-				try {
-					return Integer.parseInt(text);
-				} catch (NumberFormatException e) {
-					return Long.parseLong(text);
-				}
-			}
-
-			if (ctx.FLOAT() != null) {
-				return Double.parseDouble(ctx.getText());
-			}
-
-			if (ctx.STRING() != null) {
-				return unquoteSqlString(ctx.STRING().getText());
-			}
-
-			if (ctx.NULL() != null) {
-				return null;
-			}
-
-			if (ctx.TRUE() != null) {
-				return Boolean.TRUE;
-			}
-			if (ctx.FALSE() != null) {
-				return Boolean.FALSE;
-			}
-
-			return null;
-		}
-
-		private static Object castValue(Object value, String typeToken) {
-			if (value == null) {
-				return null;
-			}
-			final String t = typeToken.trim().toUpperCase(Locale.ROOT);
-			return switch (t) {
-				case "INT", "INTEGER" -> value instanceof Number n
-						? Integer.valueOf(n.intValue())
-						: Integer.valueOf(String.valueOf(value));
-				case "BIGINT", "LONG" -> value instanceof Number n
-						? Long.valueOf(n.longValue())
-						: Long.valueOf(String.valueOf(value));
-				case "DOUBLE", "FLOAT", "REAL" -> value instanceof Number n
-						? Double.valueOf(n.doubleValue())
-						: Double.valueOf(String.valueOf(value));
-				case "BOOLEAN", "BOOL" -> value instanceof Boolean b
-						? b
-						: Boolean.valueOf(String.valueOf(value));
-				case "VARCHAR", "STRING", "TEXT" -> String.valueOf(value);
-				default -> throw new IllegalArgumentException("Unsupported CAST type: " + typeToken);
-			};
+			// Shared decode (incl. PARAM → SqlBindParam under prepare parse).
+			return SqlParseSupport.literal(ctx);
 		}
 	}
 

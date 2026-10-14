@@ -133,28 +133,6 @@ public final class SealedGridMapReader implements AutoCloseable {
 		this.lazyNodes = null;
 	}
 
-	private SealedGridMapReader(Path sealedRoot, String domainType, int shard,
-	                            SealedGridMapReader[] nodeReaders) {
-		this.path = sealedRoot;
-		this.channel = null;
-		this.directory = null;
-		this.version = SealedGridMapWriter.VERSION_NODE;
-		this.nodeCount = SealedGridMapWriter.NODE_COUNT;
-		this.nodeId = -1;
-		this.capacity = 0;
-		this.shard = shard;
-		this.watermark = maxWatermark(nodeReaders);
-		this.domainType = domainType;
-		this.bucketTableOffset = 0;
-		this.entryTableOffset = 0;
-		this.entryCount = 0;
-		this.payloadStart = 0L;
-		this.payloadEnd = 0L;
-		this.nodeReaders = nodeReaders;
-		this.nodePaths = null;
-		this.lazyNodes = null;
-	}
-
 	/** Lazy node-pack: paths only until first payload miss per node (hybrid RAM hits stay mmap-free). */
 	private SealedGridMapReader(Path sealedRoot, String domainType, int shard, Path[] nodePaths,
 	                            long watermarkHint) {
@@ -726,6 +704,45 @@ public final class SealedGridMapReader implements AutoCloseable {
 		}
 	}
 
+	/**
+	 * Fail-closed close before sealed file {@code REPLACE} (G-00001).
+	 * Uses {@link GridFs#unmapForOverwrite}; overwrite path only — not hot get/remap.
+	 */
+	public void closeForOverwrite() throws IOException {
+		lifecycle.lockWrite();
+		try {
+			if (closed) {
+				return;
+			}
+			closed = true;
+			generation.incrementAndGet();
+			for (PayloadWindow window : payloadWindowRegistry) {
+				window.clearForOverwrite();
+			}
+			payloadWindowRegistry.clear();
+			if (nodeReaders != null) {
+				closeNodesForOverwrite(nodeReaders);
+				return;
+			}
+			if (lazyNodes != null) {
+				final SealedGridMapReader[] opened = new SealedGridMapReader[lazyNodes.length()];
+				for (int node = 0; node < lazyNodes.length(); node++) {
+					opened[node] = lazyNodes.getAndSet(node, null);
+				}
+				closeNodesForOverwrite(opened);
+				return;
+			}
+			final StickyPayload sticky = stickyPayload.getAndSet(null);
+			if (sticky != null) {
+				GridFs.unmapForOverwrite(sticky.map);
+			}
+			GridFs.unmapForOverwrite(directory);
+			channel.close();
+		} finally {
+			lifecycle.unlockWrite();
+		}
+	}
+
 	private static void validateEntries(ByteBuffer directory, int entryTableOffset, int entryCount,
 	                                    long payloadStart, long payloadEnd) throws IOException {
 		for (int index = 0; index < entryCount; index++) {
@@ -792,6 +809,27 @@ public final class SealedGridMapReader implements AutoCloseable {
 		}
 	}
 
+	private static void closeNodesForOverwrite(SealedGridMapReader[] readers) throws IOException {
+		IOException failure = null;
+		for (SealedGridMapReader reader : readers) {
+			if (reader == null) {
+				continue;
+			}
+			try {
+				reader.closeForOverwrite();
+			} catch (IOException closeFailure) {
+				if (failure == null) {
+					failure = closeFailure;
+				} else {
+					failure.addSuppressed(closeFailure);
+				}
+			}
+		}
+		if (failure != null) {
+			throw failure;
+		}
+	}
+
 	private static long addressOffset() {
 		try {
 			final Field field = Buffer.class.getDeclaredField("address");
@@ -819,6 +857,13 @@ public final class SealedGridMapReader implements AutoCloseable {
 
 		private void clear() {
 			GridFs.unmap(buffer);
+			buffer = null;
+			start = -1L;
+			end = -1L;
+		}
+
+		private void clearForOverwrite() throws IOException {
+			GridFs.unmapForOverwrite(buffer);
 			buffer = null;
 			start = -1L;
 			end = -1L;

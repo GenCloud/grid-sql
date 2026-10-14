@@ -48,7 +48,7 @@ Shard placement and PIN sit on the same replication path: [overlay and placement
 
 ## A client without protocol surprises
 
-One protocol, many logical sessions on one TCP: client `maxTxContexts` default **256**, server channel hard-cap **8** (Boot does not raise it from YAML). Result streaming, PREPARE. No second protocol beside Grid.
+One protocol, many logical sessions on one TCP: client `maxTxContexts` default **256**, server channel hard-cap **8** (configurable via `grid.sql-server.max-tx-contexts`). Result streaming, PREPARE. No second protocol beside Grid.
 
 See [Java client](../develop/java-client.md), [connect clients](connect-clients.md).
 
