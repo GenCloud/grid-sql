@@ -129,7 +129,6 @@ public final class GridConnection implements Connection {
 	 * Sticky HA server meta from the writer channel (promote observability).
 	 */
 	public ServerMeta serverMeta() throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		return sync.serverMeta();
 	}
@@ -138,7 +137,6 @@ public final class GridConnection implements Connection {
 	 * Product PIN helper (same SQL as reactive / Sync).
 	 */
 	public void pin(String table, Object key) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		try {
 			sync.pin(table, key);
@@ -151,7 +149,6 @@ public final class GridConnection implements Connection {
 	 * Product PIN with TTL.
 	 */
 	public void pin(String table, Object key, long ttlMs) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		try {
 			sync.pin(table, key, ttlMs);
@@ -164,7 +161,6 @@ public final class GridConnection implements Connection {
 	 * Product UNPIN helper.
 	 */
 	public void unpin(String table, Object key) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		try {
 			sync.unpin(table, key);
@@ -177,7 +173,6 @@ public final class GridConnection implements Connection {
 	 * Session timezone via Sync (also {@link #setClientInfo} with {@link #CLIENT_INFO_TIMEZONE}).
 	 */
 	public void setTimezone(String zoneId) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		try {
 			sync.setTimezone(zoneId);
@@ -200,7 +195,6 @@ public final class GridConnection implements Connection {
 
 	@Override
 	public void setAutoCommit(boolean autoCommit) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		if (this.autoCommit == autoCommit) {
 			return;
@@ -234,7 +228,6 @@ public final class GridConnection implements Connection {
 
 	@Override
 	public void commit() throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		if (autoCommit) {
 			return;
@@ -253,7 +246,6 @@ public final class GridConnection implements Connection {
 
 	@Override
 	public void rollback() throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		if (autoCommit) {
 			return;
@@ -404,7 +396,6 @@ public final class GridConnection implements Connection {
 
 	@Override
 	public Savepoint setSavepoint(String name) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		if (autoCommit) {
 			throw new SQLException("setSavepoint requires autoCommit=false", "25001");
@@ -423,7 +414,6 @@ public final class GridConnection implements Connection {
 
 	@Override
 	public void rollback(Savepoint savepoint) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		if (savepoint == null) {
 			throw new SQLException("savepoint required");
@@ -442,7 +432,6 @@ public final class GridConnection implements Connection {
 
 	@Override
 	public void releaseSavepoint(Savepoint savepoint) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		if (savepoint == null) {
 			throw new SQLException("savepoint required");
@@ -582,7 +571,6 @@ public final class GridConnection implements Connection {
 
 	@Override
 	public void setSchema(String schema) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		this.schema = schema;
 		if (schema != null && !schema.isBlank()) {
@@ -650,7 +638,6 @@ public final class GridConnection implements Connection {
 	}
 
 	SyncStatement syncStatement(String sql, Duration queryTimeout) throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		if (autoCommit || openTx == null) {
 			return sync.statement(sql, effectiveTimeout(queryTimeout));
@@ -664,7 +651,6 @@ public final class GridConnection implements Connection {
 
 	List<SyncResult> syncBatch(List<String> sqls, Duration queryTimeout)
 			throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		try {
 			if (autoCommit || openTx == null) {
@@ -678,7 +664,6 @@ public final class GridConnection implements Connection {
 
 	List<SyncResult> syncBatchBound(List<SqlWire.BatchStatement> statements, Duration queryTimeout)
 			throws SQLException {
-		ensureOpen();
 		ensureSpiLive();
 		try {
 			if (autoCommit || openTx == null) {

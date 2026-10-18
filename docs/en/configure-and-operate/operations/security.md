@@ -51,7 +51,7 @@ The client (reactive `grid://` or JDBC `jdbc:grid://`) passes the same credentia
 
 File `privileges.meta` is under the SQL data directory: `{grid.sql.data-dir}/catalog/privileges.meta` (default next to `./data-…/catalog`). Per-node local file, not shared NFS.
 
-**No cluster sync.** Replication does **not** ship `privileges.meta`. `CREATE USER` / `GRANT` / password rotation must be applied on **every** node that apps may hit (or bootstrap identical catalogs and copy the file as part of your node procedure). A user that exists only on the writer will AUTH-fail on a replica SQL port.
+**No cluster sync of the file.** Replication does **not** ship `privileges.meta` as a blob; privilege DDL (`CREATE USER` / `GRANT` / …) still rides the `_catalog` OpLog stream and is re-applied on peer hydrate / restart (local file is rewritten only when the in-memory catalog changes). Operators may also bootstrap identical catalogs by copying the file. A user that exists only on the writer will AUTH-fail on a replica SQL port until that DDL (or file) is present there.
 
 ## DDL limits
 

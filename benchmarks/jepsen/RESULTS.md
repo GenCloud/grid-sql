@@ -6,13 +6,13 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-10-14-jepsen-edge-matrix-1dc-join-shards |
-| date | 2026-10-14T18:35:42.6132926+03:00 |
-| git | 32f92bc |
+| stamp | 2026-10-16-jepsen-smoke |
+| date | 2026-10-16T12:25:37.8852708+03:00 |
+| git | 9375f53 |
 | host | local |
-| mode | `1dc-join-shards-chaos` |
-| outcome | `PASS` |
-| notes | join-shards=PASS |
+| mode | `smoke` |
+| outcome | `HARNESS_READY` |
+| notes | compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows) |
 
 ## History
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
@@ -875,3 +875,23 @@ Details + p50/p95/p99: [multidc/RESULTS.md](multidc/RESULTS.md).
 - full-jepsen: PASS
 - command: run-jepsen-join.ps1 join (time-limit=60)
 - notes: join-shards=PASS
+
+### 2026-10-16-jepsen-smoke
+- mode: smoke
+- outcome: HARNESS_READY
+- git: 9375f53
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-10-16-jepsen-smoke
+- mode: smoke
+- outcome: HARNESS_READY
+- git: 9375f53
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)

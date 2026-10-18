@@ -19,10 +19,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.mem.index.IndexType;
+import org.genfork.grid.serial.PrimaryKeyCodec;
 import org.genfork.grid.serial.SqlWireUtil;
 import org.genfork.grid.sql.ast.DmlAst.OnConflict;
 import org.genfork.grid.store.TableStore;
@@ -50,6 +52,21 @@ public final class SqlMergeMatchOps {
 	}
 
 	/**
+	 * {@code true} when conflict target is omitted or matches the full PRIMARY KEY column list.
+	 */
+	static boolean targetsPrimaryKey(TableSchema schema, List<String> targets) {
+		if (targets == null || targets.isEmpty()) {
+			return true;
+		}
+		final List<ColumnDef> pkColumns = schema.pkColumns();
+		final List<String> pkNames = new ArrayList<>(pkColumns.size());
+		for (int i = 0; i < pkColumns.size(); i++) {
+			pkNames.add(pkColumns.get(i).name());
+		}
+		return columnsEqualIgnoreCase(pkNames, targets);
+	}
+
+	/**
 	 * Lock key that serializes concurrent {@code ON CONFLICT} on the same UNIQUE target
 	 * (PK target reuses PK bytes; secondary UNIQUE uses a tagged wire blob).
 	 */
@@ -58,11 +75,8 @@ public final class SqlMergeMatchOps {
 		final List<String> targets = conflict.targetColumns() == null
 				? List.of()
 				: conflict.targetColumns();
-		if (targets.isEmpty()
-				|| (targets.size() == 1
-				&& targets.getFirst().equalsIgnoreCase(schema.pkColumn().name()))) {
-			final Object pk = row[schema.pkColumn().ordinal()];
-			return store.keyBytesForPk(pk);
+		if (targetsPrimaryKey(schema, targets)) {
+			return PrimaryKeyCodec.encodeRow(schema, row);
 		}
 		validateUniqueTarget(schema, targets);
 		int total = CONFLICT_ARBITER_MAGIC_LEN;
@@ -117,18 +131,15 @@ public final class SqlMergeMatchOps {
 	}
 
 	/**
-	 * Conflict target â' row key bytes (PK or UNIQUE/STRICT index wire match).
+	 * Conflict target → row key bytes (PK or UNIQUE/STRICT index wire match).
 	 */
 	static byte[] resolveConflictKey(TableStore store, Object[] row, OnConflict conflict) {
 		final TableSchema schema = store.schema();
 		final List<String> targets = conflict.targetColumns() == null
 				? List.of()
 				: conflict.targetColumns();
-		if (targets.isEmpty()
-				|| (targets.size() == 1
-				&& targets.getFirst().equalsIgnoreCase(schema.pkColumn().name()))) {
-			final Object pk = row[schema.pkColumn().ordinal()];
-			return store.keyBytesForPk(pk);
+		if (targetsPrimaryKey(schema, targets)) {
+			return PrimaryKeyCodec.encodeRow(schema, row);
 		}
 		validateUniqueTarget(schema, targets);
 		final List<Object> vals = new ArrayList<>(targets.size());
@@ -144,9 +155,8 @@ public final class SqlMergeMatchOps {
 
 	static byte[] resolveMatchKey(TableStore store, List<String> columns, List<Object> values) {
 		final TableSchema schema = store.schema();
-		if (columns.size() == 1
-				&& columns.getFirst().equalsIgnoreCase(schema.pkColumn().name())) {
-			return store.keyBytesForPk(values.getFirst());
+		if (targetsPrimaryKey(schema, columns)) {
+			return PrimaryKeyCodec.encodeValues(schema, values.toArray());
 		}
 		validateUniqueTarget(schema, columns);
 		final byte[][] want = new byte[columns.size()][];
@@ -164,6 +174,9 @@ public final class SqlMergeMatchOps {
 	}
 
 	static void validateUniqueTarget(TableSchema schema, List<String> columns) {
+		if (targetsPrimaryKey(schema, columns)) {
+			return;
+		}
 		for (IndexDef idx : schema.indexes()) {
 			if (idx.kind() != IndexType.STRICT) {
 				continue;
@@ -171,10 +184,6 @@ public final class SqlMergeMatchOps {
 			if (columnsEqualIgnoreCase(idx.columns(), columns)) {
 				return;
 			}
-		}
-		if (columns.size() == 1
-				&& columns.getFirst().equalsIgnoreCase(schema.pkColumn().name())) {
-			return;
 		}
 		throw new IllegalArgumentException(
 				"ON CONFLICT / MERGE target must be PRIMARY KEY or UNIQUE index columns");

@@ -45,7 +45,7 @@
 
 ## Права доступа (RBAC)
 
-- `CREATE USER` / `DROP USER` / `ALTER USER … PASSWORD`, `CREATE ROLE` / `DROP ROLE`, `GRANT` / `REVOKE` и `GRANT ROLE … TO user` — всё хранится в `privileges.meta` (локальный файл на узел; репликация его не доставляет — применяйте на каждом SQL-узле, куда ходят приложения). См. [безопасность](../configure-and-operate/operations/security.md).
+- `CREATE USER` / `DROP USER` / `ALTER USER … PASSWORD`, `CREATE ROLE` / `DROP ROLE`, `GRANT` / `REVOKE` и `GRANT ROLE … TO user` — всё хранится в `privileges.meta` (локальный файл на узел; blob репликация не развозит — privilege DDL идёт в OpLog `_catalog` и переигрывается при hydrate/restart на пире). См. [безопасность](../configure-and-operate/operations/security.md).
 - Пустой каталог пользователей означает вход без пароля, а первый созданный пользователь становится администратором.
 - Когда пользователи уже есть, AUTH в кадре обязателен, а права на таблицы проверяются, в том числе с обеих сторон JOIN.
 - Отдельной команды `REVOKE ROLE` нет: членство в роли снимается через `DROP ROLE`.

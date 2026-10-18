@@ -170,6 +170,10 @@ public void handle() {
 
 Instead of blocking inside a service, return `Mono` / `Flux` outward and compose with `flatMap`, `then`, `usingWhen`, `doFinally`.
 
+### EXEC errors
+
+Failed `execute` / `executeUpdate` / batch slots arrive with an enriched message: base text plus ` | sql=… binds=[…]` (`SqlExecErrorContextUtil`; SQL truncated to **512** chars, binds redacted). STRICT collisions keep `NonUniqueValueException` with the canonical shape `domain=… index=… value=[…] not unique for strict index.`; lock / replica-DML / ORCHID types are preserved; other failures wrap as `SqlExecException`. Same text on the JDBC path — [JDBC client](jdbc-tooling.md), [API reference](../api-reference/README.md).
+
 ## ReactiveSqlOps
 
 Package `org.genfork.grid.sql.client.ops` provides thin helpers over the same SPI — bind-all, `executeUpdate`, `fetchOne` / `fetchList` / `fetchExists`, ordered multi-step updates (`BoundSql`), and a `RowMapper`. They do **not** own transaction lifecycle (`begin` / `commit` / `close` stay with the caller). On the explicit sync edge (`main`, CLI, tests), use `SyncConnection` / `SyncTxContext` directly (or SyncAwait) rather than a separate ops façade.

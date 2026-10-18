@@ -93,6 +93,8 @@ There is no need to index the primary key separately. It determines the shard. E
 |-----------|----------------|
 | EQ on the full PK | Point read by key |
 | EQ on the leading column of a composite secondary index `(a, b)` | Prefix path on `(a, …)`; if a separate single-column / bitmap index on `a` exists and there is no `ORDER BY` on `b`, the plan may prefer the narrow index |
+| EQ on leading **and** non-leading columns of `(a, b)` (`a = ? AND b = ?`) | Prefix seek on `a`, then **residual** EQ on `b` (`CompositeIndexPrefixRewriteUtil`) — not “all index columns or nothing” |
+| `AND` of an indexed leg and an unindexed table residual | Indexed stream + residual filter; **no** empty pointer-intersection of index∩PK; EXPLAIN may show `Indexed And (residual left/right)` |
 | EQ only on a non-leading column | Composite `(a, b)` does not apply |
 | `ORDER BY` on the second composite column with EQ on the first | Keeps the ordered composite leaf |
 | `ORDER BY` on the PK ascending (no matching secondary order index) | May stream / sort from the PK leaf without requiring an external order index |

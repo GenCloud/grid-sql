@@ -27,6 +27,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.common.annotations.VisibleForTesting;
+import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstMode;
 import org.genfork.grid.mem.stage.WorkingSetBudget;
@@ -39,12 +41,12 @@ import org.genfork.grid.replication.netty.ReplicationRpcCodec.SealedShardPackMsg
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.snapshot.IndexCheckpointService;
 import org.genfork.grid.replication.snapshot.SnapshotService;
+import org.genfork.grid.replication.snapshot.sealed.SealedDumpSafetyUtil;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapReader;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.genfork.grid.diag.VisibilityDiag;
 
 /**
  * Sealed hydrate, working-set budgets, periodic dump, and snapshot install helpers.
@@ -57,10 +59,13 @@ public final class SealedHydrateService {
 	private static final Logger log = LoggerFactory.getLogger(SealedHydrateService.class);
 
 	/**
-	 * Sealed checkpoint cadence. Kept above short Capacity QG windows (45 s) so a dump
-	 * does not collide with living upsert fsync on the same volume.
+	 * Default sealed checkpoint cadence ({@code grid.durability.sealed-dump-interval-ms}).
+	 * Kept above short Capacity QG windows (45 s) so a dump does not collide with living
+	 * upsert fsync on the same volume.
 	 */
-	public static final long SEALED_DUMP_INTERVAL_MS = 180_000L;
+	public static final long SEALED_DUMP_INTERVAL_MS = 60_000L;
+	/** Floor for configured interval (reject pathologically tight dump loops). */
+	public static final long SEALED_DUMP_INTERVAL_MIN_MS = 15_000L;
 	private static final long SEALED_DUMP_FSYNC_PRESSURE_P50_NS = 1_500_000L;
 	private static final long SEALED_DUMP_FSYNC_MIN_SAMPLES = 16L;
 	private static final int INDEX_KEY_CATALOG_MAX_SHARD = 64;
@@ -76,6 +81,7 @@ public final class SealedHydrateService {
 	private final boolean enabled;
 	private final String hydrateMode;
 	private final int workingSetMaxEntries;
+	private final long sealedDumpIntervalMs;
 	private final AdaptiveDiskFirstController adaptiveDiskFirstController;
 	private final ReplicationNodeState nodeState;
 	private final OpLog opLog;
@@ -107,9 +113,29 @@ public final class SealedHydrateService {
 			HomologousRepair homologousRepair,
 			Map<String, ReplicaApplier> appliers
 	) {
+		this(enabled, hydrateMode, workingSetMaxEntries, SEALED_DUMP_INTERVAL_MS,
+				adaptiveDiskFirstController, nodeState, opLog, snapshotService,
+				indexCheckpointService, sealedGridMapService, homologousRepair, appliers);
+	}
+
+	public SealedHydrateService(
+			boolean enabled,
+			String hydrateMode,
+			int workingSetMaxEntries,
+			long sealedDumpIntervalMs,
+			AdaptiveDiskFirstController adaptiveDiskFirstController,
+			ReplicationNodeState nodeState,
+			OpLog opLog,
+			SnapshotService snapshotService,
+			IndexCheckpointService indexCheckpointService,
+			SealedGridMapService sealedGridMapService,
+			HomologousRepair homologousRepair,
+			Map<String, ReplicaApplier> appliers
+	) {
 		this.enabled = enabled;
 		this.hydrateMode = hydrateMode;
 		this.workingSetMaxEntries = workingSetMaxEntries;
+		this.sealedDumpIntervalMs = clampSealedDumpIntervalMs(sealedDumpIntervalMs);
 		this.adaptiveDiskFirstController = adaptiveDiskFirstController;
 		this.nodeState = nodeState;
 		this.opLog = opLog;
@@ -278,8 +304,27 @@ public final class SealedHydrateService {
 
 	public int dumpDomainSnapshot(String domainType) {
 		return sealedGridMapService != null
-				? sealedGridMapService.dumpDomain(domainType, opLog, nodeState)
+				? dumpDomainSealed(domainType)
 				: 0;
+	}
+
+	/**
+	 * Effective periodic sealed-dump interval after clamp.
+	 */
+	@VisibleForTesting
+	public long sealedDumpIntervalMs() {
+		return sealedDumpIntervalMs;
+	}
+
+	/**
+	 * Clamp configured interval to [{@link #SEALED_DUMP_INTERVAL_MIN_MS}, Long.MAX] with
+	 * default {@link #SEALED_DUMP_INTERVAL_MS} when {@code <= 0}.
+	 */
+	public static long clampSealedDumpIntervalMs(long configuredMs) {
+		if (configuredMs <= 0L) {
+			return SEALED_DUMP_INTERVAL_MS;
+		}
+		return Math.max(SEALED_DUMP_INTERVAL_MIN_MS, configuredMs);
 	}
 
 	/**
@@ -324,17 +369,53 @@ public final class SealedHydrateService {
 					ReplicationMetrics.oplogFsyncP50Ns());
 			return;
 		}
+		dumpAllDomainsInternal(false);
+	}
+
+	/**
+	 * Graceful stop / shutdown hook: sealed dump for all domains, bypassing fsync-pressure
+	 * skip. Open-TX / envelope defer gates remain. Does <em>not</em> truncate OpLog — keeps
+	 * prefix for torn-tail / tip-behind reopen; periodic dump still truncates.
+	 */
+	public void dumpAllDomainsForShutdown() {
+		dumpAllDomainsInternal(true);
+	}
+
+	private void dumpAllDomainsInternal(boolean shutdownForce) {
+		if (sealedGridMapService == null || appliers == null || appliers.isEmpty()) {
+			return;
+		}
+		final boolean truncateOpLog = !shutdownForce;
+		int domains = 0;
+		int rowsTotal = 0;
 		try {
 			for (String domain : appliers.keySet()) {
-				dumpDomainSealed(domain);
+				final int sealedRows = dumpDomainSealed(domain, truncateOpLog);
+				domains++;
+				rowsTotal += Math.max(0, sealedRows);
+			}
+			if (shutdownForce) {
+				log.info("Sealed shutdown dump domains={} rows={} truncateOpLog=false",
+						domains, rowsTotal);
 			}
 		} catch (RuntimeException ex) {
-			log.warn("Sealed checkpoint failed", ex);
+			log.warn(shutdownForce ? "Sealed shutdown dump failed" : "Sealed checkpoint failed", ex);
 		}
 	}
 
-	private void dumpDomainSealed(String domain) {
-		final int sealedRows = sealedGridMapService.dumpDomain(domain, opLog, nodeState);
+	private int dumpDomainSealed(String domain) {
+		return dumpDomainSealed(domain, true);
+	}
+
+	private int dumpDomainSealed(String domain, boolean truncateOpLog) {
+		if (sealedGridMapService == null || domain == null) {
+			return 0;
+		}
+		final ReplicaApplier applier = appliers.get(domain);
+		final SealedGridMapService.DumpDeferGate gate =
+				applier == null ? null : SealedDumpSafetyUtil.deferGate(applier);
+		final int sealedRows = sealedGridMapService.dumpDomain(
+				domain, opLog, nodeState, gate, truncateOpLog);
 		long maxWm = 0L;
 		for (String streamKey : opLog.streamKeys()) {
 			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domain)) {
@@ -350,8 +431,10 @@ public final class SealedHydrateService {
 		}
 		writeIndexKeyCatalog(domain, maxWm);
 		if (sealedRows > 0) {
-			log.debug("Sealed GridMap domain={} rows={}", domain, sealedRows);
+			log.debug("Sealed GridMap domain={} rows={} truncateOpLog={}",
+					domain, sealedRows, truncateOpLog);
 		}
+		return sealedRows;
 	}
 
 	public void restoreOrMarkIndexCheckpoint(String domainType, long maxSeq) {

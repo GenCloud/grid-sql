@@ -16,6 +16,7 @@ EXPLAIN SELECT * FROM t WHERE name = 'x';
 |------|---------|
 | `AQE_PARALLEL` | The query is admitted to a parallel chunk scan on this node |
 | `DIST_MAP` | The query is admitted to a map over slices of local shards |
+| `Indexed And (residual left/right)` | `AND` of an indexed leg and an unindexed residual — index stream + filter, not an empty index∩PK pointer intersect ([indexes](indexes.md)) |
 
 The planner does not dry-run a physical EXPLAIN just to estimate heaviness: `EXPLAIN` shows the chosen path, not “what another plan would have cost”.
 

@@ -29,7 +29,7 @@ First metrics: `orchid_r`, `applyLagStale`, `repair_issued` / `repair_applied`, 
 | Active site loss (`ASYNC_SHIP`) | RPO on Hold within lag is possible. New Active via claim; client `rediscoverWriter()` | [multi-site](multi-dc.md) |
 | Active site loss (`SYNC_VOTERS`) | Commits that passed quorum are already on voters. Same claim + `rediscoverWriter()`; cost is WAN on every write | [multi-site](multi-dc.md) |
 | Replica read rejected / `applyLagStale` | Do not “fix” in the client. Catch up first; `ha.max-stale-lag` | [replica reads](replica-reads.md) |
-| AUTH fail on replica after `CREATE USER` only on the writer | `privileges.meta` is per-node; replication does not ship it — apply on every SQL node | [security](security.md) |
+| AUTH fail on replica after `CREATE USER` only on the writer | Local `privileges.meta` is not shipped as a blob; privilege DDL rides `_catalog` OpLog and is re-applied on peer hydrate/restart — wait for catch-up, or copy the file at bootstrap | [security](security.md) |
 | `repair_issued` grows, `repair_applied` does not | HomologousRepair logs, disk, peer seq; no shared NFS `dataDir` | [monitoring](../monitoring.md), [replication state](../../understand/replication-state.md) |
 | After restore “open TX disappeared” | Expected: dirty work before COMMIT is not in OpLog | [PITR](pitr.md) |
 

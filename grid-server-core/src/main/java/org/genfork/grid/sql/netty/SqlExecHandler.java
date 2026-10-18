@@ -27,15 +27,16 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.google.common.annotations.VisibleForTesting;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.genfork.grid.metrics.DistributedQueryMetrics;
 import org.genfork.grid.metrics.SqlTxMetrics;
+import org.genfork.grid.net.NettyClientDisconnectUtil;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.EagerListRowWindowSource;
-import org.genfork.grid.sql.EagerListRowWindowSource;
 import org.genfork.grid.sql.SqlResult;
-import org.genfork.grid.sql.SqlRowWindowSource;
 import org.genfork.grid.sql.SqlRowWindowSource;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.sql.client.ServerMeta;
@@ -56,6 +57,7 @@ import org.genfork.grid.threading.ThreadService;
  * @since: 1.0
  */
 public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> {
+	private static final Logger log = LoggerFactory.getLogger(SqlExecHandler.class);
 	private static final int SERVER_PUSH_REQUEST_ID = 0;
 	private static final String STALE_OVERRIDE_NODE_ID = "stale-override";
 
@@ -195,6 +197,18 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		inFlightExec.clear();
 		interruptRegistry.clear();
 		super.channelInactive(ctx);
+	}
+
+	@Override
+	public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+		if (NettyClientDisconnectUtil.isBenignDisconnect(cause)) {
+			if (log.isDebugEnabled()) {
+				log.debug("SQL client disconnected: {}", cause.toString());
+			}
+		} else {
+			log.warn("SQL channel error: {}", cause.toString());
+		}
+		ctx.close();
 	}
 
 	@Override

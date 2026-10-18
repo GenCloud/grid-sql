@@ -51,6 +51,8 @@ public final class ReplicationMetrics {
 	private static final LongAdder ADAPTIVE_MODE_CHANGES = new LongAdder();
 	/** Overlay PIN blocked a swarmTick migrate for a shard. */
 	private static final LongAdder MIGRATE_IO_SUPPRESSED_PIN = new LongAdder();
+	/** Sealed dump shard skipped (open TX / envelope defer). */
+	private static final LongAdder SEALED_DUMP_DEFERRED = new LongAdder();
 
 	private static final long[] ORCHID_WAIT_NS = new long[LATENCY_SAMPLES];
 	private static final AtomicInteger ORCHID_WAIT_IDX = new AtomicInteger();
@@ -169,6 +171,14 @@ public final class ReplicationMetrics {
 	/** Samples recorded for OpLog / tip group force (pressure signal for sealed dump backoff). */
 	public static long oplogFsyncSampleCount() {
 		return OPLOG_FSYNC_COUNT.get();
+	}
+
+	public static void recordSealedDumpDeferred() {
+		SEALED_DUMP_DEFERRED.increment();
+	}
+
+	public static long sealedDumpDeferred() {
+		return SEALED_DUMP_DEFERRED.sum();
 	}
 
 	public static long oplogPushSent() {

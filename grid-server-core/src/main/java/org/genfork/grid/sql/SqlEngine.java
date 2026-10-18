@@ -550,7 +550,11 @@ public final class SqlEngine {
 				rejectDdlInTx(session);
 				final String schema = s.schemaScope() ? s.target() : session.currentSchema();
 				final String table = s.schemaScope() ? "*" : s.target();
-				privileges.grant(s.user(), schema, table, s.privileges());
+				// OpLog hydrate may replay GRANT after privileges.meta already loaded.
+				if (!(applyingReplicatedDdl.get()
+						&& privileges.containsAllGrants(s.user(), schema, table, s.privileges()))) {
+					privileges.grant(s.user(), schema, table, s.privileges());
+				}
 				publishPrivilegeDdl(sql);
 				yield SqlResult.ddl(SqlStatementTag.GRANT);
 			}
@@ -558,13 +562,19 @@ public final class SqlEngine {
 				rejectDdlInTx(session);
 				final String schema = s.schemaScope() ? s.target() : session.currentSchema();
 				final String table = s.schemaScope() ? "*" : s.target();
-				privileges.grantToRole(s.role(), schema, table, s.privileges());
+				if (!(applyingReplicatedDdl.get()
+						&& privileges.containsAllRoleGrants(s.role(), schema, table, s.privileges()))) {
+					privileges.grantToRole(s.role(), schema, table, s.privileges());
+				}
 				publishPrivilegeDdl(sql);
 				yield SqlResult.ddl(SqlStatementTag.GRANT);
 			}
 			case GrantRoleMembershipSql s -> {
 				rejectDdlInTx(session);
-				privileges.grantRoleMembership(s.user(), s.role());
+				if (!(applyingReplicatedDdl.get()
+						&& privileges.hasRoleMembership(s.user(), s.role()))) {
+					privileges.grantRoleMembership(s.user(), s.role());
+				}
 				publishPrivilegeDdl(sql);
 				yield SqlResult.ddl(SqlStatementTag.GRANT);
 			}
@@ -572,7 +582,11 @@ public final class SqlEngine {
 				rejectDdlInTx(session);
 				final String schema = s.schemaScope() ? s.target() : session.currentSchema();
 				final String table = s.schemaScope() ? "*" : s.target();
-				privileges.revoke(s.user(), schema, table, s.privileges());
+				// OpLog hydrate may replay REVOKE after privileges.meta already reflects it.
+				if (!(applyingReplicatedDdl.get()
+						&& privileges.lacksAllGrants(s.user(), schema, table, s.privileges()))) {
+					privileges.revoke(s.user(), schema, table, s.privileges());
+				}
 				publishPrivilegeDdl(sql);
 				yield SqlResult.ddl(SqlStatementTag.REVOKE);
 			}

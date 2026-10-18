@@ -138,6 +138,10 @@ DBeaver often defaults to `Auto-commit = OFF` (`Connection.setAutoCommit(false)`
 - **Temporal (`TIMESTAMP`):** `setObject(LocalDateTime)`, `getObject(…, LocalDateTime.class)`, `getTimestamp` (same contract as [grid-jooq README](../../../grid-jooq/README.md)).
 - **`RETURNING` → generated keys:** DML with `RETURNING` via `Statement.executeUpdate` / `PreparedStatement.executeUpdate`, then `getGeneratedKeys()` (jOOQ `SQLDialect.DEFAULT` + `returning()` path). Not a separate ResultSet from `executeQuery`.
 
+## EXEC / STRICT errors
+
+Server EXEC failures append ` | sql=… binds=[…]` (SQL ≤ **512** chars, binds redacted). JDBC surfaces that string as `SQLException.getMessage()`. STRICT / UNIQUE collisions use `NonUniqueValueException` text `domain=… index=… value=[…] not unique for strict index.` Details: [API reference](../api-reference/README.md), [Java client](java-client.md).
+
 ## A common error: `bad frameLen …`
 
 It means the socket is not speaking SQL frames. Almost always it is the wrong port: **5615 is the replication transport**, **15432 is SQL**. The other possibility is that SQL TCP is simply not enabled: check `grid.sql-server.enabled: true`.
@@ -146,6 +150,7 @@ It means the socket is not speaking SQL frames. Almost always it is the wrong po
 |---------|-------|
 | Class file version 69 | DBeaver/IDE on JDK < 25 — see above |
 | AUTH / empty catalog | Server expects users but URL has no credentials (or the reverse) |
+| `… not unique for strict index.` | STRICT UNIQUE collision — see EXEC / STRICT above |
 
 ## What not to do
 

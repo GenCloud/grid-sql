@@ -73,6 +73,39 @@ public class AndCondition implements FilterCondition {
 		long rowsReturned = 0;
 
 		try {
+			// Residual-only legs (unindexed Loc → PK searchAll) must not pointer-intersect with
+			// index postings: IndexPointerRef.equals compares native pointer when non-zero, so
+			// index ∩ PK-scan is empty. Keep indexed candidates; residual via matches().
+			final boolean leftIndexed = providesIndexCandidates(left, property2Index);
+			final boolean rightIndexed = providesIndexCandidates(right, property2Index);
+			if (leftIndexed && !rightIndexed) {
+				final IndexOperationResult leftOnly =
+						left.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
+				if (leftOnly == null) {
+					return IndexOperationResult.EMPTY;
+				}
+				rowsProcessed += leftOnly.getRowsProcessed();
+				rowsReturned = leftOnly.getSize();
+				if (queryPlanNode != null) {
+					ExplainQuery.annotateNode(queryPlanNode, "Indexed And (residual right)");
+				}
+				return leftOnly;
+			}
+			
+			if (rightIndexed && !leftIndexed) {
+				final IndexOperationResult rightOnly =
+						right.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
+				if (rightOnly == null) {
+					return IndexOperationResult.EMPTY;
+				}
+				rowsProcessed += rightOnly.getRowsProcessed();
+				rowsReturned = rightOnly.getSize();
+				if (queryPlanNode != null) {
+					ExplainQuery.annotateNode(queryPlanNode, "Indexed And (residual left)");
+				}
+				return rightOnly;
+			}
+
 			final IndexOperationResult leftResult = left.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
 			final IndexOperationResult rightResult = right.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);
 
@@ -143,5 +176,30 @@ public class AndCondition implements FilterCondition {
 	@Override
 	public String toPlanPartString() {
 		return "(" + left.toPlanPartString() + " AND " + right.toPlanPartString() + ")";
+	}
+
+	/**
+	 * True when this subtree can produce candidates from a scalar/composite index seek
+	 * (not unindexed PK {@code searchAll} residual).
+	 */
+	private static boolean providesIndexCandidates(
+			FilterCondition condition,
+			Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index
+	) {
+		if (condition instanceof CompositeIndexCondition) {
+			return true;
+		}
+		if (condition instanceof LogicalOperatorCondition loc) {
+			return property2Index != null && property2Index.containsKey(loc.getField());
+		}
+		if (condition instanceof AndCondition and) {
+			return providesIndexCandidates(and.getLeft(), property2Index)
+					|| providesIndexCandidates(and.getRight(), property2Index);
+		}
+		if (condition instanceof OrCondition or) {
+			return providesIndexCandidates(or.getLeft(), property2Index)
+					&& providesIndexCandidates(or.getRight(), property2Index);
+		}
+		return false;
 	}
 }

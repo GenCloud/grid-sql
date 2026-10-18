@@ -69,7 +69,7 @@ DDL внутри открытой транзакции отклоняется: �
 | Оператор | Что принимается | Ограничение |
 |----------|-----------------|-------------|
 | `INSERT` / `UPSERT` | `VALUES (…), (…)`, `INSERT … SELECT …`, необязательный список колонок, `ON CONFLICT`, `RETURNING` | Один apply-row / conflict / TX путь для VALUES и SELECT; set-op источники отклоняются; пропущенные колонки берут `DEFAULT`, если он объявлен |
-| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET колонка = значение, …` | Значения: литералы (в т.ч. `TIMESTAMP`), `EXCLUDED.колонка`, `COALESCE(…)`, clock-builtin; список колонок — PK или вторичный UNIQUE; повторный конфликт UNIQUE + `IDENTITY` обновляет на месте (без ghost PK) |
+| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET колонка = значение, …` | Значения: литералы (в т.ч. `TIMESTAMP`), `EXCLUDED.колонка`, `COALESCE(…)`, clock-builtin; список колонок — PK (в т.ч. составной) или вторичный UNIQUE; повторный конфликт с отдельной колонкой `IDENTITY` обновляет на месте (без ghost PK / без отказа NULL-id) |
 | `UPDATE` | Присваивания `SET`, необязательный `FROM`, обязательный `WHERE`, необязательный `RETURNING` | См. таблицу присваиваний ниже; отсутствующий PK → 0 строк, без empty seed (для upsert — `UPSERT`) |
 | `DELETE` | Обязательный `WHERE` | Удаления без условия нет, `RETURNING` тоже |
 | `TRUNCATE TABLE` | Полная очистка таблицы | Тот же путь журнала / TX, что у DELETE: при сбое — отказ клиенту, без частичной видимости |

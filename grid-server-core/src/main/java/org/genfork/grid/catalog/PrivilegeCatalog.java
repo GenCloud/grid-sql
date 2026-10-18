@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.catalog;
 
-import org.genfork.grid.fs.GridFs;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -29,6 +27,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.spec.InvalidKeySpecException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumSet;
@@ -38,11 +37,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
+
+import com.google.common.annotations.VisibleForTesting;
+
+import org.genfork.grid.fs.GridFs;
 
 /**
  * Minimal in-memory users, roles, and schema/table grants. Empty catalog keeps open-auth behavior.
@@ -84,6 +88,7 @@ public final class PrivilegeCatalog {
 	 * reconnect storms; cleared on any user/role mutation. Does not weaken first-factor KDF.
 	 */
 	private final AtomicReference<CachedAuth> authSuccessCache = new AtomicReference<>();
+	private final AtomicInteger persistInvocations = new AtomicInteger(0);
 	private final Path metaFile;
 
 	public PrivilegeCatalog() {
@@ -393,6 +398,55 @@ public final class PrivilegeCatalog {
 		});
 	}
 
+	/**
+	 * Whether {@code user} already holds every privilege in {@code privileges} on schema/table.
+	 */
+	public boolean containsAllGrants(String user, String schema, String table, Set<SqlPrivilege> privileges) {
+		if (privileges == null || privileges.isEmpty()) {
+			return true;
+		}
+		final Set<SqlPrivilege> assigned = grants.get(key(normalize(user), schema, table));
+		return assigned != null && assigned.containsAll(privileges);
+	}
+
+	/**
+	 * Whether {@code user} holds none of {@code privileges} on schema/table (REVOKE already applied).
+	 */
+	public boolean lacksAllGrants(String user, String schema, String table, Set<SqlPrivilege> privileges) {
+		if (privileges == null || privileges.isEmpty()) {
+			return true;
+		}
+		final Set<SqlPrivilege> assigned = grants.get(key(normalize(user), schema, table));
+		if (assigned == null || assigned.isEmpty()) {
+			return true;
+		}
+		for (SqlPrivilege privilege : privileges) {
+			if (assigned.contains(privilege)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether {@code role} already holds every privilege in {@code privileges} on schema/table.
+	 */
+	public boolean containsAllRoleGrants(String role, String schema, String table, Set<SqlPrivilege> privileges) {
+		if (privileges == null || privileges.isEmpty()) {
+			return true;
+		}
+		final Set<SqlPrivilege> assigned = roleGrants.get(key(normalize(role), schema, table));
+		return assigned != null && assigned.containsAll(privileges);
+	}
+
+	/**
+	 * Whether {@code user} is already a member of {@code role}.
+	 */
+	public boolean hasRoleMembership(String user, String role) {
+		final Set<String> assigned = memberships.get(normalize(user));
+		return assigned != null && assigned.contains(normalize(role));
+	}
+
 	public void revoke(String user, String schema, String table, Set<SqlPrivilege> privileges) {
 		mutateAndPersist(() -> {
 			final Set<SqlPrivilege> assigned = grants.get(key(normalize(user), schema, table));
@@ -417,56 +471,18 @@ public final class PrivilegeCatalog {
 	public byte[] toSnapshotBytes() {
 		mutationLock.lock();
 		try {
-			final ByteArrayOutputStream raw = new ByteArrayOutputStream();
-			final DataOutputStream out = new DataOutputStream(raw);
-			out.writeInt(SNAPSHOT_MAGIC);
-			out.writeInt(SNAPSHOT_VERSION);
-			out.writeInt(users.size());
-			for (Map.Entry<String, UserRecord> entry : users.entrySet()) {
-				writeUtf(out, entry.getKey());
-				final UserRecord record = entry.getValue();
-				out.writeInt(record.salt().length);
-				out.write(record.salt());
-				out.writeInt(record.passwordHash().length);
-				out.write(record.passwordHash());
-				out.writeBoolean(record.administrator());
-				out.writeInt(record.kdfKind());
-			}
-			out.writeInt(grants.size());
-			for (Map.Entry<String, Set<SqlPrivilege>> entry : grants.entrySet()) {
-				writeUtf(out, entry.getKey());
-				out.writeInt(entry.getValue().size());
-				for (SqlPrivilege privilege : entry.getValue()) {
-					writeUtf(out, privilege.name());
-				}
-			}
-			out.writeInt(roles.size());
-			for (String role : roles) {
-				writeUtf(out, role);
-			}
-			out.writeInt(memberships.size());
-			for (Map.Entry<String, Set<String>> entry : memberships.entrySet()) {
-				writeUtf(out, entry.getKey());
-				out.writeInt(entry.getValue().size());
-				for (String role : entry.getValue()) {
-					writeUtf(out, role);
-				}
-			}
-			out.writeInt(roleGrants.size());
-			for (Map.Entry<String, Set<SqlPrivilege>> entry : roleGrants.entrySet()) {
-				writeUtf(out, entry.getKey());
-				out.writeInt(entry.getValue().size());
-				for (SqlPrivilege privilege : entry.getValue()) {
-					writeUtf(out, privilege.name());
-				}
-			}
-			out.flush();
-			return raw.toByteArray();
-		} catch (IOException ex) {
-			throw new IllegalStateException("privilege snapshot encode failed", ex);
+			return encodeSnapshotUnlocked();
 		} finally {
 			mutationLock.unlock();
 		}
+	}
+
+	/**
+	 * Disk write count for {@code privileges.meta} (tests: hydrate no-op / persist-if-changed).
+	 */
+	@VisibleForTesting
+	public int persistInvocations() {
+		return persistInvocations.get();
 	}
 
 	/**
@@ -580,11 +596,15 @@ public final class PrivilegeCatalog {
 	private void mutateAndPersist(Runnable mutation) {
 		mutationLock.lock();
 		try {
-			final byte[] previous = toSnapshotBytes();
+			final byte[] previous = encodeSnapshotUnlocked();
 			try {
 				mutation.run();
+				final byte[] next = encodeSnapshotUnlocked();
+				if (Arrays.equals(previous, next)) {
+					return;
+				}
 				authSuccessCache.set(null);
-				persist();
+				persistBytes(next);
 			} catch (RuntimeException ex) {
 				replaceSnapshotBytes(previous);
 				throw ex;
@@ -595,13 +615,70 @@ public final class PrivilegeCatalog {
 	}
 
 	private void persist() {
+		persistBytes(encodeSnapshotUnlocked());
+	}
+
+	private void persistBytes(byte[] snapshot) {
 		if (metaFile == null) {
 			return;
 		}
 		try {
-			GridFs.writeAtomic(metaFile, toSnapshotBytes());
+			GridFs.writeAtomic(metaFile, snapshot);
+			persistInvocations.incrementAndGet();
 		} catch (IOException ex) {
 			throw new IllegalStateException("Failed to persist privilege catalog " + metaFile, ex);
+		}
+	}
+
+	private byte[] encodeSnapshotUnlocked() {
+		try {
+			final ByteArrayOutputStream raw = new ByteArrayOutputStream();
+			final DataOutputStream out = new DataOutputStream(raw);
+			out.writeInt(SNAPSHOT_MAGIC);
+			out.writeInt(SNAPSHOT_VERSION);
+			out.writeInt(users.size());
+			for (Map.Entry<String, UserRecord> entry : users.entrySet()) {
+				writeUtf(out, entry.getKey());
+				final UserRecord record = entry.getValue();
+				out.writeInt(record.salt().length);
+				out.write(record.salt());
+				out.writeInt(record.passwordHash().length);
+				out.write(record.passwordHash());
+				out.writeBoolean(record.administrator());
+				out.writeInt(record.kdfKind());
+			}
+			out.writeInt(grants.size());
+			for (Map.Entry<String, Set<SqlPrivilege>> entry : grants.entrySet()) {
+				writeUtf(out, entry.getKey());
+				out.writeInt(entry.getValue().size());
+				for (SqlPrivilege privilege : entry.getValue()) {
+					writeUtf(out, privilege.name());
+				}
+			}
+			out.writeInt(roles.size());
+			for (String role : roles) {
+				writeUtf(out, role);
+			}
+			out.writeInt(memberships.size());
+			for (Map.Entry<String, Set<String>> entry : memberships.entrySet()) {
+				writeUtf(out, entry.getKey());
+				out.writeInt(entry.getValue().size());
+				for (String role : entry.getValue()) {
+					writeUtf(out, role);
+				}
+			}
+			out.writeInt(roleGrants.size());
+			for (Map.Entry<String, Set<SqlPrivilege>> entry : roleGrants.entrySet()) {
+				writeUtf(out, entry.getKey());
+				out.writeInt(entry.getValue().size());
+				for (SqlPrivilege privilege : entry.getValue()) {
+					writeUtf(out, privilege.name());
+				}
+			}
+			out.flush();
+			return raw.toByteArray();
+		} catch (IOException ex) {
+			throw new IllegalStateException("privilege snapshot encode failed", ex);
 		}
 	}
 

@@ -386,6 +386,28 @@ public final class TxEnvelopeCoordinator {
 		return applyOpen.containsKey(txId);
 	}
 
+	/**
+	 * {@code true} when a non-aborted apply envelope still lists {@code domain#shard}
+	 * in its membership (including after that stream's local {@code TX_COMMIT} while
+	 * other streams have not completed — staging not yet flushed to the map).
+	 */
+	public boolean hasOpenApplyStagingForStream(String domain, int shard) {
+		if (domain == null) {
+			return false;
+		}
+		for (ApplyEnvelope env : applyOpen.values()) {
+			if (env.aborted) {
+				continue;
+			}
+			for (TxEnvelopeCodec.StreamRef ref : env.expected) {
+				if (domain.equals(ref.domain()) && ref.shard() == shard) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	public boolean hasOpenShipEnvelope(long txId) {
 		return shipOpen.containsKey(txId);
 	}

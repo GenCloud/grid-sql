@@ -23,6 +23,7 @@ import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.overlay.OverlayStore;
 import org.genfork.grid.replication.ReplicationCoordinator;
+import org.genfork.grid.replication.SealedHydrateService;
 import org.genfork.grid.sql.netty.SqlServer;
 import org.genfork.grid.sql.tx.DistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
@@ -121,6 +122,7 @@ public final class SqlServerRuntime implements AutoCloseable {
 		private boolean durability = true;
 		private String hydrateMode = "FULL";
 		private int workingSetMaxEntries = 0;
+		private long sealedDumpIntervalMs = SealedHydrateService.SEALED_DUMP_INTERVAL_MS;
 		private boolean adaptiveDiskFirst = true;
 		private OverlayStore overlayStore;
 		private long autoPinTtlMs;
@@ -197,6 +199,12 @@ public final class SqlServerRuntime implements AutoCloseable {
 			return this;
 		}
 
+		/** Periodic sealed GridMap dump interval (ms); clamped in SealedHydrateService. */
+		public Builder sealedDumpIntervalMs(long sealedDumpIntervalMs) {
+			this.sealedDumpIntervalMs = sealedDumpIntervalMs;
+			return this;
+		}
+
 		/** Adaptive disk-first WS / LAZY by heap pressure (default true when durability on). */
 		public Builder adaptiveDiskFirst(boolean adaptiveDiskFirst) {
 			this.adaptiveDiskFirst = adaptiveDiskFirst;
@@ -235,6 +243,7 @@ public final class SqlServerRuntime implements AutoCloseable {
 				props.getDurability().setEnabled(true);
 				props.getDurability().setHydrateMode(hydrateMode);
 				props.getDurability().setWorkingSetMaxEntries(workingSetMaxEntries);
+				props.getDurability().setSealedDumpIntervalMs(sealedDumpIntervalMs);
 				props.getDurability().setAdaptiveDiskFirst(adaptiveDiskFirst);
 				props.getReplication().setEnabled(false);
 				props.getReplication().setNodeId("sql-solo");

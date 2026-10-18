@@ -138,6 +138,10 @@ Grid **отклоняет DDL внутри открытой транзакции
 - **Temporal (`TIMESTAMP`):** `setObject(LocalDateTime)`, `getObject(…, LocalDateTime.class)`, `getTimestamp` (тот же контракт, что в [grid-jooq README](../../../grid-jooq/README.md)).
 - **`RETURNING` → generated keys:** DML с `RETURNING` через `Statement.executeUpdate` / `PreparedStatement.executeUpdate`, затем `getGeneratedKeys()` (путь jOOQ `SQLDialect.DEFAULT` + `returning()`). Это не отдельный ResultSet от `executeQuery`.
 
+## Ошибки EXEC / STRICT
+
+Сбои EXEC на сервере дополняются хвостом ` | sql=… binds=[…]` (SQL ≤ **512** символов, binds редактируются). JDBC отдаёт эту строку в `SQLException.getMessage()`. Коллизии STRICT / UNIQUE — текст `NonUniqueValueException`: `domain=… index=… value=[…] not unique for strict index.` Подробнее: [справочник API](../api-reference/README.md), [Java-клиент](java-client.md).
+
 ## Частая ошибка: `bad frameLen …`
 
 Значит, на сокете нет SQL-фреймов Grid. Почти всегда это неверный порт: **5615 — транспорт репликации**, **15432 — SQL**. Второй вариант — SQL TCP просто не включён: проверьте `grid.sql-server.enabled: true`.
@@ -146,6 +150,7 @@ Grid **отклоняет DDL внутри открытой транзакции
 |---------|---------|
 | Class file version 69 | DBeaver/IDE на JDK < 25 — см. выше |
 | AUTH / пустой каталог | Сервер ждёт пользователей, а URL без credentials (или наоборот) |
+| `… not unique for strict index.` | Коллизия STRICT UNIQUE — см. EXEC / STRICT выше |
 
 ## Чего не делать
 

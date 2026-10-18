@@ -117,7 +117,8 @@ public final class RowEncoder {
 
 	public static Object coerce(ColumnDef col, Object raw, ZoneId zone) {
 		if (raw == null) {
-			if (!col.nullable() && !col.primaryKey()) {
+			// IDENTITY may be null mid-pipeline until fillIdentityDefaults (ON CONFLICT probe).
+			if (!col.nullable() && !col.primaryKey() && !col.identity()) {
 				throw new IllegalArgumentException("NULL not allowed for " + col.name());
 			}
 			return null;

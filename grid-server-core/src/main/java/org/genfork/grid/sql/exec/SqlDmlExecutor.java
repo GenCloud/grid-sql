@@ -185,15 +185,21 @@ public final class SqlDmlExecutor {
 	}
 
 	/**
-	 * {@code ON CONFLICT} on PK (or omitted target) needs IDENTITY before probe; secondary UNIQUE defers it.
+	 * Early IDENTITY fill only when conflict target is the PRIMARY KEY and a PK column is itself
+	 * {@code IDENTITY}. Composite PK with a separate non-PK IDENTITY defers fill until miss
+	 * (secondary UNIQUE defer for anti-ghost stays unchanged).
 	 */
 	private static boolean conflictTargetsPrimaryKey(TableSchema schema, OnConflict conflict) {
-		final List<String> targets = conflict.targetColumns();
-		if (targets == null || targets.isEmpty()) {
-			return true;
+		if (!SqlMergeMatchOps.targetsPrimaryKey(schema, conflict.targetColumns())) {
+			return false;
 		}
-		return targets.size() == 1
-				&& targets.getFirst().equalsIgnoreCase(schema.pkColumn().name());
+		final List<ColumnDef> pkColumns = schema.pkColumns();
+		for (int i = 0; i < pkColumns.size(); i++) {
+			if (pkColumns.get(i).identity()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
