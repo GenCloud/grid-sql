@@ -536,11 +536,10 @@ public class QueryOptimizer {
 		}
 
 		if (!hasAllIndexFields) {
-			// Left EQ-prefix on composite (wire): always rewrite; ORDER BY only sets ordered-leaf flag.
+			// Left EQ-prefix on composite (wire): keep non-prefix EQ as residual on the same seek.
 			if (indexFields.size() >= 2
 					&& fieldToFilterMap.containsKey(indexFields.getFirst())
-					&& fieldToFilterMap.get(indexFields.getFirst()).getOperator() == LogicalOperatorCondition.Operator.EQ
-					&& otherFilters.isEmpty()) {
+					&& fieldToFilterMap.get(indexFields.getFirst()).getOperator() == LogicalOperatorCondition.Operator.EQ) {
 				int prefixLen = 0;
 				for (String field : indexFields) {
 					final LogicalOperatorCondition f = fieldToFilterMap.get(field);
@@ -560,8 +559,11 @@ public class QueryOptimizer {
 							return new DnfResult(andOperator, false);
 						}
 						final byte[] prefixVal = SqlWireUtil.toGenericArray(fieldToFilterMap.get(prefixField).getValues()[0]);
+						final CompositeIndexCondition prefix =
+								new CompositeIndexCondition(prefixVal, prefixField, index);
 						return new DnfResult(
-								new CompositeIndexCondition(prefixVal, prefixField, index),
+								CompositeIndexPrefixRewriteUtil.withResidual(
+										prefix, fieldToFilterMap, indexFields, prefixLen, otherFilters),
 								orderMatched
 						);
 					}
@@ -569,8 +571,11 @@ public class QueryOptimizer {
 					for (int i = 0; i < prefixLen; i++) {
 						prefixKey[i] = SqlWireUtil.toGenericArray(fieldToFilterMap.get(indexFields.get(i)).getValues()[0]);
 					}
+					final CompositeIndexCondition prefix =
+							new CompositeIndexCondition(prefixKey, index, true);
 					return new DnfResult(
-							new CompositeIndexCondition(prefixKey, index, true),
+							CompositeIndexPrefixRewriteUtil.withResidual(
+									prefix, fieldToFilterMap, indexFields, prefixLen, otherFilters),
 							orderMatched
 					);
 				}

@@ -15,6 +15,7 @@
  */
 package org.genfork.grid.replication;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationProps;
 import org.genfork.grid.diag.VisibilityDiag;
@@ -282,6 +283,8 @@ public class ReplicationCoordinator {
 		final String hydrateMode = SealedHydrateService.normalizeHydrateMode(durability.getHydrateMode());
 		final int workingSetMaxEntries = Math.max(0, durability.getWorkingSetMaxEntries());
 		final boolean adaptiveDiskFirst = durability.isAdaptiveDiskFirst();
+		final long sealedDumpIntervalMs = SealedHydrateService.clampSealedDumpIntervalMs(
+				durability.getSealedDumpIntervalMs());
 
         if (!enabled) {
 			this.adaptiveDiskFirstController = null;
@@ -387,7 +390,19 @@ public class ReplicationCoordinator {
 		this.peerMembershipService = new PeerMembershipService(true, crossDcEnabled, repairEnabled, nodeState, opLog, orchidNode, nettyTransport, sparseCatchUp, homologousRepair, publisher, crossDcPublisher, peers, regionClaimService);
 		this.peerMembershipService.setSealedGridMapService(sealedGridMapService);
 		this.txMarkerService = new TxMarkerService(true, crossDcEnabled, nodeState, opLog, streamOpLogAppender, orchidNode, publisher, crossDcPublisher, homologousRepair);
-		this.sealedHydrateService = new SealedHydrateService(true, hydrateMode, workingSetMaxEntries, adaptiveDiskFirstController, nodeState, opLog, snapshotService, this.indexCheckpointService, sealedGridMapService, homologousRepair, appliers);
+		this.sealedHydrateService = new SealedHydrateService(
+				true,
+				hydrateMode,
+				workingSetMaxEntries,
+				sealedDumpIntervalMs,
+				adaptiveDiskFirstController,
+				nodeState,
+				opLog,
+				snapshotService,
+				this.indexCheckpointService,
+				sealedGridMapService,
+				homologousRepair,
+				appliers);
 		publisher.setPeers(peers);
 		crossDcPublisher.setRemotePeers(peers);
 		if (peerTransportEnabled) {
@@ -437,7 +452,12 @@ public class ReplicationCoordinator {
 		// Schema barriers require ORCHID sync + phase-ranked proposer (defer on cold start / replica).
 		backgroundScheduler.scheduleAtFixedRate(this::flushPendingSchemaBarriers, 200, 500, TimeUnit.MILLISECONDS);
 		// Periodic sealed GridMap checkpoint (skip under OpLog fsync pressure).
-		backgroundScheduler.scheduleAtFixedRate(sealedHydrateService::maybeDumpSealedAllDomains, SealedHydrateService.SEALED_DUMP_INTERVAL_MS, SealedHydrateService.SEALED_DUMP_INTERVAL_MS, TimeUnit.MILLISECONDS);
+		final long dumpIntervalMs = sealedHydrateService.sealedDumpIntervalMs();
+		backgroundScheduler.scheduleAtFixedRate(
+				sealedHydrateService::maybeDumpSealedAllDomains,
+				dumpIntervalMs,
+				dumpIntervalMs,
+				TimeUnit.MILLISECONDS);
 		if (peerTransportEnabled && swarmEnabled) {
 			backgroundScheduler.scheduleAtFixedRate(this::swarmTick, swarm.scoreWindowMs(), swarm.scoreWindowMs(), TimeUnit.MILLISECONDS);
 		}
@@ -503,6 +523,13 @@ public class ReplicationCoordinator {
 		}
 		if (peerTransportEnabled) {
 			nettyTransport.close();
+		}
+		if (sealedHydrateService != null) {
+			try {
+				sealedHydrateService.dumpAllDomainsForShutdown();
+			} catch (RuntimeException ex) {
+				log.warn("Sealed shutdown dump failed: {}", ex.toString());
+			}
 		}
 		try {
 			opLog.close();
@@ -876,6 +903,12 @@ public class ReplicationCoordinator {
 	 */
 	public int dumpDomainSnapshot(String domainType) {
 		return sealedHydrateService == null ? 0 : sealedHydrateService.dumpDomainSnapshot(domainType);
+	}
+
+	/** Effective sealed dump interval after clamp; {@code 0} when durability off. */
+	@VisibleForTesting
+	public long sealedDumpIntervalMsForTest() {
+		return sealedHydrateService == null ? 0L : sealedHydrateService.sealedDumpIntervalMs();
 	}
 
 	/**

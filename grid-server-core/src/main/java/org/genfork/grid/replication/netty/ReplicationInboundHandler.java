@@ -45,6 +45,7 @@ import org.genfork.grid.replication.repair.RepairCommandType;
 import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
 import org.genfork.grid.replication.tx.OpLogTxUnits;
+import org.genfork.grid.net.NettyClientDisconnectUtil;
 import org.genfork.grid.threading.ThreadService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -465,7 +466,13 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 
 	@Override
 	public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-		log.warn("Replication channel error: {}", cause.toString());
+		if (NettyClientDisconnectUtil.isBenignDisconnect(cause)) {
+			if (log.isDebugEnabled()) {
+				log.debug("Replication peer disconnected: {}", cause.toString());
+			}
+		} else {
+			log.warn("Replication channel error: {}", cause.toString());
+		}
 		ctx.close();
 	}
 }

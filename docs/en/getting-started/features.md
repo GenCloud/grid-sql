@@ -45,7 +45,7 @@ See [storage](../understand/storage-sealed-gmap.md), [durability](../configure-a
 
 ## Privileges (RBAC)
 
-- `CREATE USER` / `DROP USER` / `ALTER USER … PASSWORD`, `CREATE ROLE` / `DROP ROLE`, `GRANT` / `REVOKE`, and `GRANT ROLE … TO user`, stored in `privileges.meta` (per-node local file; replication does not ship it — apply on every SQL node apps may hit). See [security](../configure-and-operate/operations/security.md).
+- `CREATE USER` / `DROP USER` / `ALTER USER … PASSWORD`, `CREATE ROLE` / `DROP ROLE`, `GRANT` / `REVOKE`, and `GRANT ROLE … TO user`, stored in `privileges.meta` (per-node local file; replication does not ship the blob — privilege DDL rides `_catalog` OpLog and is re-applied on peer hydrate/restart). See [security](../configure-and-operate/operations/security.md).
 - An empty catalog means open access, and the first user created becomes administrator.
 - Once users exist, AUTH on the wire is mandatory and table privileges are checked **after** name resolution (session schema / qualifier), including both sides of a JOIN — not via a global bare-name scan.
 - There is no separate `REVOKE ROLE`; membership is removed with `DROP ROLE`.

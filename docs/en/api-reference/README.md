@@ -16,6 +16,8 @@ Product SPI lives in **`grid-sql-client`** (apps) and **`grid-server-core`** (en
 | Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without `rediscoverWriter()` |
 | TX / DML on a read URL | `readEndpoints` / `READ_REPLICA` are SELECT/EXPLAIN only; writes always go to the writer |
 | Health readiness DOWN at start | ORCHID not synced yet — expected; do not send traffic |
+| EXEC error with ` \| sql=… binds=[…]` | Server enriches failures via `SqlExecErrorContextUtil` (SQL truncated to **512** chars, binds redacted); JDBC maps the same text into `SQLException` |
+| `domain=… index=… value=[…] not unique for strict index.` | STRICT / UNIQUE collision (`NonUniqueValueException`); typed errors keep their class; other failures wrap as `SqlExecException` |
 
 ## Client SPI (`grid-sql-client`)
 
@@ -71,7 +73,7 @@ Next: [java-client](../develop/java-client.md), [transactions](../develop/transa
 
 Apps should **not** embed `SqlEngine` remotely — talk `grid://` to a starter/node. Boot wiring: [spring-boot](../develop/spring-boot.md).
 
-TCP listen session cap is **8** open contexts per channel (set `grid.sql-server.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` (per-node; replication does not ship it) — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
+TCP listen session cap is **8** open contexts per channel (set `grid.sql-server.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` (per-node local file; replication does **not** ship the blob — privilege DDL rides `_catalog` OpLog) — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC client
 

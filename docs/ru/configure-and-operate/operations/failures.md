@@ -29,7 +29,7 @@
 | Падение Active-ЦОД (`ASYNC_SHIP`) | Возможен RPO на Hold в пределах отставания. Новый Active через claim; клиент — `rediscoverWriter()` | [несколько ЦОД](multi-dc.md) |
 | Падение Active-ЦОД (`SYNC_VOTERS`) | Свежие коммиты с кворумом уже на voters. Тот же claim + `rediscoverWriter()`; цена — WAN на каждую запись | [несколько ЦОД](multi-dc.md) |
 | Чтение с реплики отклонено / `applyLagStale` | Не «лечить» клиентом. Сначала подтягивание; порог `ha.max-stale-lag` | [чтение с реплики](replica-reads.md) |
-| AUTH fail на реплике после `CREATE USER` только на пишущем | `privileges.meta` на каждом узле; репликация не доставляет — применяйте на каждом SQL-узле | [безопасность](security.md) |
+| AUTH fail на реплике после `CREATE USER` только на пишущем | Локальный `privileges.meta` не развозится как blob; privilege DDL идёт в OpLog `_catalog` и переигрывается при hydrate/restart на пире — дождитесь catch-up или скопируйте файл при bootstrap | [безопасность](security.md) |
 | `repair_issued` растёт, `repair_applied` нет | Логи HomologousRepair, диск, seq на пирах; не общий NFS `dataDir` | [мониторинг](../monitoring.md), [состояние репликации](../../understand/replication-state.md) |
 | После restore «пропали» открытые TX | Ожидаемо: dirty до COMMIT не в OpLog | [PITR](pitr.md) |
 

@@ -7,12 +7,14 @@ Filesystem helpers shared by catalog, sealed files, OpLog, locus, overlay and te
 | `Platform.current()` | Windows versus Unix-like |
 | `GridFs.createDirs` / `createParentDirs` | Ensure directories exist |
 | `GridFs.writeAtomic` (bytes, String, `AtomicWriter`) | Sibling `.tmp` plus `ATOMIC_MOVE` |
-| `GridFs.moveAtomic` | Atomic replace under the same rule |
+| `GridFs.moveAtomic` | Atomic replace (`ATOMIC_MOVE` + `REPLACE_EXISTING`) |
 | `GridFs.readAll` / `readLines` / `readString` | Reads, UTF-8 by default |
 | `GridFs.writeString` / `appendString` | Non-atomic text, for example appending DDL |
 | `GridFs.mapReadOnly` / `unmap` | Read-only memory mapping |
 
 If the filesystem does not support `ATOMIC_MOVE`, writers throw `IOException` — the same stance as sealed GMAP, because a refusal is better than a silent half-write. No Reactor `.block()` inside.
+
+On **Windows**, `GridFs.moveAtomic` retries transient `AccessDeniedException` on `REPLACE_EXISTING` with a bounded backoff (AV/indexer sharing violations on non-mmap meta such as `privileges.meta` and `index-ckpt`). After the budget is exhausted the error is fail-closed — there is no non-atomic copy fallback. Call only from sync FS boundaries (boot / logic VT / sealed workers), never Netty EL. Live mmap sealed overwrite remains a separate path: callers must `closeForOverwrite` before REPLACE (G-00001); retry does not replace that unmap.
 
 ## Related
 

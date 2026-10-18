@@ -79,6 +79,8 @@ The lock lifecycle is designed not to hold up SQL or the network:
 
 Neither lock may be held while SQL executes, while waiting for quorum, or while waiting on a Netty network thread. That constraint is what keeps a slow disk from turning into a stalled event loop.
 
+Above the mmap locks, `SealedReaderLifecycleGate` (per `domain#shard`) serializes exclusive open / swap / close against **pinned** iterate: FULL hydrate and HELLO sealed pack hold pins across the scan so a concurrent REPLACE cannot unmap under the reader.
+
 ## Seal and truncate
 
 1. Mutations land in the OpLog first; nothing is visible before the journal confirms.

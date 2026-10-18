@@ -69,7 +69,7 @@ Positional `?` parameters are materialized into SQL literals before parsing, so 
 | Statement | Accepted | Restriction |
 |-----------|----------|-------------|
 | `INSERT` / `UPSERT` | `VALUES (…), (…)`, `INSERT … SELECT …`, optional column list, `ON CONFLICT`, `RETURNING` | Same apply-row / conflict / TX path for VALUES and SELECT; set-op SELECT sources rejected; omitted columns take column `DEFAULT` when declared |
-| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET col = value, …` | Values may be literals (incl. `TIMESTAMP`), `EXCLUDED.col`, `COALESCE(…)`, or clock builtins; optional column list = PK or secondary UNIQUE; repeated conflict on UNIQUE + `IDENTITY` updates in place (no ghost PK) |
+| `ON CONFLICT` | `DO NOTHING`, `DO UPDATE SET col = value, …` | Values may be literals (incl. `TIMESTAMP`), `EXCLUDED.col`, `COALESCE(…)`, or clock builtins; optional column list = PK (incl. composite) or secondary UNIQUE; repeated conflict with a separate `IDENTITY` column updates in place (no ghost PK / no NULL-id reject) |
 | `UPDATE` | `SET` assignments, optional `FROM source`, mandatory `WHERE`, optional `RETURNING` | See the assignment table below; missing PK → 0 rows, no empty seed (use `UPSERT` to insert) |
 | `DELETE` | Mandatory `WHERE` | No unconditional delete, no `RETURNING` |
 | `TRUNCATE TABLE` | Unconditional clear of all rows | Same journal / TX path as DELETE: on failure, reject to the client with no partial visibility |

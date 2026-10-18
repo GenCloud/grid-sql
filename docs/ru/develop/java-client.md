@@ -170,6 +170,10 @@ public void handle() {
 
 Вместо блокировки внутри сервиса возвращайте `Mono` / `Flux` наружу и компонуйте через `flatMap`, `then`, `usingWhen`, `doFinally`.
 
+### Ошибки EXEC
+
+Сбои `execute` / `executeUpdate` / слотов батча приходят с обогащённым сообщением: базовый текст плюс ` | sql=… binds=[…]` (`SqlExecErrorContextUtil`; SQL обрезается до **512** символов, binds редактируются). Коллизии STRICT сохраняют `NonUniqueValueException` с канонической формой `domain=… index=… value=[…] not unique for strict index.`; типы lock / replica-DML / ORCHID сохраняются; прочие оборачиваются в `SqlExecException`. Тот же текст на JDBC — [JDBC-клиент](jdbc-tooling.md), [справочник API](../api-reference/README.md).
+
 ## ReactiveSqlOps
 
 Пакет `org.genfork.grid.sql.client.ops` — тонкие хелперы над тем же SPI: bind-all, `executeUpdate`, `fetchOne` / `fetchList` / `fetchExists`, упорядоченные шаги (`BoundSql`) и `RowMapper`. Жизненный цикл TX (`begin` / `commit` / `close`) они **не** владеют — это остаётся у вызывающего кода. На явной sync-границе (`main`, CLI, тесты) используйте `SyncConnection` / `SyncTxContext` напрямую (или SyncAwait), без отдельного ops-фасада.

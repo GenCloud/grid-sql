@@ -14,6 +14,7 @@ grid:
     enabled: true
     hydrate-mode: LAZY          # FULL | LAZY
     working-set-max-entries: 262144
+    sealed-dump-interval-ms: 60000
     adaptive-disk-first: true
     oplog-archive:
       enabled: false            # обязателен для PITR
@@ -36,6 +37,7 @@ grid:
 | `grid.durability.enabled` | `true` | Коммит проходит через согласие (*ORCHID*) и журнал до появления в памяти; сбой журнала отменяет коммит |
 | `grid.durability.hydrate-mode` | `FULL` | `FULL` — загрузить запечатанные файлы и журнал в память на старте; `LAZY` — отобразить запечатанные файлы (*mmap*) и проиграть только хвост журнала |
 | `grid.durability.working-set-max-entries` | `0` (без ограничения) | Потолок рабочего набора. Выше `0` холодные закоммиченные ключи вытесняются **CLOCK** (reference bit + hysteresis), не LRU; грязные и ещё не слитые из очереди записи не вытесняются никогда |
+| `grid.durability.sealed-dump-interval-ms` | `60000` | Период фонового sealed checkpoint; `<= 0` → default, ниже **15000** поднимается до этого пола. Периодический dump может **пропускаться** под давлением OpLog fsync (dump на shutdown всё равно выполняется) |
 | `grid.durability.adaptive-disk-first` | `true` | При давлении на диск сильнее опираться на подгрузку с запечатанных файлов, а не растить память |
 | `grid.durability.oplog-archive.enabled` | `false` | Перед обрезкой копировать диапазон журнала в архив; ошибка копирования отменяет обрезку |
 | `grid.durability.oplog-archive.dir` | `./data/oplog-archive` | Корень архива, его читает [PITR](../operations/pitr.md) |

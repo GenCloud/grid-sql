@@ -53,6 +53,10 @@ import java.util.function.Function;
  * Peer consensus apply ({@code journalRemote=true}): OpLog bytes via {@link StreamOpLogAppender}
  * <em>outside</em> shard locks (no tip fsync here — OrchidNode batches {@code confirmPersisted} after drain).
  * Local propose apply keeps OpLog + tip in {@code MutationRecorder} ({@code journalRemote=false}).
+ * <p>
+ * LAZY OpLog hydrate ({@link #beginHydrateMapOnly}) binds index delta to the current logic VT via
+ * {@link ReplicaApplierHydrateSession} so parallel sealed-pack hydrates of one domain do not share
+ * {@link ArrayList} iterators.
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -90,11 +94,9 @@ public class ReplicaApplier {
 	 */
 	private volatile Function<String, ReplicaApplier> applierByDomain;
 	/**
-	 * LAZY OpLog hydrate: map-only install + deferred batch index (no async queue / no full reindex).
+	 * LAZY OpLog hydrate session bound to the current logic VT (parallel sealed-pack safe).
 	 */
-	private volatile boolean hydrateMapOnly;
-	private final List<GridEntriesProcessor.AddEntry> hydrateIndexAdds = new ArrayList<>();
-	private final List<byte[]> hydrateIndexRemoves = new ArrayList<>();
+	private final ThreadLocal<ReplicaApplierHydrateSession> hydrateSession = new ThreadLocal<>();
 
 	private record StagedMutation(ReplicationOpType type, byte[] key, byte[] value) {
 	}
@@ -114,46 +116,50 @@ public class ReplicaApplier {
     }
 
 	/**
-	 * Start LAZY OpLog hydrate install mode (map-only + collect index delta).
+	 * Start LAZY OpLog hydrate install mode (map-only + collect index delta) on this VT.
 	 */
 	public void beginHydrateMapOnly() {
-		hydrateMapOnly = true;
-		hydrateIndexAdds.clear();
-		hydrateIndexRemoves.clear();
+		final ReplicaApplierHydrateSession session = new ReplicaApplierHydrateSession();
+		hydrateSession.set(session);
 	}
 
 	/**
 	 * Flush collected hydrate index delta for one shard (one mailbox batch for upserts).
 	 */
 	public void flushHydrateIndexDelta(int shard) {
+		final ReplicaApplierHydrateSession session = hydrateSession.get();
+		if (session == null) {
+			return;
+		}
 		if (!applyToLocalMap || processorByShard == null) {
-			hydrateIndexAdds.clear();
-			hydrateIndexRemoves.clear();
+			session.clear();
 			return;
 		}
 		final GridEntriesProcessor processor = processorByShard.apply(shard);
 		if (processor == null) {
-			hydrateIndexAdds.clear();
-			hydrateIndexRemoves.clear();
+			session.clear();
 			return;
 		}
-		if (!hydrateIndexAdds.isEmpty()) {
-			processor.indexDeltaNow(new ArrayList<>(hydrateIndexAdds));
-			hydrateIndexAdds.clear();
+		final List<GridEntriesProcessor.AddEntry> addsSnapshot = new ArrayList<>(session.adds());
+		final List<byte[]> removesSnapshot = new ArrayList<>(session.removes());
+		session.clear();
+		if (!addsSnapshot.isEmpty()) {
+			processor.indexDeltaNow(addsSnapshot);
 		}
-		for (byte[] key : hydrateIndexRemoves) {
+		for (byte[] key : removesSnapshot) {
 			processor.indexNowRemove(key);
 		}
-		hydrateIndexRemoves.clear();
 	}
 
 	/**
 	 * End LAZY OpLog hydrate install mode (drops any leftover delta without indexing).
 	 */
 	public void endHydrateMapOnly() {
-		hydrateMapOnly = false;
-		hydrateIndexAdds.clear();
-		hydrateIndexRemoves.clear();
+		final ReplicaApplierHydrateSession session = hydrateSession.get();
+		if (session != null) {
+			session.clear();
+		}
+		hydrateSession.remove();
 	}
 
 	/**
@@ -170,6 +176,11 @@ public class ReplicaApplier {
 
 	public void setEnvelopeCoordinator(TxEnvelopeCoordinator envelopeCoordinator) {
 		this.envelopeCoordinator = envelopeCoordinator;
+	}
+
+	/** Bound multi-stream envelope gate (null when envelopes unused). */
+	public TxEnvelopeCoordinator envelopeCoordinator() {
+		return envelopeCoordinator;
 	}
 
 	/**
@@ -753,16 +764,17 @@ public class ReplicaApplier {
 			}
 			return;
 		}
-		if (hydrateMapOnly) {
+		final ReplicaApplierHydrateSession session = hydrateSession.get();
+		if (session != null) {
 			if (type == ReplicationOpType.DELETE) {
 				processor.installMapOnly(key, null, true);
 				if (key != null) {
-					hydrateIndexRemoves.add(key);
+					session.removes().add(key);
 				}
 			} else if (type == ReplicationOpType.UPSERT) {
 				processor.installMapOnly(key, value, false);
 				if (key != null && value != null) {
-					hydrateIndexAdds.add(new GridEntriesProcessor.AddEntry(null, key, value));
+					session.adds().add(new GridEntriesProcessor.AddEntry(null, key, value));
 				}
 			}
 			return;

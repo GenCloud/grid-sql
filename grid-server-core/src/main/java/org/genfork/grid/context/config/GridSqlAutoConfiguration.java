@@ -75,6 +75,7 @@ public class GridSqlAutoConfiguration {
 				.durability(properties.getDurability().isEnabled())
 				.hydrateMode(properties.getDurability().getHydrateMode())
 				.workingSetMaxEntries(properties.getDurability().getWorkingSetMaxEntries())
+				.sealedDumpIntervalMs(properties.getDurability().getSealedDumpIntervalMs())
 				.adaptiveDiskFirst(properties.getDurability().isAdaptiveDiskFirst())
 				.overlay(overlay, autoPinTtlMs)
 				.listen(tcp);

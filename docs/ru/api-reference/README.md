@@ -16,6 +16,8 @@
 | Отказ по `regionEpoch` / два пишущих | URL записи указывает на Hold/Witness или клиент перебирает следующий адрес в URL без `rediscoverWriter()` |
 | TX / DML на read URL | `readEndpoints` / `READ_REPLICA` — только SELECT/EXPLAIN; запись всегда на пишущий узел |
 | Готовность DOWN при старте | ORCHID ещё не синхронизирован — ожидаемо; не слать трафик |
+| EXEC-ошибка с ` \| sql=… binds=[…]` | Сервер обогащает сбои через `SqlExecErrorContextUtil` (SQL обрезается до **512** символов, binds редактируются); JDBC кладёт тот же текст в `SQLException` |
+| `domain=… index=… value=[…] not unique for strict index.` | Коллизия STRICT / UNIQUE (`NonUniqueValueException`); типизированные ошибки сохраняют класс; прочие оборачиваются в `SqlExecException` |
 
 ## Клиентский SPI (`grid-sql-client`)
 
@@ -71,7 +73,7 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 
 Приложения **не** встраивают удалённый `SqlEngine` — говорят по `grid://` со starter/node. Boot: [Spring Boot](../develop/spring-boot.md).
 
-Потолок открытых сессий на TCP-канале слушателя — **8** (задаётся `grid.sql-server.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` (на каждом узле; репликация не доставляет) — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
+Потолок открытых сессий на TCP-канале слушателя — **8** (задаётся `grid.sql-server.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` (локальный файл узла; blob репликация **не** развозит — privilege DDL идёт в OpLog `_catalog`) — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC-клиент
 

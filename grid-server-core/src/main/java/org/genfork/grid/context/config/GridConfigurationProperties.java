@@ -122,6 +122,12 @@ public class GridConfigurationProperties {
 		 * YAML: {@code grid.durability.oplog-archive}.
 		 */
 		private OpLogArchiveProps opLogArchive = new OpLogArchiveProps();
+		/**
+		 * Periodic sealed GridMap checkpoint interval (ms).
+		 * YAML: {@code grid.durability.sealed-dump-interval-ms}.
+		 * Default 60s (above short Capacity QG ~45s); clamped in {@code SealedHydrateService}.
+		 */
+		private long sealedDumpIntervalMs = 60_000L;
 
 		public boolean isEnabled() {
 			return enabled;
@@ -161,6 +167,14 @@ public class GridConfigurationProperties {
 
 		public void setOpLogArchive(OpLogArchiveProps opLogArchive) {
 			this.opLogArchive = opLogArchive;
+		}
+
+		public long getSealedDumpIntervalMs() {
+			return sealedDumpIntervalMs;
+		}
+
+		public void setSealedDumpIntervalMs(long sealedDumpIntervalMs) {
+			this.sealedDumpIntervalMs = sealedDumpIntervalMs;
 		}
 	}
 

@@ -91,6 +91,14 @@ public final class SealedGridMapService {
 	/** OpLog read chunk when merging into sealed dump (same order as hydrate). */
 	private static final int SEAL_DUMP_OPLOG_BATCH = 2_048;
 
+	/**
+	 * Per-shard gate: {@code true} skips dump for that shard (open TX / envelope).
+	 */
+	@FunctionalInterface
+	public interface DumpDeferGate {
+		boolean shouldDefer(String domainType, int shard);
+	}
+
 	public void bindProcessor(String domainType, Function<Integer, GridEntriesProcessor> processorByShard) {
 		if (domainType == null || processorByShard == null) {
 			return;
@@ -108,6 +116,34 @@ public final class SealedGridMapService {
 	}
 
 	public int dumpDomain(String domainType, OpLog opLog, ReplicationNodeState nodeState) {
+		return dumpDomain(domainType, opLog, nodeState, null, true);
+	}
+
+	/**
+	 * @param deferGate optional per-shard skip (open TX / envelope); {@code null} = dump all
+	 */
+	public int dumpDomain(
+			String domainType,
+			OpLog opLog,
+			ReplicationNodeState nodeState,
+			DumpDeferGate deferGate
+	) {
+		return dumpDomain(domainType, opLog, nodeState, deferGate, true);
+	}
+
+	/**
+	 * @param deferGate      optional per-shard skip (open TX / envelope); {@code null} = dump all
+	 * @param truncateOpLog  when {@code true} (periodic seal), archive+truncate through watermark;
+	 *                       {@code false} for graceful-stop seal so OpLog prefix remains for
+	 *                       torn-tail / tip-behind reopen insurance
+	 */
+	public int dumpDomain(
+			String domainType,
+			OpLog opLog,
+			ReplicationNodeState nodeState,
+			DumpDeferGate deferGate,
+			boolean truncateOpLog
+	) {
 		if (sealedRoot == null || domainType == null) {
 			return 0;
 		}
@@ -130,7 +166,11 @@ public final class SealedGridMapService {
 
 		int rows = 0;
 		for (Integer shard : shards) {
-			rows += dumpOneShard(domainType, shard, byShard, opLog, nodeState, shards.size());
+			if (deferGate != null && deferGate.shouldDefer(domainType, shard)) {
+				continue;
+			}
+			rows += dumpOneShard(
+					domainType, shard, byShard, opLog, nodeState, shards.size(), truncateOpLog);
 		}
 		return rows;
 	}
@@ -145,7 +185,8 @@ public final class SealedGridMapService {
 			Function<Integer, GridEntriesProcessor> byShard,
 			OpLog opLog,
 			ReplicationNodeState nodeState,
-			int shardCount
+			int shardCount,
+			boolean truncateOpLog
 	) {
 		final GridEntriesProcessor processor = byShard.apply(shard);
 		if (processor == null) {
@@ -198,7 +239,7 @@ public final class SealedGridMapService {
 						throw new IOException("node seal produced no files for " + domainType + "#" + shard);
 					}
 					swapReader(domainType, shard, processor, opened);
-					if (opLog != null && watermark > 0L) {
+					if (truncateOpLog && opLog != null && watermark > 0L) {
 						// Archive sync on seal thread (already off Netty EL); fail-closed before truncate.
 						OpLogArchiveUtil.archiveBeforeTruncate(
 								opLog, opLogArchiveRoot, domainType, shard, watermark);

@@ -15,35 +15,8 @@
  */
 package org.genfork.grid.mem.index;
 
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.EnumMap;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
-
-import org.apache.commons.lang3.ArrayUtils;
-import org.springframework.util.CollectionUtils;
-
 import com.google.common.annotations.VisibleForTesting;
-
+import org.apache.commons.lang3.ArrayUtils;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.TableSchema;
@@ -51,34 +24,11 @@ import org.genfork.grid.exceptions.ConditionValidationException;
 import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.ByteArrayContainer;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
-import org.genfork.grid.mem.index.btree.AbstractBPTree;
-import org.genfork.grid.mem.index.btree.CompositeTreeKey;
-import org.genfork.grid.mem.index.btree.GridPointerBPTree;
-import org.genfork.grid.mem.index.btree.GridPointerCompositeBPTree;
-import org.genfork.grid.mem.index.btree.IndexOperationResult;
-import org.genfork.grid.mem.index.btree.SingleTreeKey;
-import org.genfork.grid.mem.index.btree.TreeKey;
+import org.genfork.grid.mem.index.btree.*;
 import org.genfork.grid.query.filters.FilterCondition;
-import org.genfork.grid.query.filters.impl.AlwaysFalseCondition;
-import org.genfork.grid.query.filters.impl.AlwaysTrueCondition;
-import org.genfork.grid.query.filters.impl.AndCondition;
-import org.genfork.grid.query.filters.impl.CompositeIndexCondition;
-import org.genfork.grid.query.filters.impl.LogicalOperatorCondition;
-import org.genfork.grid.query.filters.impl.NotCondition;
-import org.genfork.grid.query.filters.impl.OrCondition;
-import org.genfork.grid.query.plan.AggregateSpec;
 import org.genfork.grid.query.filters.PkIndexScanUtil;
-import org.genfork.grid.query.plan.ExplainQuery;
-import org.genfork.grid.query.plan.FilterConditionData;
-import org.genfork.grid.query.plan.JoinSpec;
-import org.genfork.grid.query.plan.PagingData;
-import org.genfork.grid.query.plan.QueryData;
-import org.genfork.grid.query.plan.QueryOptimizer;
-import org.genfork.grid.query.plan.QueryCardinality;
-import org.genfork.grid.query.plan.QueryPagingContext;
-import org.genfork.grid.query.plan.QueryParser;
-import org.genfork.grid.query.plan.SortOrderData;
-import org.genfork.grid.query.plan.TableRowStats;
+import org.genfork.grid.query.filters.impl.*;
+import org.genfork.grid.query.plan.*;
 import org.genfork.grid.query.plan.strategy.TableScanStrategy;
 import org.genfork.grid.replication.snapshot.sealed.SealedBPTreeReader;
 import org.genfork.grid.replication.snapshot.sealed.SealedFallbackBitmap;
@@ -89,6 +39,16 @@ import org.genfork.grid.serial.HashField;
 import org.genfork.grid.serial.WireFieldBytes;
 import org.genfork.grid.serial.WireFieldCompare;
 import org.genfork.grid.threading.ThreadService;
+import org.springframework.util.CollectionUtils;
+
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.*;
+import java.util.stream.Collectors;
 
 /**
  * Composite secondary index facade: single/composite BPTree (+ optional bitmap) over table columns.
@@ -101,7 +61,6 @@ import org.genfork.grid.threading.ThreadService;
  * @since: 1.0
  */
 public class GridCompositeIndex {
-	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GridCompositeIndex.class);
 	/**
 	 * Initial capacity hint for opt-in {@link GridBitmapIndex}.
 	 */
