@@ -28,7 +28,6 @@
         <dependency>
             <groupId>org.genfork</groupId>
             <artifactId>grid-sql-client</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <!-- Compile against vendored jars; absolute via ${project.basedir} (CI + Windows). -->
