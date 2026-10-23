@@ -25,7 +25,7 @@ Depend on `grid-sql-client` alone; the engine is not pulled into the application
 
 ```java
 ConnectionFactory factory = ConnectionFactory.fromUrl(
-        "grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public"
+        "grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public"
                 + "?connectTimeoutMs=1000&retryMode=FIXED&maxRetries=2");
 
 Mono<Connection> connection = factory.obtain();
@@ -66,7 +66,7 @@ A single TCP socket multiplexes independent transactions: every `connection.begi
 ### Replica reads
 
 ```
-grid://app:secret@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433&readPreference=REPLICA
+grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433&readPreference=REPLICA
 ```
 
 With `readEndpoints` in the URL, `ConnectionFactory.fromUrl` returns a routing connection: autocommit `SELECT` and `EXPLAIN` go to a synced replica, while writes, transactions, DDL, `PREPARE`, and `FOR UPDATE` stay on the writer. You do not need to build two factories by hand.

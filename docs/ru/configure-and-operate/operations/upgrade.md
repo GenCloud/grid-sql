@@ -39,7 +39,7 @@
 1. Actuator readiness UP; при репликации — ORCHID sync (`orchidSynced` / `orchid_r` выше допуска).
 2. На целевом пишущем: `writerEligible: true` и совпадение меты клиента (`PROMOTE_NOTIFY` / AUTH) — [повышение роли](ha-promote.md).
 3. Реплики: `applyLagStale` false (или в пределах принятой политики отставания) до чтения с них.
-4. Одна проверочная запись и чтение по пути приложения (не HTTP `/replication/compare` как источник пишущего).
+4. Одна проверочная запись и чтение по пути приложения (пишущий — из wire meta / readiness, не из lag-compare HTTP).
 
 `SIGKILL` хуки не вызывает — следующий open идёт через replay порванного хвоста OpLog; это штатно, но дольше.
 
@@ -99,6 +99,6 @@
 |----------|----------|
 | Actuator readiness UP на каждом узле | SQL слушает; при репликации — ORCHID sync |
 | Ровно один `writerEligible: true` | Мета клиента совпадает (`PROMOTE_NOTIFY` / AUTH) |
-| Одна запись и чтение по пути приложения | Не `/replication/compare` как источник пишущего |
+| Одна запись и чтение по пути приложения | Пишущий из wire meta / readiness |
 | Реплики до чтения | `applyLagStale` false (или в пределах политики) |
 | Пользователи / AUTH (если включены) | `privileges.meta` на **каждом** SQL-узле, куда ходят приложения |

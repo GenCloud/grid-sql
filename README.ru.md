@@ -20,14 +20,14 @@ mvn -pl grid-sql-server-starter -am package -DskipTests
 java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=capacity
 ```
 
-Профиль `capacity` слушает SQL на порту **15432**, запись на диск включена, репликация выключена (**открытый AUTH** — пользователей ещё нет).
+Профиль `capacity` слушает SQL на порту **15432**, запись на диск включена, репликация выключена; starter YAML создаёт **`grid`/`grid`** (нужен AUTH).
 
 ### Hello (JDBC)
 
 ```java
 Class.forName("org.genfork.grid.jdbc.GridDriver");
 try (java.sql.Connection c = java.sql.DriverManager.getConnection(
-        "jdbc:grid://127.0.0.1:15432/public")) {
+        "jdbc:grid://grid:grid@127.0.0.1:15432/public")) {
     c.createStatement().execute(
             "CREATE TABLE IF NOT EXISTS demo (id BIGINT PRIMARY KEY, name VARCHAR)");
     c.createStatement().execute("UPSERT INTO demo (id, name) VALUES (1, 'hello')");
@@ -39,15 +39,14 @@ try (java.sql.Connection c = java.sql.DriverManager.getConnection(
 ```java
 org.genfork.grid.sql.client.RemoteConnectionFactory factory =
         new org.genfork.grid.sql.client.RemoteConnectionFactory(
-                "127.0.0.1", 15432, "", "", 8);
+                "127.0.0.1", 15432, "grid", "grid", 8);
 factory.obtain()
         .flatMap(conn -> conn.createStatement(
                 "UPSERT INTO demo (id, name) VALUES (1, 'hello')").executeUpdate())
         .block(); // только демо — не в library API
 ```
 
-URL: `grid://127.0.0.1:15432/public` · `jdbc:grid://127.0.0.1:15432/public`.  
-Если AUTH включён — укажите `user:pass@` в authority (например `grid://grid:grid@…`).
+URL: `grid://grid:grid@127.0.0.1:15432/public` · `jdbc:grid://grid:grid@127.0.0.1:15432/public`.
 
 ## Доказательства (лабораторный хост)
 

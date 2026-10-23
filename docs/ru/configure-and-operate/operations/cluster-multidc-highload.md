@@ -46,7 +46,7 @@ Witness включается точечно: `grid.replication.region.role: WITN
 | `b1` | `dc-b` | **HOLD** | `b1.dc-b.example:15435` | `127.0.0.1:15435` | `b1.dc-b.example:5618` |
 | `b2` | `dc-b` | **HOLD** | `b2.dc-b.example:15436` | `127.0.0.1:15436` | `b2.dc-b.example:5619` |
 
-Необязательный Witness: например `w1.dc-w.example:15437`, репликация `5620`, `region.role: WITNESS`, без полезной нагрузки OpLog. См. схему Witness ниже и [повышение роли узла](ha-promote.md).
+Необязательный Witness: например `w1.dc-w.example:15437`, репликация `5620`, `region.role: WITNESS`. «Лёгкий» witness — выбор **деплоя** (пустые `flow.domains` / без app domains); сама роль `WITNESS` hydrate OpLog не отключает. См. схему Witness ниже и [повышение роли узла](ha-promote.md).
 
 ### ASYNC_SHIP — карта узлов
 

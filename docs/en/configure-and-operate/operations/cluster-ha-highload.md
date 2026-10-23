@@ -110,7 +110,7 @@ grid://u:p@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public?connectTimeout
 
 ## Kubernetes and Actuator probes
 
-Enable probes (`management.endpoint.health.probes.enabled: true`) and expose `health,prometheus`. Include `gridReadiness` in the readiness group (see `grid-sql-server-starter` `application.yml`).
+Enable probes (`management.endpoint.health.probes.enabled: true`) and expose `health,prometheus`. Include `gridReadiness` in the readiness group (see `grid-sql-server-starter` `application-primary.yml` / `application-replica.yml` / `application-capacity.yml`).
 
 | Path (starter `base-path: /`) | Role |
 |------|------|

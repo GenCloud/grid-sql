@@ -10,14 +10,14 @@
 |--------|----------------|
 | AUTH / отказ connect | Неверный user/pass или узел ещё не готов (`readiness` DOWN) |
 | `bad frameLen` | Клиент попал на порт репликации (**5615**/**5616**), а не SQL |
-| `maxTxContexts=N exhausted` (код кадра 5) | Больше восьми открытых сессий на одном TCP (жёсткий потолок сервера **8**); задаётся `grid.sql-server.max-tx-contexts` — откройте ещё один `Connection` или закройте простаивающие `TxContext` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md)) |
+| `maxTxContexts=N exhausted` (код кадра 5) | Больше открытых сессий на одном TCP, чем потолок сервера (по умолчанию **8**, `grid.sql-server.max-tx-contexts`) — поднимите YAML и/или откройте ещё один `Connection` / закройте простаивающие `TxContext` ([SQL-сервер](../configure-and-operate/configuration/sql-server.md)) |
 | Stale / `applyLagStale` на чтении с реплики | Отставание apply; при превышении порога — **отказ** (подождать или читать с пишущего) ([чтение с реплики](../configure-and-operate/operations/replica-reads.md)) |
 | Отказ записи после повышения роли | Клиент не сделал `rediscoverWriter()` — [повышение роли](../configure-and-operate/operations/ha-promote.md) |
 | Отказ по `regionEpoch` / два пишущих | URL записи указывает на Hold/Witness или клиент перебирает следующий адрес в URL без `rediscoverWriter()` |
 | TX / DML на read URL | `readEndpoints` / `READ_REPLICA` — только SELECT/EXPLAIN; запись всегда на пишущий узел |
 | Готовность DOWN при старте | ORCHID ещё не синхронизирован — ожидаемо; не слать трафик |
-| EXEC-ошибка с ` \| sql=… binds=[…]` | Сервер обогащает сбои через `SqlExecErrorContextUtil` (SQL обрезается до **512** символов, binds редактируются); JDBC кладёт тот же текст в `SQLException` |
-| `domain=… index=… value=[…] not unique for strict index.` | Коллизия STRICT / UNIQUE (`NonUniqueValueException`); типизированные ошибки сохраняют класс; прочие оборачиваются в `SqlExecException` |
+| EXEC-ошибка с ` \| sql=… binds=[…]` | Сервер обогащает **текст** через `SqlExecErrorContextUtil` (SQL ≤ **512** символов, binds редактируются); remote → `IllegalStateException` / JDBC `SQLException` с этим текстом |
+| `domain=… index=… value=[…] not unique for strict index.` | Форма сообщения коллизии STRICT / UNIQUE; типы `NonUniqueValueException` / `SqlExecException` — только **server in-process** |
 
 ## Клиентский SPI (`grid-sql-client`)
 
@@ -46,7 +46,7 @@ URL: `grid://user:pass@host:15432[,host:15433]/schema?...`.
 
 | Опция URL | Смысл |
 |-----------|--------|
-| `maxTxContexts` | Мягкий потолок клиента на параллельные TX / сессии на одном TCP (по умолчанию **256**); на сервере жёсткий потолок **8** |
+| `maxTxContexts` | Мягкий потолок клиента на параллельные TX / сессии на одном TCP (по умолчанию **256**); на сервере default **8** (`grid.sql-server.max-tx-contexts`) |
 | `readEndpoints` / `readPreference` / `staleReadPolicy` | Маршрутизация SELECT/EXPLAIN; при отставании — отказ (не отдавать устаревшее) |
 | `retryMode` / `maxRetries` / `retryDelayMs` | Повтор connect (`OFF` / `FIXED` / `EXPONENTIAL`); не замена `rediscoverWriter()` |
 | `minConnections` / `maxConnections` | Прогрев и потолок TCP в пуле фабрики |
@@ -58,7 +58,7 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 
 - Автокоммит: `connection.createStatement(sql).executeUpdate()`
 - TX: `connection.begin()` → операторы на `TxContext` → `commit()` / `rollback()`
-- Параллельные TX = N `begin()` на одном `Connection` (клиентский `maxTxContexts`; сервер останавливается на **8**)
+- Параллельные TX = N `begin()` на одном `Connection` (клиентский `maxTxContexts`; серверный default **8**, поднимается YAML)
 
 Подробнее: [Java-клиент](../develop/java-client.md), [транзакции](../develop/transactions.md).
 
@@ -73,7 +73,7 @@ HA на `RemoteConnectionFactory`: `rediscoverWriter()`, `lastServerMeta()`. П�
 
 Приложения **не** встраивают удалённый `SqlEngine` — говорят по `grid://` со starter/node. Boot: [Spring Boot](../develop/spring-boot.md).
 
-Потолок открытых сессий на TCP-канале слушателя — **8** (задаётся `grid.sql-server.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` (локальный файл узла; blob репликация **не** развозит — privilege DDL идёт в OpLog `_catalog`) — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
+Потолок открытых сессий на TCP-канале слушателя по умолчанию **8** (`grid.sql-server.max-tx-contexts`). Файл каталога привилегий: `{grid.sql.data-dir}/catalog/privileges.meta` (локальный файл узла; blob репликация **не** развозит — privilege DDL идёт в OpLog `_catalog`) — [безопасность](../configure-and-operate/operations/security.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC-клиент
 

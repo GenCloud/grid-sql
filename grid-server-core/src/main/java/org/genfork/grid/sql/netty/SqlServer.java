@@ -40,11 +40,20 @@ import org.slf4j.LoggerFactory;
  */
 public final class SqlServer implements AutoCloseable {
 	private static final Logger log = LoggerFactory.getLogger(SqlServer.class);
+	/** Child socket: disable Nagle for SQL frame latency. */
+	private static final boolean CHILD_TCP_NODELAY = true;
+	/** Child socket: detect half-open clients (parity with replication transport). */
+	private static final boolean CHILD_SO_KEEPALIVE = true;
 
 	/**
 	 * Default concurrent logical sessions per TCP channel when Boot/YAML omit the knob.
 	 */
 	public static final int DEFAULT_MAX_TX_CONTEXTS = 8;
+
+	/**
+	 * Default reader-idle close (ms). {@code <= 0} disables idle close.
+	 */
+	public static final long DEFAULT_IDLE_TIMEOUT_MS = 0L;
 
 	private final String host;
 	/** Listen port; updated from the bound channel when ctor port is {@code 0}. */
@@ -53,6 +62,7 @@ public final class SqlServer implements AutoCloseable {
 	private final String user;
 	private final String password;
 	private final int maxTxContexts;
+	private final long idleTimeoutMs;
 	private final ReplicationCoordinator replication;
 	/**
 	 * Test hook: when non-null, AUTH/ERROR {@code ServerMeta.applyLagStale} uses this value
@@ -65,13 +75,15 @@ public final class SqlServer implements AutoCloseable {
 	private EventLoopGroup boss;
 	private EventLoopGroup worker;
 	private Channel channel;
+	/** Retained after {@link #start()} for option probes (tests). */
+	private volatile ServerBootstrap lastBootstrap;
 
 	public SqlServer(String host, int port, SqlEngine engine, String user, String password) {
-		this(host, port, engine, user, password, DEFAULT_MAX_TX_CONTEXTS, null);
+		this(host, port, engine, user, password, DEFAULT_MAX_TX_CONTEXTS, DEFAULT_IDLE_TIMEOUT_MS, null);
 	}
 
 	public SqlServer(String host, int port, SqlEngine engine, String user, String password, int maxTxContexts) {
-		this(host, port, engine, user, password, maxTxContexts, null);
+		this(host, port, engine, user, password, maxTxContexts, DEFAULT_IDLE_TIMEOUT_MS, null);
 	}
 
 	public SqlServer(
@@ -82,7 +94,7 @@ public final class SqlServer implements AutoCloseable {
 			String password,
 			ReplicationCoordinator replication
 	) {
-		this(host, port, engine, user, password, DEFAULT_MAX_TX_CONTEXTS, replication);
+		this(host, port, engine, user, password, DEFAULT_MAX_TX_CONTEXTS, DEFAULT_IDLE_TIMEOUT_MS, replication);
 	}
 
 	public SqlServer(
@@ -94,6 +106,19 @@ public final class SqlServer implements AutoCloseable {
 			int maxTxContexts,
 			ReplicationCoordinator replication
 	) {
+		this(host, port, engine, user, password, maxTxContexts, DEFAULT_IDLE_TIMEOUT_MS, replication);
+	}
+
+	public SqlServer(
+			String host,
+			int port,
+			SqlEngine engine,
+			String user,
+			String password,
+			int maxTxContexts,
+			long idleTimeoutMs,
+			ReplicationCoordinator replication
+	) {
 		this.host = host == null ? "0.0.0.0" : host;
 		this.port = port;
 		this.engine = engine;
@@ -101,6 +126,7 @@ public final class SqlServer implements AutoCloseable {
 		this.password = password;
 		/* <= 0 = unlimited (same contract as {@link SqlExecHandler}). */
 		this.maxTxContexts = maxTxContexts <= 0 ? Integer.MAX_VALUE : maxTxContexts;
+		this.idleTimeoutMs = idleTimeoutMs;
 		this.replication = replication;
 	}
 
@@ -112,12 +138,45 @@ public final class SqlServer implements AutoCloseable {
 	}
 
 	/**
+	 * Reader-idle close timeout in milliseconds ({@code <= 0} = disabled).
+	 */
+	public long idleTimeoutMs() {
+		return idleTimeoutMs;
+	}
+
+	/**
 	 * Force {@code applyLagStale} on AUTH_OK / ERROR meta for this listen (IT / chaos).
 	 * Pass {@code null} to clear the override.
 	 */
 	@VisibleForTesting
 	public void overrideApplyLagStale(Boolean applyLagStale) {
 		applyLagStaleOverride.set(applyLagStale);
+	}
+
+	/**
+	 * Child {@link ChannelOption#SO_KEEPALIVE} after bind (tests).
+	 */
+	@VisibleForTesting
+	Boolean childSoKeepAlive() {
+		final ServerBootstrap bootstrap = lastBootstrap;
+		if (bootstrap == null) {
+			return null;
+		}
+		final Object value = bootstrap.config().childOptions().get(ChannelOption.SO_KEEPALIVE);
+		return value instanceof Boolean keepAlive ? keepAlive : null;
+	}
+
+	/**
+	 * Child {@link ChannelOption#TCP_NODELAY} after bind (tests).
+	 */
+	@VisibleForTesting
+	Boolean childTcpNoDelay() {
+		final ServerBootstrap bootstrap = lastBootstrap;
+		if (bootstrap == null) {
+			return null;
+		}
+		final Object value = bootstrap.config().childOptions().get(ChannelOption.TCP_NODELAY);
+		return value instanceof Boolean tcpNoDelay ? tcpNoDelay : null;
 	}
 
 	public void start() {
@@ -133,16 +192,19 @@ public final class SqlServer implements AutoCloseable {
 			final ServerBootstrap b = new ServerBootstrap()
 					.group(boss, worker)
 					.channel(NioServerSocketChannel.class)
-					.childOption(ChannelOption.TCP_NODELAY, true)
+					.childOption(ChannelOption.TCP_NODELAY, CHILD_TCP_NODELAY)
+					.childOption(ChannelOption.SO_KEEPALIVE, CHILD_SO_KEEPALIVE)
 					.childHandler(new SqlServerPipeline(
 							engine,
 							user,
 							password,
 							maxTxContexts,
+							idleTimeoutMs,
 							replication,
 							channelRegistry,
 							applyLagStaleOverride
 					));
+			lastBootstrap = b;
 			channel = b.bind(host, port).sync().channel();
 			if (channel.localAddress() instanceof InetSocketAddress bound) {
 				this.port = bound.getPort();
@@ -192,6 +254,7 @@ public final class SqlServer implements AutoCloseable {
 			boss.shutdownGracefully();
 			boss = null;
 		}
+		lastBootstrap = null;
 		started.set(false);
 	}
 }

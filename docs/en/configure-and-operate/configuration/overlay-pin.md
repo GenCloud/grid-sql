@@ -26,7 +26,7 @@ grid:
 | Setting | Default | Effect |
 |---------|---------|--------|
 | `grid.overlay.enabled` | `false` | Without it, `PIN KEY` is rejected with `overlay is disabled (grid.overlay.enabled=false)` |
-| `grid.overlay.durable` | `false` | Persists annotations under `{dataDir}/{cluster}/{node}/overlay/` so they survive a restart |
+| `grid.overlay.durable` | `false` | Persists annotations under `{grid.replication.op-log.data-dir}/{cluster}/{node}/overlay/` so they survive a restart |
 | `grid.overlay.auto-pin-ttl-ms` | `0` | Above zero, the write path refreshes a short pin on every hot write |
 
 Pins only have an effect where placement would otherwise migrate. On a solo durable node with no peers, `PIN KEY` is accepted and recorded but changes nothing.

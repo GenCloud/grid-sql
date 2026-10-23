@@ -10,14 +10,14 @@ Product SPI lives in **`grid-sql-client`** (apps) and **`grid-server-core`** (en
 |---------|--------------|
 | AUTH / connect reject | Wrong user/pass or node not ready yet |
 | `bad frameLen` | Client hit a replication port (**5615**/**5616**), not SQL |
-| `maxTxContexts=N exhausted` (wire code 5) | More than eight open sessions on one TCP (server hard-cap **8**); configurable via `grid.sql-server.max-tx-contexts` — open another `Connection` or close idle `TxContext`s ([SQL server](../configure-and-operate/configuration/sql-server.md)) |
+| `maxTxContexts=N exhausted` (wire code 5) | More open sessions on one TCP than the server cap (default **8**, `grid.sql-server.max-tx-contexts`) — raise YAML and/or open another `Connection` / close idle `TxContext`s ([SQL server](../configure-and-operate/configuration/sql-server.md)) |
 | Stale / `applyLagStale` on replica read | Catch-up lag; above threshold — **reject** (wait or read the writer) ([replica reads](../configure-and-operate/operations/replica-reads.md)) |
 | Write reject after role promotion | Client did not `rediscoverWriter()` — [promote](../configure-and-operate/operations/ha-promote.md) |
 | Reject on `regionEpoch` / dual writers | Write URL points at Hold/Witness, or client rotates hosts without `rediscoverWriter()` |
 | TX / DML on a read URL | `readEndpoints` / `READ_REPLICA` are SELECT/EXPLAIN only; writes always go to the writer |
 | Health readiness DOWN at start | ORCHID not synced yet — expected; do not send traffic |
-| EXEC error with ` \| sql=… binds=[…]` | Server enriches failures via `SqlExecErrorContextUtil` (SQL truncated to **512** chars, binds redacted); JDBC maps the same text into `SQLException` |
-| `domain=… index=… value=[…] not unique for strict index.` | STRICT / UNIQUE collision (`NonUniqueValueException`); typed errors keep their class; other failures wrap as `SqlExecException` |
+| EXEC error with ` \| sql=… binds=[…]` | Server enriches the **message** via `SqlExecErrorContextUtil` (SQL ≤ **512** chars, binds redacted); remote client → `IllegalStateException` / JDBC `SQLException` with that text |
+| `domain=… index=… value=[…] not unique for strict index.` | STRICT / UNIQUE collision message shape; typed `NonUniqueValueException` / `SqlExecException` are **server in-process** only |
 
 ## Client SPI (`grid-sql-client`)
 
@@ -46,7 +46,7 @@ URL form: `grid://user:pass@host:15432[,host:15433]/schema?...`.
 
 | URL option | Meaning |
 |------------|---------|
-| `maxTxContexts` | Client soft cap on parallel TX / sessions on one TCP (default **256**); server hard-cap **8** |
+| `maxTxContexts` | Client soft cap on parallel TX / sessions on one TCP (default **256**); server default hard-cap **8** (`grid.sql-server.max-tx-contexts`) |
 | `readEndpoints` / `readPreference` / `staleReadPolicy` | SELECT/EXPLAIN routing; on lag — reject (do not serve stale) |
 | `retryMode` / `maxRetries` / `retryDelayMs` | Connect retry (`OFF` / `FIXED` / `EXPONENTIAL`); not a substitute for `rediscoverWriter()` |
 | `minConnections` / `maxConnections` | Warm-up and TCP pool ceiling on the factory |
@@ -73,7 +73,7 @@ Next: [java-client](../develop/java-client.md), [transactions](../develop/transa
 
 Apps should **not** embed `SqlEngine` remotely — talk `grid://` to a starter/node. Boot wiring: [spring-boot](../develop/spring-boot.md).
 
-TCP listen session cap is **8** open contexts per channel (set `grid.sql-server.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` (per-node local file; replication does **not** ship the blob — privilege DDL rides `_catalog` OpLog) — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
+TCP listen session cap defaults to **8** open contexts per channel (`grid.sql-server.max-tx-contexts`). Privilege catalog file: `{grid.sql.data-dir}/catalog/privileges.meta` (per-node local file; replication does **not** ship the blob — privilege DDL rides `_catalog` OpLog) — [security](../configure-and-operate/operations/security.md), [SQL server](../configure-and-operate/configuration/sql-server.md).
 
 ## JDBC client
 

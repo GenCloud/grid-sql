@@ -60,7 +60,7 @@ When the key is not in `GridScalableMap`, the read does not stop and does not st
 2. On an index hit or a primary-key read, the needed **mmap window** in the `.gmap` node file is opened and the payload is read by offset.
 3. The loaded key may return to the working set; the next access stays off disk until eviction.
 
-**An index miss does not become a full scan.** If the sealed index did not find the key, the answer is empty (`sealedPartitionScan = 0`); no sweep over all partitions follows. If you ever observe that metric climbing, treat it as a defect rather than as a tuning problem.
+**An index miss does not become a full scan.** If the sealed index did not find the key, the answer is empty; no sweep over all partitions follows. Rising `grid.sealed.index_miss` / `grid.replication.sealed_misses` without a matching hit path is expected on cold keys; a full partition scan after an index miss is a defect, not a tuning knob.
 
 **DELETE vs sealed mmap.** After a committed delete, the working set keeps a **tombstone** (empty `byte[]`) for the key so a later miss does not reload a stale payload from still-mapped `.gmap` generations. Without that marker, LAZY hydrate could resurrect a deleted row from disk until the next seal drops the old node file.
 
@@ -79,7 +79,7 @@ The lock lifecycle is designed not to hold up SQL or the network:
 
 Neither lock may be held while SQL executes, while waiting for quorum, or while waiting on a Netty network thread. That constraint is what keeps a slow disk from turning into a stalled event loop.
 
-Above the mmap locks, `SealedReaderLifecycleGate` (per `domain#shard`) serializes exclusive open / swap / close against **pinned** iterate: FULL hydrate and HELLO sealed pack hold pins across the scan so a concurrent REPLACE cannot unmap under the reader.
+Above the mmap locks, `SealedReaderLifecycleGate` (per `domain#shard`) serializes exclusive open / swap / close against **pinned** iterate: FULL hydrate and sealed **dump** merge hold pins across the scan so a concurrent REPLACE cannot unmap under the reader. HELLO sealed catch-up ships packed files from disk (`HelloSealedCatchUpUtil` / `SealedShardPack`) — it does not pin-iterate live mmap readers the same way.
 
 ## Seal and truncate
 
@@ -122,7 +122,7 @@ Sizing it is a memory-versus-miss trade-off:
 | `sealed/` grows after sustained write | Normal seal packing | Size disk for sealed plus OpLog plus archive; growth alone is not corruption |
 | OpLog stays large and never shortens | Seal or truncate is stuck; archive I/O may be blocking truncate | Check durability config, free space, archive errors — [durability](../configure-and-operate/configuration/durability.md) |
 | Disk near full | Writes, seal and archive can all fail | Free space before continuing; if the journal looks torn, stop writes and restore on a copy |
-| Index miss starts a full partition scan | Should not happen with sealed `.sbpt` | Treat as a defect; check the `sealedPartitionScan` metric |
+| Index miss starts a full partition scan | Should not happen with sealed `.sbpt` | Treat as a defect; confirm via EXPLAIN / traces — there is no shipped `sealedPartitionScan` Prometheus counter |
 
 Plan capacity for three things at once: the sealed corpus, the live OpLog tail, and — if PITR is enabled — the archive. The archive is the one that grows without an upper bound unless it is rotated.
 

@@ -22,7 +22,7 @@ JDBC стоит **наравне** с реактивным API (`ConnectionFacto
 
 ```java
 try (SyncConnectionFactory factory = SyncConnectionFactory.fromUrl(
-        "grid://app:secret@127.0.0.1:15432/public")) {
+        "grid://grid:grid@127.0.0.1:15432/public")) {
     SyncConnection c = factory.open();
     try {
         long n = c.executeUpdate("UPSERT INTO t (id) VALUES (1)");
@@ -140,7 +140,7 @@ Grid **отклоняет DDL внутри открытой транзакции
 
 ## Ошибки EXEC / STRICT
 
-Сбои EXEC на сервере дополняются хвостом ` | sql=… binds=[…]` (SQL ≤ **512** символов, binds редактируются). JDBC отдаёт эту строку в `SQLException.getMessage()`. Коллизии STRICT / UNIQUE — текст `NonUniqueValueException`: `domain=… index=… value=[…] not unique for strict index.` Подробнее: [справочник API](../api-reference/README.md), [Java-клиент](java-client.md).
+Сбои EXEC на сервере дополняются хвостом ` | sql=… binds=[…]` (SQL ≤ **512** символов, binds редактируются). JDBC отдаёт эту строку в `SQLException.getMessage()` — не класс серверного исключения. Коллизии STRICT / UNIQUE — форма `domain=… index=… value=[…] not unique for strict index.` Подробнее: [справочник API](../api-reference/README.md), [Java-клиент](java-client.md).
 
 ## Частая ошибка: `bad frameLen …`
 

@@ -75,7 +75,8 @@ docker compose --env-file env\mid.env up -d
 cd examples\compose\1dc-n3
 docker compose --env-file env\high.env up -d
 # SQL: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public
-# Готовность (starter): http://127.0.0.1:7777/health/readiness
+# Готовность (1dc-n3): http://127.0.0.1:7777|7778|7779/health/readiness
+# Примечание: compose 1dc-n3 — hydrate-mode FULL в application-n*.yml (у starter HA — LAZY)
 ```
 
 ASYNC и SYNC Multidc делят host-порты — один стек за раз; не пересекайте с Jepsen Multidc.

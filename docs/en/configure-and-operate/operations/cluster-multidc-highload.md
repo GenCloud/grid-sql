@@ -45,7 +45,7 @@ Reference layout: **one Active DC** (write ring) and **one Hold DC** (warm stand
 | `b1` | `dc-b` | **HOLD** | `b1.dc-b.example:15435` | `127.0.0.1:15435` | `b1.dc-b.example:5618` |
 | `b2` | `dc-b` | **HOLD** | `b2.dc-b.example:15436` | `127.0.0.1:15436` | `b2.dc-b.example:5619` |
 
-Optional Witness: e.g. `w1.dc-w.example:15437` / repl `5620`, `region.role: WITNESS`, no OpLog hydrate payload. See Witness diagram in [promote a node](ha-promote.md).
+Optional Witness: e.g. `w1.dc-w.example:15437` / repl `5620`, `region.role: WITNESS`. A “light” witness is a **deployment** choice (empty `flow.domains` / no app domains) — the `WITNESS` role itself does not disable OpLog hydrate. See Witness diagram in [promote a node](ha-promote.md).
 
 ### ASYNC_SHIP node map
 

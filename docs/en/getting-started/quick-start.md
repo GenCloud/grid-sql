@@ -1,6 +1,6 @@
 # Quick start
 
-Build the fat jar, start one durable node, connect without credentials (capacity open auth), and run a few SQL statements. A two-node HA pair is at the end of the page.
+Build the fat jar, start one durable node, connect with starter credentials (`grid`/`grid`), and run a few SQL statements. A two-node HA pair is at the end of the page.
 
 ## Requirements
 
@@ -24,19 +24,19 @@ Readiness: `http://127.0.0.1:7778/health/readiness` (starter sets Actuator `serv
 
 ## First client
 
-Capacity starts with **no users** (open auth). First URL — without credentials:
+The `capacity` profile seeds bootstrap user **`grid`/`grid`** from YAML (`grid.sql-server.user` / `password`). Connect with credentials in the authority:
 
 ```
-grid://127.0.0.1:15432/public
+grid://grid:grid@127.0.0.1:15432/public
 ```
 
 JDBC:
 
 ```
-jdbc:grid://127.0.0.1:15432/public
+jdbc:grid://grid:grid@127.0.0.1:15432/public
 ```
 
-When AUTH is enabled later, put `user:pass@` in the authority (for example `grid://grid:grid@127.0.0.1:15432/public`).
+Open auth (no AUTH frame) applies only when **both** YAML credentials are blank **and** the privilege catalog has no users — not the default starter profiles.
 
 Use `RemoteConnectionFactory` from `grid-sql-client`, JDBC (`org.genfork.grid.jdbc.GridDriver`), or the [SQL CLI](../tools/sql-cli.md) for one-off statements. Root README has copy-paste Hello snippets.
 
@@ -70,7 +70,7 @@ Ports: SQL **15432** / **15433**, replication **5615** / **5616**. Multi-host UR
 | Port in use, bind failed | Another process on **15432**, or Actuator on **7778** (capacity) |
 | Readiness DOWN | With replication, wait for ORCHID sync and `writerEligible`; otherwise read the startup logs |
 | Client reports `bad frameLen` | You connected to a replication port (**5615** / **5616**) instead of SQL |
-| AUTH rejected with `user:pass` on capacity | Capacity has no users — use a URL **without** credentials, or create a user first |
+| AUTH rejected on capacity | Use `grid:grid` (starter YAML), or wrong user/pass against a non-empty catalog; a credential-less URL fails once users exist |
 | `mvn` fails resolving deps | Build online once (`mvn … package` without `-o`); need network for a cold local repo |
 
 ## Next

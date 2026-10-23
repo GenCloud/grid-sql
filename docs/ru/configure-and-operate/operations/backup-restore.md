@@ -70,7 +70,7 @@ SealedBaseBackupUtil.installBase(backupDir, dataDir)
 | Процесс | Процесс узла жив; нет второго процесса на том же `dataDir` |
 | Readiness | Actuator readiness UP; при репликации — `orchidSynced` / `orchid_r` выше допуска |
 | Роль пишущего | Не больше одного `writerEligible: true` в кольце записи; повышение роли только если этот узел должен писать ([повышение роли](ha-promote.md)) |
-| Путь приложения | Одна запись и одно чтение по реальному URL клиента (не HTTP `/replication/compare`) |
+| Путь приложения | Одна запись и одно чтение по реальному URL клиента (пишущий из wire meta / readiness) |
 | Пиры | Реплики подтягиваются; не форсировать чтение при `applyLagStale` |
 | Несколько площадок | Совпадение `regionEpoch` / ограждение Active, если PITR трогал Active |
 

@@ -26,7 +26,7 @@ grid:
 | Параметр | По умолчанию | Действие |
 |----------|--------------|----------|
 | `grid.overlay.enabled` | `false` | Без него `PIN KEY` отвергается с `overlay is disabled (grid.overlay.enabled=false)` |
-| `grid.overlay.durable` | `false` | Сохраняет аннотации в `{dataDir}/{cluster}/{node}/overlay/`, чтобы они переживали перезапуск |
+| `grid.overlay.durable` | `false` | Сохраняет аннотации в `{grid.replication.op-log.data-dir}/{cluster}/{node}/overlay/`, чтобы они переживали перезапуск |
 | `grid.overlay.auto-pin-ttl-ms` | `0` | Больше нуля — путь записи обновляет короткое закрепление на каждой горячей записи |
 
 Закрепление действует только там, где размещение иначе выполнило бы перенос. На одиночном узле без пиров `PIN KEY` принимается и записывается, но ничего не меняет.

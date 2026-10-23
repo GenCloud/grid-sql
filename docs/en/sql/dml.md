@@ -31,7 +31,7 @@ Columns not listed take a declared `DEFAULT` (literal / `NOW()` / `CURRENT_TIMES
 
 ### INSERT … SELECT
 
-Rows may come from a `SELECT` instead of `VALUES`. Same apply-row / conflict / TX path as multi-row `VALUES`. Set-op sources (`UNION` / …) in the SELECT are rejected.
+Rows may come from a `SELECT` instead of `VALUES`. Same apply-row / conflict / TX path as multi-row `VALUES`. Set-op sources (`UNION` / …) in the SELECT are rejected. Bound / prepared `INSERT … SELECT` (placeholders in the statement) is **not** supported by the prepare binder — use literals or plain (non-prepared) execute.
 
 ```sql
 INSERT INTO orders_archive (id, customer_id, total)

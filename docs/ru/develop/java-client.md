@@ -32,7 +32,7 @@ JDBC-клиент (`org.genfork.grid.jdbc`) — стабильный синхр�
 
 ```java
 ConnectionFactory factory = ConnectionFactory.fromUrl(
-        "grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public"
+        "grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public"
                 + "?connectTimeoutMs=1000&retryMode=FIXED&maxRetries=2");
 
 Mono<Connection> connection = factory.obtain();
@@ -111,7 +111,7 @@ Flux<String> names = connection
 | API | Полезная нагрузка | Провод |
 |-----|-------------------|--------|
 | `connection.executeBatch(List.of(...))` | Только текст SQL | `BATCH_EXEC` без binds на слот |
-| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Индексированный SQL + `Object[]` binds на слот (`org.genfork.grid.sql.client.BatchStatement`) | Один RTT `BATCH_EXEC` с binds |
+| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Индексированный SQL + `Object[]` binds на слот (`org.genfork.grid.sql.client.BatchStatement`) | Product remote (`RemoteConnection`) — один RTT `BATCH_EXEC` с binds; default SPI `Connection` может идти по слотам |
 
 В autocommit каждый слот коммитится сам по себе; общей транзакции у них нет. Для общей TX — `TxContext.executeBatch` / `executeBatchBound` после `begin()` — [транзакции](transactions.md).
 
@@ -172,7 +172,7 @@ public void handle() {
 
 ### Ошибки EXEC
 
-Сбои `execute` / `executeUpdate` / слотов батча приходят с обогащённым сообщением: базовый текст плюс ` | sql=… binds=[…]` (`SqlExecErrorContextUtil`; SQL обрезается до **512** символов, binds редактируются). Коллизии STRICT сохраняют `NonUniqueValueException` с канонической формой `domain=… index=… value=[…] not unique for strict index.`; типы lock / replica-DML / ORCHID сохраняются; прочие оборачиваются в `SqlExecException`. Тот же текст на JDBC — [JDBC-клиент](jdbc-tooling.md), [справочник API](../api-reference/README.md).
+Сбои `execute` / `executeUpdate` / слотов батча приходят с обогащённым **текстом** сообщения: базовый текст плюс ` | sql=… binds=[…]` (`SqlExecErrorContextUtil` на сервере; SQL обрезается до **512** символов, binds редактируются). Коллизии STRICT — каноническая форма `domain=… index=… value=[…] not unique for strict index.` Типизированные исключения (`NonUniqueValueException`, `SqlExecException`, lock / replica-DML / ORCHID) живут **in-process на сервере**; по проводу клиент видит `IllegalStateException` (reactive) или JDBC `SQLException` с этим текстом — [JDBC-клиент](jdbc-tooling.md), [справочник API](../api-reference/README.md).
 
 ## ReactiveSqlOps
 
@@ -206,7 +206,7 @@ Mono<Void> parallel = Mono.zip(
 Если в URL указать `readEndpoints`, `ConnectionFactory.fromUrl` вернёт маршрутизирующее соединение: autocommit `SELECT` / `EXPLAIN` уйдут на наименее загруженную синхронную реплику, а записи, транзакции, DDL, `PREPARE` и `FOR UPDATE` — на пишущий узел. Классификацию делает общий ANTLR-классификатор, одинаковый на клиенте и на сервере.
 
 ```
-grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:15434&readPreference=REPLICA&maxReadConnections=2
+grid://grid:grid@primary:15432/public?readEndpoints=replica-1:15433,replica-2:15434&readPreference=REPLICA&maxReadConnections=2
 ```
 
 Чтение своих записей через реплику без лишнего обхода через пишущий не гарантируется. При превышении допустимого отставания реплика отвечает `REPLICA_READ_STALE`, и клиент меняет адрес реплики. Полный разбор политик, отказов и рисков — [чтение с реплики](../configure-and-operate/operations/replica-reads.md).

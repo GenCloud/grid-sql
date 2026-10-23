@@ -36,16 +36,16 @@ Starter profiles `primary`, `replica`, and `capacity` already set `fsync: true`,
 |---------|---------|--------|
 | `grid.durability.enabled` | `true` | Commit passes ORCHID and the OpLog before becoming visible in memory; a journal failure aborts the commit |
 | `grid.durability.hydrate-mode` | `FULL` | `FULL` loads sealed files and the journal into memory at startup; `LAZY` maps sealed files and replays only the journal tail |
-| `grid.durability.working-set-max-entries` | `0` (unbounded) | Working-set ceiling. Above `0`, cold committed keys are evicted by **CLOCK** (reference bit + hysteresis), not LRU; dirty and staged entries are never evicted |
+| `grid.durability.working-set-max-entries` | `0` | YAML `0` with default `adaptive-disk-first: true` → effective CLOCK cap **65536** (`AdaptiveDiskFirstController.DEFAULT_CONFIGURED_MAX`). Unbounded CLOCK budget only when `0` **and** adaptive off. Above an explicit `>0`, cold committed keys evict by **CLOCK** (reference bit + hysteresis); dirty/staged never evict |
 | `grid.durability.sealed-dump-interval-ms` | `60000` | Background sealed checkpoint cadence; values `<= 0` fall back to the default, values below **15000** clamp up to that floor. Periodic dump may **skip** under OpLog fsync pressure (shutdown dump still runs) |
-| `grid.durability.adaptive-disk-first` | `true` | Under disk pressure, lean harder on the sealed-miss load path instead of growing memory |
+| `grid.durability.adaptive-disk-first` | `true` | Under **heap free-ratio + working-set fill** pressure, shrink the WS cap and prefer sealed-miss load (`preferSealedOnly` on HIGH); not raw disk I/O pressure |
 | `grid.durability.oplog-archive.enabled` | `false` | Copy the journal range to the archive before truncate; a copy failure cancels the truncate |
 | `grid.durability.oplog-archive.dir` | `./data/oplog-archive` | Archive root, consumed by [PITR](../operations/pitr.md) |
 | `grid.durability.oplog-archive.stream-enabled` | `false` | Append-only journal stream off the node on safe truncate |
 | `grid.durability.oplog-archive.stream-dir` | `""` | Stream root; blank resolves to `{dir}/stream` |
 | `grid.replication.op-log.data-dir` | `./data/replication` | Journal segment directory, one per node |
-| `grid.replication.op-log.fsync` | `true` | `FileChannel.force` on append. `false` only isolates a bottleneck on a test host |
-| `grid.replication.op-log.segment-size` | `1024` | Segment size in MiB; drives rotation and truncate granularity |
+| `grid.replication.op-log.fsync` | `true` | Durable **group** `FileChannel.force` after each commit unit (deferred append + `GroupForceGate`); not per OpLog record. Metric: `oplog_fsync_p99_ns` — [monitoring](../monitoring.md). `false` only isolates a bottleneck on a test host |
+| `grid.replication.op-log.segment-size` | `1024` | Max **ops** buffered per `domain#shard` before same-DC ship flush (`ReplicationPublisher`); **not** MiB and not OpLog file rotation / truncate |
 
 `hydrate-mode` defaults to `FULL`, which is the wrong choice for most production corpora. Set `LAZY` explicitly unless the sealed set fits comfortably in heap.
 
@@ -83,7 +83,7 @@ Read-path and mapping details: [GMAP storage](../../understand/storage-sealed-gm
 
 ## Seal, truncate, archive
 
-1. Commits accumulate in the OpLog, with `force` on append when `fsync: true`.
+1. Commits accumulate in the OpLog via deferred append (no `force` per record). When `fsync: true`, one **group** `force` runs at commit-unit finish (`MutationRecorder` / `GroupForceGate`); batch and TX amortize that syscall.
 2. Seal compacts the journal tail into sealed `.gmap` and `.sbpt` files and raises the watermark.
 3. Truncate cuts the journal only through that watermark. With `oplog-archive.enabled: true` the range is copied to the archive first; an archive I/O error cancels the truncate rather than dropping the range.
 4. After a restart, the authoritative state is sealed files plus the journal tail — and the archive, for point-in-time recovery.

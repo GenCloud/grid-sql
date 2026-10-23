@@ -1,6 +1,6 @@
 # Быстрый старт
 
-Соберите толстый jar, поднимите один узел с записью на диск, подключитесь без учётных данных (профиль `capacity` — открытый AUTH) и выполните несколько SQL-операторов. Пара узлов в режиме HA — в конце страницы.
+Соберите толстый jar, поднимите один узел с записью на диск, подключитесь с учётными данными starter (`grid`/`grid`) и выполните несколько SQL-операторов. Пара узлов в режиме HA — в конце страницы.
 
 ## Требования
 
@@ -24,19 +24,19 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spr
 
 ## Первый клиент
 
-В `capacity` пользователей **нет** (открытый AUTH). Первый URL — без учётных данных:
+Профиль `capacity` создаёт bootstrap-пользователя **`grid`/`grid`** из YAML (`grid.sql-server.user` / `password`). Подключайтесь с учётными данными в authority:
 
 ```
-grid://127.0.0.1:15432/public
+grid://grid:grid@127.0.0.1:15432/public
 ```
 
 JDBC:
 
 ```
-jdbc:grid://127.0.0.1:15432/public
+jdbc:grid://grid:grid@127.0.0.1:15432/public
 ```
 
-Когда AUTH включат позже — укажите `user:pass@` в authority (например `grid://grid:grid@127.0.0.1:15432/public`).
+Открытый AUTH (кадр без AUTH) — только если **оба** credentials в YAML пустые **и** каталог привилегий без пользователей; у профилей starter по умолчанию это не так.
 
 Используйте `RemoteConnectionFactory` из `grid-sql-client`, JDBC (`org.genfork.grid.jdbc.GridDriver`) или [SQL CLI](../tools/sql-cli.md). В корневом README есть готовые Hello-фрагменты.
 
@@ -70,7 +70,7 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spr
 | Порт занят, ошибка bind | Другой процесс на **15432** или Actuator на **7778** (capacity) |
 | Readiness в состоянии DOWN | При репликации дождитесь синхронизации ORCHID и `writerEligible`; без неё смотрите журналы запуска |
 | Клиент сообщает `bad frameLen` | Подключение ушло на порт репликации (**5615** / **5616**) вместо SQL |
-| AUTH отказ с `user:pass` на capacity | В `capacity` пользователей нет — URL **без** учётных данных или создайте пользователя |
+| AUTH отказ на capacity | Используйте `grid:grid` (YAML starter) или неверный user/pass при непустом каталоге; URL без credentials не проходит, когда пользователи уже есть |
 | `mvn` не резолвит зависимости | Один раз соберите онлайн (`mvn … package` без `-o`); нужен сеть для холодного репозитория |
 
 ## Дальше

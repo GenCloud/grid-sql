@@ -36,16 +36,16 @@ grid:
 |----------|--------------|----------|
 | `grid.durability.enabled` | `true` | Коммит проходит через согласие (*ORCHID*) и журнал до появления в памяти; сбой журнала отменяет коммит |
 | `grid.durability.hydrate-mode` | `FULL` | `FULL` — загрузить запечатанные файлы и журнал в память на старте; `LAZY` — отобразить запечатанные файлы (*mmap*) и проиграть только хвост журнала |
-| `grid.durability.working-set-max-entries` | `0` (без ограничения) | Потолок рабочего набора. Выше `0` холодные закоммиченные ключи вытесняются **CLOCK** (reference bit + hysteresis), не LRU; грязные и ещё не слитые из очереди записи не вытесняются никогда |
+| `grid.durability.working-set-max-entries` | `0` | YAML `0` при default `adaptive-disk-first: true` → эффективный потолок CLOCK **65536** (`AdaptiveDiskFirstController.DEFAULT_CONFIGURED_MAX`). Без потолка — только при `0` **и** выключенном adaptive. Явный `>0` — холодные закоммиченные ключи вытесняются **CLOCK**; dirty/staging не вытесняются |
 | `grid.durability.sealed-dump-interval-ms` | `60000` | Период фонового sealed checkpoint; `<= 0` → default, ниже **15000** поднимается до этого пола. Периодический dump может **пропускаться** под давлением OpLog fsync (dump на shutdown всё равно выполняется) |
-| `grid.durability.adaptive-disk-first` | `true` | При давлении на диск сильнее опираться на подгрузку с запечатанных файлов, а не растить память |
+| `grid.durability.adaptive-disk-first` | `true` | При давлении **свободного heap + заполнения working set** сжимает cap WS и предпочитает sealed-miss (`preferSealedOnly` на HIGH); это не «давление диска» как I/O |
 | `grid.durability.oplog-archive.enabled` | `false` | Перед обрезкой копировать диапазон журнала в архив; ошибка копирования отменяет обрезку |
 | `grid.durability.oplog-archive.dir` | `./data/oplog-archive` | Корень архива, его читает [PITR](../operations/pitr.md) |
 | `grid.durability.oplog-archive.stream-enabled` | `false` | Поток журнала за пределы узла, только дозапись, при безопасной обрезке |
 | `grid.durability.oplog-archive.stream-dir` | `""` | Корень потока; пустое значение разворачивается в `{dir}/stream` |
 | `grid.replication.op-log.data-dir` | `./data/replication` | Каталог сегментов журнала, отдельный для каждого узла |
-| `grid.replication.op-log.fsync` | `true` | `FileChannel.force` при дозаписи. `false` допустим только для поиска узкого места на тестовом хосте |
-| `grid.replication.op-log.segment-size` | `1024` | Размер сегмента в МиБ; задаёт ротацию и шаг обрезки |
+| `grid.replication.op-log.fsync` | `true` | Durable **групповой** `FileChannel.force` после единицы коммита (deferred append + `GroupForceGate`); не на каждую запись OpLog. Метрика: `oplog_fsync_p99_ns` — [мониторинг](../monitoring.md). `false` допустим только для поиска узкого места на тестовом хосте |
+| `grid.replication.op-log.segment-size` | `1024` | Макс. **число ops** в буфере на `domain#shard` до same-DC ship flush (`ReplicationPublisher`); **не** МиБ и не ротация/обрезка файла OpLog |
 
 По умолчанию `hydrate-mode` равен `FULL`, и для большинства промышленных профилей это неверный выбор. Указывайте `LAZY` явно, если запечатанный набор не укладывается в heap с запасом.
 
@@ -83,7 +83,7 @@ grid:
 
 ## Запечатывание, обрезка, архив
 
-1. Коммиты копятся в журнале, при `fsync: true` каждая дозапись сопровождается `force`.
+1. Коммиты копятся в журнале через deferred append (без `force` на каждую запись). При `fsync: true` один **групповой** `force` выполняется на finish единицы коммита (`MutationRecorder` / `GroupForceGate`); batch и TX амортизируют этот syscall.
 2. Запечатывание уплотняет хвост журнала в файлы `.gmap` и `.sbpt` и поднимает отметку.
 3. Обрезка режет журнал только до этой отметки. При `oplog-archive.enabled: true` диапазон сначала копируется в архив; ошибка ввода-вывода отменяет обрезку, а не теряет диапазон.
 4. После перезапуска источник истины — запечатанные файлы плюс хвост журнала, а для восстановления на точку во времени ещё и архив.

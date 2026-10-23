@@ -25,7 +25,7 @@
 
 ```java
 ConnectionFactory factory = ConnectionFactory.fromUrl(
-        "grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public"
+        "grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public"
                 + "?connectTimeoutMs=1000&retryMode=FIXED&maxRetries=2");
 
 Mono<Connection> connection = factory.obtain();
@@ -66,7 +66,7 @@ grid://<пользователь>:<пароль>@<хост>:<порт>[,<хос�
 ### Чтение с реплики
 
 ```
-grid://app:secret@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433&readPreference=REPLICA
+grid://grid:grid@127.0.0.1:15432/public?readEndpoints=127.0.0.1:15433&readPreference=REPLICA
 ```
 
 Если в URL указан `readEndpoints`, метод `ConnectionFactory.fromUrl` возвращает маршрутизирующее соединение: `SELECT` и `EXPLAIN` в режиме autocommit уходят на синхронизированную реплику, а записи, транзакции, DDL, `PREPARE` и `FOR UPDATE` остаются на пишущем узле. Собирать две фабрики вручную не требуется.

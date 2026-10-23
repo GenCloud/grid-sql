@@ -25,7 +25,7 @@ Conditions and the ~95% regression floors: [capacity](capacity-slo.md). Measurem
 | whereRange | 76.816 | 75.714 | 55.523 | µs/op |
 | zzPkMiss | 0.278 | 0.431 | 0.177 | µs/op |
 
-Invariant: an index miss never starts a partition scan (`sealedPartitionScan` = 0).
+Invariant: an index miss never starts a partition scan (no sealed index-miss → full partition sweep).
 
 ## Encode and wire
 

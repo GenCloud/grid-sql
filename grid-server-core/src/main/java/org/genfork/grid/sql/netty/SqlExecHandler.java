@@ -153,6 +153,18 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		return inFlightExec.size();
 	}
 
+	/**
+	 * Whether {@link SqlIdleCloseHandler} may close this channel on reader idle.
+	 * Before AUTH always; after AUTH only when no in-flight EXEC/BATCH and no portal.
+	 */
+	@VisibleForTesting
+	boolean mayIdleClose() {
+		if (!authed.get()) {
+			return true;
+		}
+		return inFlightExec.isEmpty() && portals.isEmpty();
+	}
+
 	@VisibleForTesting
 	SqlExecInterruptRegistry interruptRegistry() {
 		return interruptRegistry;

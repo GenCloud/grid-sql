@@ -82,7 +82,8 @@ public class GridSqlAutoConfiguration {
 		if (tcp) {
 			b.bind(listen.getHost(), listen.getPort())
 					.auth(listen.getUser(), listen.getPassword())
-					.maxTxContexts(listen.getMaxTxContexts());
+					.maxTxContexts(listen.getMaxTxContexts())
+					.idleTimeoutMs(listen.getIdleTimeoutMs());
 		}
 		return b.build().start();
 	}

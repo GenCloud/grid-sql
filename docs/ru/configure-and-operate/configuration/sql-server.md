@@ -29,7 +29,7 @@ grid:
 | `grid.sql-server.user` / `password` | `grid` / `grid` | Начальный администратор при пустом каталоге (полные права). Оба пустые → вход без пароля до первого `CREATE USER` |
 | `grid.sql-server.max-tx-contexts` | `8` | Макс. одновременных логических сессий на одном SQL TCP (`<= 0` = без предела) |
 | `grid.sql.default-shards` | `4` | Число шардов для таблиц, созданных без явного указания |
-| `grid.sql.data-dir` | `./data/catalog` | Корень каталога; внутри лежит `catalog/privileges.meta` (на узел; репликация не доставляет) |
+| `grid.sql.data-dir` | `./data/catalog` | Корень каталога; внутри лежит `catalog/privileges.meta` (локальный файл не шипится; privilege DDL идёт в OpLog `_catalog` при включённой репликации) |
 | `grid.sql.lock-wait-timeout-ms` | `8000` | Предел ожидания блокировки записи до ошибки `lock wait timeout` |
 | `grid.sql.prepare-pool-size` | `64` | Пул подготовленных запросов на движок |
 | `grid.sql.catalog-meta-cache-size` | `256` | Размер кэша метаданных каталога |

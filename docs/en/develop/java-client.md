@@ -32,7 +32,7 @@ The recommended path is a URL. `ConnectionFactory.fromUrl` parses the authority,
 
 ```java
 ConnectionFactory factory = ConnectionFactory.fromUrl(
-        "grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public"
+        "grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public"
                 + "?connectTimeoutMs=1000&retryMode=FIXED&maxRetries=2");
 
 Mono<Connection> connection = factory.obtain();
@@ -111,7 +111,7 @@ Several statements in one RTT:
 | API | Payload | Wire |
 |-----|---------|------|
 | `connection.executeBatch(List.of(...))` | SQL text only | `BATCH_EXEC` without per-slot binds |
-| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Indexed SQL + `Object[]` binds per slot (`org.genfork.grid.sql.client.BatchStatement`) | One RTT `BATCH_EXEC` with binds |
+| `connection.executeBatchBound(List.of(new BatchStatement(sql, binds), …))` | Indexed SQL + `Object[]` binds per slot (`org.genfork.grid.sql.client.BatchStatement`) | Product remote (`RemoteConnection`) — one RTT `BATCH_EXEC` with binds; default `Connection` SPI may fall back to per-slot execute |
 
 In autocommit each slot commits on its own; there is no shared transaction around them. For a shared TX use `TxContext.executeBatch` / `executeBatchBound` after `begin()` — [transactions](transactions.md).
 
@@ -172,7 +172,7 @@ Instead of blocking inside a service, return `Mono` / `Flux` outward and compose
 
 ### EXEC errors
 
-Failed `execute` / `executeUpdate` / batch slots arrive with an enriched message: base text plus ` | sql=… binds=[…]` (`SqlExecErrorContextUtil`; SQL truncated to **512** chars, binds redacted). STRICT collisions keep `NonUniqueValueException` with the canonical shape `domain=… index=… value=[…] not unique for strict index.`; lock / replica-DML / ORCHID types are preserved; other failures wrap as `SqlExecException`. Same text on the JDBC path — [JDBC client](jdbc-tooling.md), [API reference](../api-reference/README.md).
+Failed `execute` / `executeUpdate` / batch slots arrive with an enriched **message**: base text plus ` | sql=… binds=[…]` (`SqlExecErrorContextUtil` on the server; SQL truncated to **512** chars, binds redacted). STRICT collisions use the canonical shape `domain=… index=… value=[…] not unique for strict index.` Typed exceptions (`NonUniqueValueException`, `SqlExecException`, lock / replica-DML / ORCHID) exist **in-process on the server**; over the wire the client sees `IllegalStateException` (reactive) or JDBC `SQLException` with that message text — [JDBC client](jdbc-tooling.md), [API reference](../api-reference/README.md).
 
 ## ReactiveSqlOps
 
@@ -199,14 +199,14 @@ Mono<Void> parallel = Mono.zip(
 ).then();
 ```
 
-This is a fundamentally different model from a JDBC connection pool: you do not need `maxTxContexts` sockets, you need one socket and several logical sessions. The **client** cap bounds `SESSION_OPEN` requests; the **server** still rejects beyond **8** open sessions on that TCP — open another `Connection` rather than raising only the client value.
+This is a fundamentally different model from a JDBC connection pool: you do not need `maxTxContexts` sockets, you need one socket and several logical sessions. The **client** cap bounds `SESSION_OPEN` requests; the **server** default hard-cap is **8** open sessions per TCP (`grid.sql-server.max-tx-contexts`, configurable) — raise the YAML and/or open another `Connection`.
 
 ## Replica reads
 
 If the URL specifies `readEndpoints`, `ConnectionFactory.fromUrl` returns a routing connection: autocommit `SELECT` / `EXPLAIN` go to the least loaded synced replica, while writes, transactions, DDL, `PREPARE` and `FOR UPDATE` go to the writer. Classification is done by the shared ANTLR classifier, identical on client and server.
 
 ```
-grid://app:secret@primary:15432/public?readEndpoints=replica-1:15433,replica-2:15434&readPreference=REPLICA&maxReadConnections=2
+grid://grid:grid@primary:15432/public?readEndpoints=replica-1:15433,replica-2:15434&readPreference=REPLICA&maxReadConnections=2
 ```
 
 Read-your-writes through a replica without a round trip to the writer is not guaranteed. When the allowed lag is exceeded the replica answers `REPLICA_READ_STALE` and the client switches endpoint. Full coverage of policies, failures and risks — [replica reads](../configure-and-operate/operations/replica-reads.md).

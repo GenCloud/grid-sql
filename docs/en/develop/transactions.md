@@ -78,7 +78,7 @@ Several `connection.begin()` calls on one connection give several independent tr
 
 If the server answers `maxTxContexts=N exhausted`, raise `grid.sql-server.max-tx-contexts` and/or open another `Connection`. Details: [SQL server](../configure-and-operate/configuration/sql-server.md).
 
-This is not a JDBC pool: do not open N connections to get N transactions. Isolation between them rests on record locks, `TX_*` markers in the journal and prepare handles, not on separate TCP channels.
+On the **reactive** SPI, do not open N TCP sockets for N transactions — several `connection.begin()` / `TxContext`s share one `Connection`. Isolation rests on record locks, `TX_*` markers and prepare handles. **JDBC** is different: one open TX per `java.sql.Connection`, so parallel TX needs N JDBC connections from the same factory (multiplex) — [JDBC client](jdbc-tooling.md).
 
 ## Savepoints
 

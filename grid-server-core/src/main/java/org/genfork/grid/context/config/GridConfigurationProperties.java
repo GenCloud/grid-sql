@@ -983,10 +983,17 @@ public class GridConfigurationProperties {
 	 * OpLog segment / dataDir / fsync.
 	 */
 	public static class OpLogProps {
+		/**
+		 * Max ops buffered per {@code domain#shard} before same-DC ship flush
+		 * ({@code ReplicationPublisher}); not file size in MiB.
+		 */
 		private int segmentSize = 1024;
 		/** Root directory for OpLog + orchid state (always on disk). */
 		private String dataDir = "./data/replication";
-		/** fsync after each append (safer, slower). */
+		/**
+		 * Durable group fsync on OpLog: deferred append + {@code force} per commit unit
+		 * (coalesced via {@code GroupForceGate}). {@code false} = lab bottleneck isolation only.
+		 */
 		private boolean fsync = true;
 
 		public int getSegmentSize() {
@@ -1059,7 +1066,7 @@ public class GridConfigurationProperties {
 	public static class OverlayProps {
 		/** Soft read-time annotations (TTL/pin/QoS); not a second row store. */
 		private boolean enabled = false;
-		/** Persist overlays under `{data-dir}/{cluster}/{node}/overlay/`. */
+		/** Persist overlays under `{op-log.data-dir}/{cluster}/{node}/overlay/`. */
 		private boolean durable = false;
 		/**
 		 * When {@code > 0}, auto-pin hot writes with this TTL (ms). {@code 0} = off.
@@ -1554,6 +1561,12 @@ public class GridConfigurationProperties {
 		 * Default = {@link SqlServer#DEFAULT_MAX_TX_CONTEXTS}.
 		 */
 		private int maxTxContexts = SqlServer.DEFAULT_MAX_TX_CONTEXTS;
+		/**
+		 * Reader-idle close on the SQL TCP listen (ms). {@code <= 0} disables.
+		 * YAML: {@code grid.sql-server.idle-timeout-ms}. Default = {@link SqlServer#DEFAULT_IDLE_TIMEOUT_MS}.
+		 * When enabled, closes before AUTH always; after AUTH only with no in-flight EXEC and no portal.
+		 */
+		private long idleTimeoutMs = SqlServer.DEFAULT_IDLE_TIMEOUT_MS;
 
 		public boolean isEnabled() {
 			return enabled;
@@ -1601,6 +1614,14 @@ public class GridConfigurationProperties {
 
 		public void setMaxTxContexts(int maxTxContexts) {
 			this.maxTxContexts = maxTxContexts;
+		}
+
+		public long getIdleTimeoutMs() {
+			return idleTimeoutMs;
+		}
+
+		public void setIdleTimeoutMs(long idleTimeoutMs) {
+			this.idleTimeoutMs = idleTimeoutMs;
 		}
 	}
 }

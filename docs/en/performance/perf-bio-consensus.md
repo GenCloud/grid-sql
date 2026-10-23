@@ -29,10 +29,10 @@ Both are exported through Actuator health and Micrometer — see [monitoring](..
 | Stage | If p99 rises | Where to look |
 |-------|--------------|---------------|
 | ORCHID wait | Peer network, `R` threshold, digest load | `orchidWaitP99Ns`, the `peers` list |
-| OpLog fsync | Disk, segment size, `force` contention | `oplogFsyncP99Ns`, `op-log.fsync` |
-| Network ship | In-DC or cross-DC send, off the commit path | RPO, `/replication/compare` |
+| OpLog fsync | Disk, group-force contention | `oplogFsyncP99Ns`, `op-log.fsync` |
+| Network ship | In-DC or cross-DC send, off the commit path | RPO, readiness `applyLagStale` / lag metrics |
 
-Rising ORCHID wait with a stable fsync points at the peer network, the `R` threshold or digest load. Rising fsync with calm ORCHID points at the disk, the segment size or `force` contention. If both rise together the host itself is overloaded, and nothing measured there should be compared against thresholds.
+Rising ORCHID wait with a stable fsync points at the peer network, the `R` threshold or digest load. Rising fsync with calm ORCHID points at the disk or group-`force` contention. If both rise together the host itself is overloaded, and nothing measured there should be compared against thresholds.
 
 ## How to measure
 

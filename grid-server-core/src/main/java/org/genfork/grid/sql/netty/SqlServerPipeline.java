@@ -15,35 +15,42 @@
  */
 package org.genfork.grid.sql.netty;
 
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.timeout.IdleStateHandler;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.sql.SqlEngine;
 
 /**
- * Server ChannelPipeline: frame codec + EXEC / BATCH_EXEC handler.
+ * Server ChannelPipeline: optional idle close + frame codec + EXEC / BATCH_EXEC handler.
  *
  * @author: GenCloud
  * @date: 2025/11
  * @since: 1.0
  */
 public final class SqlServerPipeline extends ChannelInitializer<SocketChannel> {
+	private static final long WRITER_IDLE_DISABLED_SECONDS = 0L;
+	private static final long ALL_IDLE_DISABLED_SECONDS = 0L;
+
 	private final SqlEngine engine;
 	private final String user;
 	private final String password;
 	private final int maxTxContexts;
+	private final long idleTimeoutMs;
 	private final ReplicationCoordinator replication;
 	private final SqlChannelRegistry channelRegistry;
 	private final AtomicReference<Boolean> applyLagStaleOverride;
 
 	public SqlServerPipeline(SqlEngine engine, String user, String password) {
-		this(engine, user, password, SqlServer.DEFAULT_MAX_TX_CONTEXTS, null, null, null);
+		this(engine, user, password, SqlServer.DEFAULT_MAX_TX_CONTEXTS, SqlServer.DEFAULT_IDLE_TIMEOUT_MS,
+				null, null, null);
 	}
 
 	public SqlServerPipeline(SqlEngine engine, String user, String password, int maxTxContexts) {
-		this(engine, user, password, maxTxContexts, null, null, null);
+		this(engine, user, password, maxTxContexts, SqlServer.DEFAULT_IDLE_TIMEOUT_MS, null, null, null);
 	}
 
 	public SqlServerPipeline(
@@ -53,7 +60,7 @@ public final class SqlServerPipeline extends ChannelInitializer<SocketChannel> {
 			int maxTxContexts,
 			ReplicationCoordinator replication
 	) {
-		this(engine, user, password, maxTxContexts, replication, null, null);
+		this(engine, user, password, maxTxContexts, SqlServer.DEFAULT_IDLE_TIMEOUT_MS, replication, null, null);
 	}
 
 	SqlServerPipeline(
@@ -64,7 +71,8 @@ public final class SqlServerPipeline extends ChannelInitializer<SocketChannel> {
 			ReplicationCoordinator replication,
 			SqlChannelRegistry channelRegistry
 	) {
-		this(engine, user, password, maxTxContexts, replication, channelRegistry, null);
+		this(engine, user, password, maxTxContexts, SqlServer.DEFAULT_IDLE_TIMEOUT_MS, replication,
+				channelRegistry, null);
 	}
 
 	SqlServerPipeline(
@@ -76,10 +84,25 @@ public final class SqlServerPipeline extends ChannelInitializer<SocketChannel> {
 			SqlChannelRegistry channelRegistry,
 			AtomicReference<Boolean> applyLagStaleOverride
 	) {
+		this(engine, user, password, maxTxContexts, SqlServer.DEFAULT_IDLE_TIMEOUT_MS, replication,
+				channelRegistry, applyLagStaleOverride);
+	}
+
+	SqlServerPipeline(
+			SqlEngine engine,
+			String user,
+			String password,
+			int maxTxContexts,
+			long idleTimeoutMs,
+			ReplicationCoordinator replication,
+			SqlChannelRegistry channelRegistry,
+			AtomicReference<Boolean> applyLagStaleOverride
+	) {
 		this.engine = engine;
 		this.user = user;
 		this.password = password;
 		this.maxTxContexts = maxTxContexts;
+		this.idleTimeoutMs = idleTimeoutMs;
 		this.replication = replication;
 		this.channelRegistry = channelRegistry;
 		this.applyLagStaleOverride = applyLagStaleOverride;
@@ -87,6 +110,15 @@ public final class SqlServerPipeline extends ChannelInitializer<SocketChannel> {
 
 	@Override
 	protected void initChannel(SocketChannel ch) {
+		if (idleTimeoutMs > 0L) {
+			ch.pipeline().addLast(new IdleStateHandler(
+					idleTimeoutMs,
+					WRITER_IDLE_DISABLED_SECONDS,
+					ALL_IDLE_DISABLED_SECONDS,
+					TimeUnit.MILLISECONDS));
+			ch.pipeline().addLast(new SqlIdleCloseHandler());
+		}
+		
 		ch.pipeline()
 				.addLast(new SqlFrameCodec())
 				.addLast(new SqlExecHandler(

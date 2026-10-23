@@ -20,14 +20,14 @@ mvn -pl grid-sql-server-starter -am package -DskipTests
 java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spring.profiles.active=capacity
 ```
 
-The `capacity` profile listens on SQL port **15432** with durability on and replication off (**open auth** — no users yet).
+The `capacity` profile listens on SQL port **15432** with durability on and replication off; starter YAML seeds **`grid`/`grid`** (AUTH required).
 
 ### Hello (JDBC)
 
 ```java
 Class.forName("org.genfork.grid.jdbc.GridDriver");
 try (java.sql.Connection c = java.sql.DriverManager.getConnection(
-        "jdbc:grid://127.0.0.1:15432/public")) {
+        "jdbc:grid://grid:grid@127.0.0.1:15432/public")) {
     c.createStatement().execute(
             "CREATE TABLE IF NOT EXISTS demo (id BIGINT PRIMARY KEY, name VARCHAR)");
     c.createStatement().execute("UPSERT INTO demo (id, name) VALUES (1, 'hello')");
@@ -39,15 +39,14 @@ try (java.sql.Connection c = java.sql.DriverManager.getConnection(
 ```java
 org.genfork.grid.sql.client.RemoteConnectionFactory factory =
         new org.genfork.grid.sql.client.RemoteConnectionFactory(
-                "127.0.0.1", 15432, "", "", 8);
+                "127.0.0.1", 15432, "grid", "grid", 8);
 factory.obtain()
         .flatMap(conn -> conn.createStatement(
                 "UPSERT INTO demo (id, name) VALUES (1, 'hello')").executeUpdate())
         .block(); // demo only — not in library API
 ```
 
-URLs: `grid://127.0.0.1:15432/public` · `jdbc:grid://127.0.0.1:15432/public`.  
-If AUTH is enabled, use `user:pass@` in the authority (for example `grid://grid:grid@…`).
+URLs: `grid://grid:grid@127.0.0.1:15432/public` · `jdbc:grid://grid:grid@127.0.0.1:15432/public`.
 
 ## Proofs (lab host)
 
@@ -112,12 +111,12 @@ Full knobs: [durability](docs/en/configure-and-operate/configuration/durability.
 
 ## How apps connect
 
-| Client | URL (capacity / open auth) | Use |
-|--------|----------------------------|-----|
-| Reactive | `grid://127.0.0.1:15432/public` | Reactor / non-blocking |
-| JDBC | `jdbc:grid://127.0.0.1:15432/public` | DataSource / DAO / IDEs |
+| Client | URL (capacity starter) | Use |
+|--------|------------------------|-----|
+| Reactive | `grid://grid:grid@127.0.0.1:15432/public` | Reactor / non-blocking |
+| JDBC | `jdbc:grid://grid:grid@127.0.0.1:15432/public` | DataSource / DAO / IDEs |
 
-With AUTH enabled, put `user:pass@` in the authority. Schema is SQL DDL (`CREATE TABLE`). One TCP multiplexes many logical sessions: client `maxTxContexts` soft default **256**, server channel hard-cap **8** (Boot does not raise it from YAML). Details: [connect clients](docs/en/getting-started/connect-clients.md), [JDBC](docs/en/develop/jdbc-tooling.md).
+Schema is SQL DDL (`CREATE TABLE`). One TCP multiplexes many logical sessions: client `maxTxContexts` soft default **256**, server channel hard-cap **8** (configurable via `grid.sql-server.max-tx-contexts`). Details: [connect clients](docs/en/getting-started/connect-clients.md), [JDBC](docs/en/develop/jdbc-tooling.md).
 
 ## Modules
 

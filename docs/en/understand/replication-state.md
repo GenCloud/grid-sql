@@ -67,7 +67,7 @@ What does **not** come back is uncommitted state: a transaction that never reach
 
 ## Commit order (no silent success)
 
-ORCHID commit happens **before** the map put. The OpLog append is followed by `confirmPersisted` — by `MutationRecorder` on the writer and by `ReplicaApplier` on a peer. The ship path blocks on a flow permit rather than queueing without bound.
+ORCHID commit happens **before** the map put. On the **writer**, `MutationRecorder` finishes with deferred OpLog append plus a group `force` (when `fsync` is on), then tip `confirmPersisted`. On a **peer**, `ReplicaApplier` journals via `journalRemote` / `OpLog.tryAppendDeferred` (**no** OpLog `force`); orchid tip persist is batched in `OrchidNode.confirmPersistedAfterDrain`. The ship path blocks on a flow permit rather than queueing without bound.
 
 No confirmation means no visible row. There is no path that makes a rejected write appear later.
 
@@ -78,7 +78,8 @@ Three distinct things that are worth keeping separate:
 | Thing | How it is stored |
 |-------|------------------|
 | Transaction lifecycle | `TX_BEGIN`, `TX_COMMIT`, `TX_ABORT` — OpLog entries that passed ORCHID (`recordTxMarker`) |
-| Row mutations | The full chain through `MutationRecorder`: ORCHID → OpLog → confirm → map |
+| Row mutations (writer) | `MutationRecorder`: ORCHID → OpLog (deferred + group force) → confirm → map |
+| Row mutations (peer) | `ReplicaApplier` + `journalRemote` (deferred append, no OpLog force); tip confirm via `OrchidNode` |
 | Apply-time staging | `ReplicaApplier` holds the operations of an open transaction until `TX_COMMIT`, then applies them as a unit |
 
 Markers do not replace row operations; neither works without the other. Step-by-step: [the write path](write-path-staging.md).

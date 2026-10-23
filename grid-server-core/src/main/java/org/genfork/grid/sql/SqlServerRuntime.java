@@ -132,6 +132,7 @@ public final class SqlServerRuntime implements AutoCloseable {
 		private int recursiveCteMaxDepth = SqlEngine.DEFAULT_RECURSIVE_CTE_MAX_DEPTH;
 		private String timezone = "UTC";
 		private int maxTxContexts = SqlServer.DEFAULT_MAX_TX_CONTEXTS;
+		private long idleTimeoutMs = SqlServer.DEFAULT_IDLE_TIMEOUT_MS;
 
 		public Builder dataDir(Path dataDir) {
 			this.dataDir = dataDir;
@@ -143,6 +144,14 @@ public final class SqlServerRuntime implements AutoCloseable {
 		 */
 		public Builder maxTxContexts(int maxTxContexts) {
 			this.maxTxContexts = maxTxContexts;
+			return this;
+		}
+
+		/**
+		 * Reader-idle close on the SQL listen ({@code <= 0} = disabled).
+		 */
+		public Builder idleTimeoutMs(long idleTimeoutMs) {
+			this.idleTimeoutMs = idleTimeoutMs;
 			return this;
 		}
 
@@ -285,7 +294,7 @@ public final class SqlServerRuntime implements AutoCloseable {
 			}
 			seedBootstrapAdministrator(engine.privileges(), user, password);
 			final SqlServer tcp = listen
-					? new SqlServer(host, port, engine, user, password, maxTxContexts, effective)
+					? new SqlServer(host, port, engine, user, password, maxTxContexts, idleTimeoutMs, effective)
 					: null;
 			return new SqlServerRuntime(catalog, engine, tcp, owned);
 		}

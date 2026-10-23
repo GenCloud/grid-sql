@@ -14,7 +14,7 @@ In practice three fields matter: `writerEligible` (may this node accept writes),
 
 `writerEligible=false` is not only role/epoch (Hold, Witness, `R` below threshold). While the local tip lags reachable peers (`peerTip > localTip` — unclean revive / tip fence), the node is not writable either: catch up first, then eligibility returns. Being ahead of a live follower without a tip lag does not clear eligibility by itself. After a Hold claim, a bumped `regionEpoch` also does not mean immediate `writerEligible=true`. Under ASYNC Active-site loss, while there is no live remote-DC link, Hold-only tips do not clear the fence — wait until a remote-DC peer is seen again and tip has caught up; clients call `rediscoverWriter()`.
 
-Peers in the same site receive OpLog via async Netty push. After a writer commit, replica map visibility can lag (`maxApplyLag` / missing key) until apply — that is **expected RPO**, not Applier failure. See [replication network](../../understand/replication-network.md). Watch lag in readiness (`applyLagStale`) and metrics; lab `GET /replication/compare` is not the writer pin source.
+Peers in the same site receive OpLog via async Netty push. After a writer commit, replica map visibility can lag (`maxApplyLag` / missing key) until apply — that is **expected RPO**, not Applier failure. See [replication network](../../understand/replication-network.md). Watch lag in readiness (`applyLagStale`) and metrics — not a separate HTTP compare endpoint.
 
 ## Failover story
 

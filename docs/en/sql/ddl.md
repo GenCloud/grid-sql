@@ -86,13 +86,13 @@ CREATE TABLE order_lines (
 );
 ```
 
-Referential integrity is checked when a child row is inserted or updated: the parent must exist. Actions on parent delete and update:
+Referential integrity is checked when a child row is inserted or updated: the parent must exist. `ON DELETE` / `ON UPDATE` actions are parsed and stored in the catalog; **runtime enforcement today applies only on parent DELETE** (`enforceParentDelete`). Updating a parent key does **not** run CASCADE / SET NULL / RESTRICT from `ON UPDATE`.
 
-| Action | Behaviour |
-|--------|-----------|
-| `RESTRICT` | The operation on the parent is rejected while child rows exist |
-| `CASCADE` | Child rows are deleted or updated along with the parent |
-| `SET NULL` | Referencing columns in child rows are set to `NULL` |
+| Action | On parent **DELETE** (enforced) | On parent **UPDATE** of the key |
+|--------|--------------------------------|-----------------------------------|
+| `RESTRICT` | Rejected while child rows exist | Stored only — not enforced |
+| `CASCADE` | Child rows deleted with the parent | Stored only — not enforced |
+| `SET NULL` | Referencing child columns set to `NULL` | Stored only — not enforced |
 
 Naming the constraint with `CONSTRAINT` is optional, but it makes error messages much easier to read.
 
@@ -238,7 +238,7 @@ DROP ROLE readers;
 
 The privilege set is `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`. The target is a schema or a table. Roles hold privileges; `GRANT ROLE … TO user` attaches membership (checked on authorize).
 
-`REVOKE … FROM user` drops privileges from a user. There is no separate `REVOKE ROLE`: remove membership with `DROP ROLE`. On disk: `{grid.sql.data-dir}/catalog/privileges.meta` — **per node**, not replicated; apply the same DDL (or copy the file in your node procedure) on every SQL listener apps may hit. Operators: [security](../configure-and-operate/operations/security.md).
+`REVOKE … FROM user` drops privileges from a user. There is no separate `REVOKE ROLE`: remove membership with `DROP ROLE`. On disk: `{grid.sql.data-dir}/catalog/privileges.meta` — **per-node local file** (replication does not ship the blob). With replication on, privilege DDL still rides the `_catalog` OpLog and is re-applied on peer hydrate/restart; manual DDL fan-out or file copy is for bootstrap/solo. Operators: [security](../configure-and-operate/operations/security.md).
 
 ## What gets rejected
 
