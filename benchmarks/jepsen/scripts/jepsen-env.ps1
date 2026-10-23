@@ -86,26 +86,42 @@ function Get-JepsenUserHome {
   return (Get-Location).Path
 }
 
-function Get-GridSqlProjectVersion {
+function Get-GridSqlClientVersion {
   param([string]$RepoRoot = "")
   if (-not $RepoRoot) {
     $RepoRoot = Get-JepsenRepoRoot
   }
   $pom = Join-Path $RepoRoot "pom.xml"
-  if (-not (Test-Path -LiteralPath $pom)) {
-    throw "root pom.xml missing: $pom"
+  if (Test-Path -LiteralPath $pom) {
+    $text = [IO.File]::ReadAllText($pom)
+    $m = [regex]::Match(
+      $text,
+      '<grid\.sql\.client\.version>\s*([^<]+?)\s*</grid\.sql\.client\.version>',
+      [Text.RegularExpressions.RegexOptions]::Singleline)
+    if ($m.Success) {
+      return $m.Groups[1].Value.Trim()
+    }
   }
-  $text = [IO.File]::ReadAllText($pom)
-  # Project version is the first <version> after <artifactId>grid-sql</artifactId>
-  # (Spring Boot parent version lives later inside <parent>).
-  $m = [regex]::Match(
-    $text,
-    '<artifactId>\s*grid-sql\s*</artifactId>\s*<version>\s*([^<]+?)\s*</version>',
+  $clientPom = Join-Path $RepoRoot (Join-Path "grid-sql-client" "pom.xml")
+  if (-not (Test-Path -LiteralPath $clientPom)) {
+    throw "cannot resolve grid-sql-client version: missing $pom property and $clientPom"
+  }
+  $clientText = [IO.File]::ReadAllText($clientPom)
+  # Module <version> after </parent> (selective bump); not reactor parent version.
+  $m2 = [regex]::Match(
+    $clientText,
+    '</parent>\s*.*?<version>\s*([^<]+?)\s*</version>',
     [Text.RegularExpressions.RegexOptions]::Singleline)
-  if (-not $m.Success) {
-    throw "could not parse grid-sql project version from $pom"
+  if (-not $m2.Success) {
+    throw "could not parse grid-sql-client module version from $clientPom"
   }
-  return $m.Groups[1].Value.Trim()
+  return $m2.Groups[1].Value.Trim()
+}
+
+# Compat alias for callers that still use the old name.
+function Get-GridSqlProjectVersion {
+  param([string]$RepoRoot = "")
+  return (Get-GridSqlClientVersion -RepoRoot $RepoRoot)
 }
 
 function Sync-JepsenProjectClj {
@@ -113,7 +129,7 @@ function Sync-JepsenProjectClj {
   if (-not $RepoRoot) {
     $RepoRoot = Get-JepsenRepoRoot
   }
-  $ver = Get-GridSqlProjectVersion -RepoRoot $RepoRoot
+  $ver = Get-GridSqlClientVersion -RepoRoot $RepoRoot
   $clj = Join-Path $RepoRoot (Join-Path "benchmarks" (Join-Path "jepsen" (Join-Path "clojure" "project.clj")))
   if (-not (Test-Path -LiteralPath $clj)) {
     throw "missing Jepsen project.clj: $clj"
@@ -128,7 +144,7 @@ function Sync-JepsenProjectClj {
   if ($updated -ne $text) {
     [IO.File]::WriteAllText($clj, $updated, [Text.UTF8Encoding]::new($false))
   }
-  Write-Host "Synced Jepsen project.clj → org.genfork/grid-sql-client `"$ver`" (from root pom.xml)"
+  Write-Host "Synced Jepsen project.clj → org.genfork/grid-sql-client `"$ver`" (grid.sql.client.version / client pom)"
   return $ver
 }
 
@@ -138,7 +154,7 @@ function Test-JepsenSqlClientInstalled {
     [string]$M2Home = ""
   )
   if (-not $Version) {
-    $Version = Get-GridSqlProjectVersion
+    $Version = Get-GridSqlClientVersion
   }
   if (-not $M2Home) {
     $M2Home = $env:JEPSEN_M2
@@ -171,7 +187,7 @@ function Initialize-JepsenHostEnv {
   if (-not $env:MSYS2_ARG_CONV_EXCL) {
     $env:MSYS2_ARG_CONV_EXCL = "*"
   }
-  # Keep Leiningen coord aligned with Maven project.version (no hardcoded client version).
+  # Keep Leiningen coord aligned with grid-sql-client (selective pin / module version).
   Sync-JepsenProjectClj | Out-Null
 }
 
