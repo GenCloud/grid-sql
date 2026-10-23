@@ -35,7 +35,6 @@
         <dependency>
             <groupId>org.genfork</groupId>
             <artifactId>grid-server-core</artifactId>
-            <version>1.3.0</version>
         </dependency>
     </dependencies>
 
