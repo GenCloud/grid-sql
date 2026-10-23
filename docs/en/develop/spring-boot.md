@@ -37,8 +37,8 @@ Auto-configuration reads the `grid.*` keys below. The YAML is a **`primary` star
 | Setting | Library default (no profile) | Typical `primary` / `capacity` |
 |---------|------------------------------|--------------------------------|
 | `durability.hydrate-mode` | `FULL` | `LAZY` |
-| `durability.working-set-max-entries` | `0` (unbounded) | e.g. `262144` |
-| `replication.op-log.segment-size` | `1024` (MiB) | e.g. `64` |
+| `durability.working-set-max-entries` | `0` (→ **65536** when adaptive on) | e.g. `262144` |
+| `replication.op-log.segment-size` | `1024` (ops per ship buffer) | e.g. `64` |
 | `replication.ha.replica-reads-enabled` | `false` | `true` on demo `primary`/`replica` |
 
 Full default tables: [durability](../configure-and-operate/configuration/durability.md), [replication](../configure-and-operate/configuration/replication.md), [SQL server](../configure-and-operate/configuration/sql-server.md). For PITR archive keys (`oplog-archive.*`) and multi-site `region.*`, see those pages — they are off by default.
@@ -169,7 +169,7 @@ public class GridClientConfiguration {
 ```yaml
 app:
   grid:
-    url: grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public?maxTxContexts=64&connectTimeoutMs=1000
+    url: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public?maxTxContexts=64&connectTimeoutMs=1000
 spring:
   threads:
     virtual:

@@ -31,7 +31,7 @@ INSERT INTO orders (id, customer_id, total) VALUES
 
 ### INSERT … SELECT
 
-Строки можно брать из `SELECT` вместо `VALUES`. Тот же путь apply-row / conflict / TX, что и у multi-row `VALUES`. Источники с set-op (`UNION` / …) в SELECT отклоняются.
+Строки можно брать из `SELECT` вместо `VALUES`. Тот же путь apply-row / conflict / TX, что и у multi-row `VALUES`. Источники с set-op (`UNION` / …) в SELECT отклоняются. Bound / prepared `INSERT … SELECT` (плейсхолдеры в операторе) **не** поддерживается prepare-binder’ом — литералы или обычный (не-prepared) execute.
 
 ```sql
 INSERT INTO orders_archive (id, customer_id, total)

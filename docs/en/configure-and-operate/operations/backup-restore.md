@@ -70,7 +70,7 @@ Sealing moves accumulated journal entries into sealed files and allows a safe Op
 | Process | Node process up; no second process on the same `dataDir` |
 | Readiness | Actuator readiness UP; with replication — `orchidSynced` / `orchid_r` above admission |
 | Writer role | At most one `writerEligible: true` in the write ring; promote only if this node must write ([promote](ha-promote.md)) |
-| Application path | One write + one read through the real client URL (not HTTP `/replication/compare`) |
+| Application path | One write + one read through the real client URL (writer from wire meta / readiness) |
 | Peers | Replicas catching up; do not force reads while `applyLagStale` |
 | Multi-site | Matching `regionEpoch` / Active fencing if PITR touched Active |
 

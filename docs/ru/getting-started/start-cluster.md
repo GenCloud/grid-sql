@@ -47,14 +47,14 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spr
 ## Проверка пары
 
 ```
-grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public
+grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public
 ```
 
 Создайте таблицу и запишите строку на primary, затем прочитайте её с реплики (`readEndpoints=127.0.0.1:15433`). Состояние узлов видно через Actuator: индикатор `gridReadiness` учитывает готовность и движка, и репликации, поэтому его можно использовать как readiness-пробу.
 
 ```powershell
-curl http://127.0.0.1:7777/health
-curl http://127.0.0.1:7778/health
+curl http://127.0.0.1:7777/health/readiness
+curl http://127.0.0.1:7778/health/readiness
 ```
 
 ### Проверка и типовые сбои

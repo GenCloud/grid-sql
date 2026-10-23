@@ -1,12 +1,14 @@
 # GridFs
 
-Filesystem helpers shared by catalog, sealed files, OpLog, locus, overlay and temporary I/O, in package `org.genfork.grid.fs`. The point is that every disk write behaves the same way: write a sibling temporary file, then move it atomically, so data becomes visible only after it is confirmed.
+Filesystem helpers shared by catalog, sealed files, OpLog, locus, overlay and temporary I/O, in package `org.genfork.grid.fs`. The point is that every disk write behaves the same way: write a sibling temporary file, then move it atomically, so readers see the new content only after the rename completes (**atomic visibility**).
+
+That is not crash-durability of the mutation journal: OpLog durability is `MappedAppendFile` / group `force` when `grid.replication.op-log.fsync` is on — see [durability](../configure-and-operate/configuration/durability.md). GridFs does not `force` the OpLog.
 
 | API | Role |
 |-----|------|
 | `Platform.current()` | Windows versus Unix-like |
 | `GridFs.createDirs` / `createParentDirs` | Ensure directories exist |
-| `GridFs.writeAtomic` (bytes, String, `AtomicWriter`) | Sibling `.tmp` plus `ATOMIC_MOVE` |
+| `GridFs.writeAtomic` (bytes, String, `AtomicWriter`) | Sibling `.tmp` plus `ATOMIC_MOVE` (atomic visibility after rename) |
 | `GridFs.moveAtomic` | Atomic replace (`ATOMIC_MOVE` + `REPLACE_EXISTING`) |
 | `GridFs.readAll` / `readLines` / `readString` | Reads, UTF-8 by default |
 | `GridFs.writeString` / `appendString` | Non-atomic text, for example appending DDL |

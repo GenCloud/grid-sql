@@ -115,7 +115,7 @@ grid://u:p@127.0.0.1:15432,127.0.0.1:15433,127.0.0.1:15434/public?connectTimeout
 
 ## Kubernetes и пробы Actuator
 
-Включите пробы (`management.endpoint.health.probes.enabled: true`) и откройте группы `health,prometheus`. В readiness добавьте `gridReadiness` — пример есть в `application.yml` модуля `grid-sql-server-starter`.
+Включите пробы (`management.endpoint.health.probes.enabled: true`) и откройте группы `health,prometheus`. В readiness добавьте `gridReadiness` — пример в `application-primary.yml` / `application-replica.yml` / `application-capacity.yml` модуля `grid-sql-server-starter`.
 
 | Путь (starter, `base-path: /`) | Что проверяет |
 |------|---------------|

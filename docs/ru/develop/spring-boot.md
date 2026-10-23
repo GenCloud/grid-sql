@@ -37,8 +37,8 @@ java -jar grid-sql-server-starter/target/grid-sql-server-starter-1.1.0.jar --spr
 | Параметр | Default библиотеки (без профиля) | Типичный `primary` / `capacity` |
 |----------|----------------------------------|----------------------------------|
 | `durability.hydrate-mode` | `FULL` | `LAZY` |
-| `durability.working-set-max-entries` | `0` (без потолка) | например `262144` |
-| `replication.op-log.segment-size` | `1024` (МиБ) | например `64` |
+| `durability.working-set-max-entries` | `0` (→ **65536** при включённом adaptive) | например `262144` |
+| `replication.op-log.segment-size` | `1024` (ops в буфере ship) | например `64` |
 | `replication.ha.replica-reads-enabled` | `false` | `true` на демо `primary`/`replica` |
 
 Полные таблицы defaults: [долговременное хранение](../configure-and-operate/configuration/durability.md), [репликация](../configure-and-operate/configuration/replication.md), [SQL-сервер](../configure-and-operate/configuration/sql-server.md). Ключи архива PITR (`oplog-archive.*`) и нескольких ЦОД (`region.*`) — на тех страницах; по умолчанию выключены.
@@ -169,7 +169,7 @@ public class GridClientConfiguration {
 ```yaml
 app:
   grid:
-    url: grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public?maxTxContexts=64&connectTimeoutMs=1000
+    url: grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public?maxTxContexts=64&connectTimeoutMs=1000
 spring:
   threads:
     virtual:

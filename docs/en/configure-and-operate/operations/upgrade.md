@@ -39,7 +39,7 @@ After each node comes back:
 1. Actuator readiness UP; with replication — ORCHID synced (`orchidSynced` / `orchid_r` above admission).
 2. On the intended writer: `writerEligible: true` and client meta match (`PROMOTE_NOTIFY` / AUTH) — [promote](ha-promote.md).
 3. Replicas: `applyLagStale` false (or within your accepted lag policy) before reading from them.
-4. One smoke write + read on the application path (not HTTP `/replication/compare` as writer discovery).
+4. One smoke write + read on the application path (writer pin from wire meta / readiness, not a lag-compare HTTP URL).
 
 `SIGKILL` skips hooks — the next open replays a torn OpLog tail; that is supported, but slower.
 
@@ -99,6 +99,6 @@ After a full rolling restart: every node on the target version; one writer; smok
 |-------|--------|
 | Actuator readiness UP on every node | SQL listening; with replication — ORCHID synced |
 | Exactly one `writerEligible: true` | Client meta matches (`PROMOTE_NOTIFY` / AUTH) |
-| One application write + read | Path OK — not `/replication/compare` as writer discovery |
+| One application write + read | Path OK — writer from wire meta / readiness |
 | Replicas before read traffic | `applyLagStale` false (or within policy) |
 | Users / AUTH (if enabled) | `privileges.meta` present on **every** SQL node apps may hit |

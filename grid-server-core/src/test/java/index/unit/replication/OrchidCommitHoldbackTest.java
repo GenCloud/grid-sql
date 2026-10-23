@@ -94,7 +94,11 @@ class OrchidCommitHoldbackTest {
 	void directOutOfOrderOnCommitDrainsHoldback() throws Exception {
 		final OrchidNode replica = start("r1", List.of(), MAX_IN_FLIGHT);
 		final AtomicLong applied = new AtomicLong();
-		replica.addApplyListener(op -> applied.set(op.opSeq()));
+		final List<Long> appliedOrder = new CopyOnWriteArrayList<>();
+		replica.addApplyListener(op -> {
+			appliedOrder.add(op.opSeq());
+			applied.set(op.opSeq());
+		});
 
 		final ReplicationOp op2 = OpLogCodec.withChecksum(new ReplicationOp(
 				"holdback.direct", 0, 2L, ReplicationOpType.UPSERT,
@@ -105,16 +109,20 @@ class OrchidCommitHoldbackTest {
 
 		replica.onCommit(new OrchidTransport.OrchidCommitMessage(
 				"p1", 2L, OrchidNode.digestOf(op2), 1L, 2L, op2));
-		assertTrue(await(() -> true));
-		Thread.sleep(POLL_MS * 2L);
+		// Tip advances under lock before fireApply — wait for holdback mailbox, not sleep.
+		assertTrue(await(() -> replica.testingCommitHoldbackSize() == 1),
+				"opSeq=2 must buffer until contiguous tip");
 		assertEquals(0L, replica.getLastCommittedSeq(), "opSeq=2 must wait for 1");
 		assertEquals(0L, applied.get());
+		assertTrue(appliedOrder.isEmpty());
 
 		replica.onCommit(new OrchidTransport.OrchidCommitMessage(
 				"p1", 1L, OrchidNode.digestOf(op1), 0L, 1L, op1));
-		assertTrue(await(() -> replica.getLastCommittedSeq() == 2L),
+		// lastCommittedSeq becomes 2 before apply listeners finish — await applied tip.
+		assertTrue(await(() -> applied.get() == 2L && replica.getLastCommittedSeq() == 2L),
 				"holdback must drain 1 then 2");
-		assertEquals(2L, applied.get());
+		assertEquals(0, replica.testingCommitHoldbackSize());
+		assertEquals(List.of(1L, 2L), appliedOrder);
 	}
 
 	private static boolean await(BooleanSupplier condition) {

@@ -104,7 +104,7 @@ SQL и блокировки:
 | Наблюдение | Смысл | Дальше |
 |------------|--------|--------|
 | Растёт `orchid_wait_p99_ns`, fsync ровный | Сеть пиров, порог фазы или нагрузка digest | `connect_failures`, RTT пиров, `orchid_r` |
-| Растёт `oplog_fsync_p99_ns`, ожидание согласия ровное | Диск или ротация сегмента | Задержка устройства, `op-log.segment-size`, конкурирующий I/O |
+| Растёт `oplog_fsync_p99_ns`, ожидание согласия ровное | Диск или contention группового force | Задержка устройства, конкурирующий I/O; `op-log.segment-size` — число ops в буфере ship (не МиБ файла) |
 | Обе растут | Перегруз хоста | Замер для сравнения недействителен; снизить конкуренцию и повторить |
 | Растёт `ship_backpressure` | Доставка не успевает за commit | Скорость apply на пирах и `flow.max-inflight-ops` |
 | Падает `map_hit_rate`, растут промахи sealed | Рабочий набор мал для трафика | Поднять `working-set-max-entries`, если хватает heap — [долговременное хранение](configuration/durability.md) |
@@ -141,7 +141,7 @@ SQL и блокировки:
 | Readiness DOWN | SQL ещё не слушает или ORCHID не синхронизирован | Детали пробы (`orchidSynced`), логи старта; не слать трафик |
 | `orchid_r` ниже порога | Нет допуска записи | Сеть пиров, список `peers`, нагрузка digest — [репликация](configuration/replication.md) |
 | `applyLagStale: true` | Реплика слишком отстаёт для чтения | Не читать с неё; подтягивание / ремонт; порог `ha.max-stale-lag` |
-| Рост отставания OpLog | Подтягивание между узлами не успевает | Сеть, диск Applier, нагрузка записи; seq на обоих. `/replication/compare` — только лаборатория |
+| Рост отставания OpLog | Подтягивание между узлами не успевает | Сеть, диск Applier, нагрузка записи; seq на обоих; readiness `applyLagStale` |
 | `writerEligible: false` после повышения роли | Клиент ещё на старом пишущем **или** tip позади пиров / подтягивание после захвата | `PROMOTE_NOTIFY` или `rediscoverWriter()`; при tip-behind — ждать догона, не крутить URL — [повышение роли](operations/ha-promote.md) |
 | Отказ по `regionEpoch` | Клиент на устаревшей эпохе площадки | `rediscoverWriter()`, не крутить следующий host в URL |
 | `repair_issued` растёт, `repair_applied` нет | Подтягивание не применяется | Логи HomologousRepair, диск, рассинхрон seq |
@@ -161,8 +161,7 @@ SQL и блокировки:
 | Поверхность | Область |
 |-------------|---------|
 | `ServerMeta` и `PROMOTE_NOTIFY` по протоколу | Единственный источник для выбора пишущего клиентом |
-| Actuator `/health/*` и Micrometer | Пробы оркестратора, дашборды, алерты |
-| `GET /replication/compare` | Сверка lag между двумя узлами на стенде. Не обнаружение пишущего и не штатная HA |
+| Actuator `/health/*` и Micrometer | Пробы оркестратора, дашборды, алерты (`/health/readiness`, `/prometheus`) |
 
 Инциденты: [отказы](operations/failures.md).
 

@@ -102,6 +102,6 @@ Jepsen unclean-revive (грязный рестарт узла с локальн�
 - Общий `dataDir` / NFS на кластер.
 - Слать SQL на порты репликации **5615** / **5616**.
 - Отключать `fsync` в эксплуатации ради TPS.
-- Считать HTTP `/replication/compare` источником для выбора пишущего — лабораторная сверка lag, не штатная HA.
+- Считать несуществующий HTTP lag-compare источником для выбора пишущего — только wire `ServerMeta` / `PROMOTE_NOTIFY` и readiness.
 
 Дальше: [мониторинг](../monitoring.md), [обновление узла](upgrade.md), [PITR](pitr.md).

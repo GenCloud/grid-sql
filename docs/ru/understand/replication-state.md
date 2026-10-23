@@ -67,7 +67,7 @@
 
 ## Порядок «отказ вместо частичного применения»
 
-Коммит ORCHID происходит **до** появления строки в карте. За добавлением в OpLog следует `confirmPersisted`: на узле-писателе это делает `MutationRecorder`, на пире — `ReplicaApplier`. Путь отправки ждёт разрешения по потоку, а не копит очередь без границ.
+Коммит ORCHID происходит **до** появления строки в карте. На **пишущем** `MutationRecorder` завершает единицу через deferred-дозапись OpLog и групповой `force` (при `fsync`), затем tip `confirmPersisted`. На **пире** `ReplicaApplier` журналирует через `journalRemote` / `OpLog.tryAppendDeferred` (**без** OpLog `force`); persist tip ORCHID батчится в `OrchidNode.confirmPersistedAfterDrain`. Путь отправки ждёт разрешения по потоку, а не копит очередь без границ.
 
 Нет подтверждения — нет видимой строки. Пути, при котором отклонённая запись проявилась бы позже, не существует.
 
@@ -78,7 +78,8 @@
 | Что | Как хранится |
 |-----|--------------|
 | Жизненный цикл транзакции | `TX_BEGIN`, `TX_COMMIT`, `TX_ABORT` — записи в OpLog, прошедшие ORCHID (`recordTxMarker`) |
-| Изменения строк | Полная цепочка через `MutationRecorder`: ORCHID → OpLog → подтверждение → карта |
+| Изменения строк (писатель) | `MutationRecorder`: ORCHID → OpLog (deferred + group force) → confirm → map |
+| Изменения строк (пир) | `ReplicaApplier` + `journalRemote` (deferred append, без OpLog force); tip confirm через `OrchidNode` |
 | Накопление при применении | `ReplicaApplier` держит операции открытой транзакции до `TX_COMMIT`, затем применяет их как единицу |
 
 Маркеры не заменяют операции со строками: одно без другого не работает. Разбор по шагам — [путь записи](write-path-staging.md).

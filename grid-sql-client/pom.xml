@@ -10,6 +10,7 @@
     </parent>
 
     <artifactId>grid-sql-client</artifactId>
+    <version>1.3.0</version>
     <name>grid-sql-client</name>
     <description>SQL client SPI, wire codec, remote Netty client, CLI, and JDBC tooling (jdbc:grid://)</description>
 
@@ -25,12 +26,12 @@
         <dependency>
             <groupId>org.genfork</groupId>
             <artifactId>grid-commons</artifactId>
-            <version>${project.version}</version>
+            <version>1.1.0</version>
         </dependency>
         <dependency>
             <groupId>org.genfork</groupId>
             <artifactId>grid-sql-antlr</artifactId>
-            <version>${project.version}</version>
+            <version>1.1.0</version>
         </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>

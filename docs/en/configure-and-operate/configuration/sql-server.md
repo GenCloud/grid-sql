@@ -29,7 +29,7 @@ grid:
 | `grid.sql-server.user` / `password` | `grid` / `grid` | Bootstrap master credentials; when the user catalog is empty they are seeded as administrator (full power). Blank both → open-auth (no seed) |
 | `grid.sql-server.max-tx-contexts` | `8` | Max concurrent logical sessions per SQL TCP channel (`<= 0` = unlimited) |
 | `grid.sql.default-shards` | `4` | Shard count for tables created without an explicit clause |
-| `grid.sql.data-dir` | `./data/catalog` | Catalog root; `catalog/privileges.meta` lives under it (per-node; not shipped by replication) |
+| `grid.sql.data-dir` | `./data/catalog` | Catalog root; `catalog/privileges.meta` lives under it (per-node file blob not shipped; privilege DDL rides `_catalog` OpLog when replication is on) |
 | `grid.sql.lock-wait-timeout-ms` | `8000` | Record-lock wait ceiling before `lock wait timeout` |
 | `grid.sql.prepare-pool-size` | `64` | Prepared-statement pool per engine |
 | `grid.sql.catalog-meta-cache-size` | `256` | Catalog metadata cache entries |

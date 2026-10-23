@@ -102,6 +102,6 @@ Scenarios: [`benchmarks/jepsen/`](../../../../benchmarks/jepsen/README.md).
 - Shared `dataDir` / NFS across the cluster.
 - Send SQL to replication ports **5615** / **5616**.
 - Disable `fsync` in operations for TPS.
-- Treat HTTP `/replication/compare` as the writer pin source — lab lag compare, not operational HA discovery.
+- Treat a non-existent HTTP lag-compare URL as the writer pin source — use wire `ServerMeta` / `PROMOTE_NOTIFY` and readiness only.
 
 Next: [monitoring](../monitoring.md), [upgrade](upgrade.md), [PITR](pitr.md).

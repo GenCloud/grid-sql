@@ -91,6 +91,10 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	private static final int PENDING_MAP_PER_TX_SLOTS = 4;
 	/** Single Netty EL for this factory's TCP mux. */
 	private static final int CLIENT_IO_EVENT_LOOPS = 1;
+	/** Disable Nagle for SQL frame latency. */
+	private static final boolean CHANNEL_TCP_NODELAY = true;
+	/** Detect half-open peers. */
+	private static final boolean CHANNEL_SO_KEEPALIVE = true;
 
 	private final List<HostEndpoint> endpoints;
 	private final AtomicInteger stickyIndex = new AtomicInteger(0);
@@ -231,7 +235,9 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 				Thread.ofPlatform().name("sql-client-io-", 0).factory());
 		final Bootstrap boot = new Bootstrap()
 				.group(group)
-				.channel(NioSocketChannel.class);
+				.channel(NioSocketChannel.class)
+				.option(ChannelOption.TCP_NODELAY, CHANNEL_TCP_NODELAY)
+				.option(ChannelOption.SO_KEEPALIVE, CHANNEL_SO_KEEPALIVE);
 		final Duration connectTimeout = this.options.connectTimeout();
 		if (!connectTimeout.isZero() && !connectTimeout.isNegative()) {
 			final long ms = Math.min(Integer.MAX_VALUE, Math.max(1L, connectTimeout.toMillis()));

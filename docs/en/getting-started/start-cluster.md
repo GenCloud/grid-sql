@@ -47,7 +47,7 @@ Three things trip people up most often:
 ## Check the pair
 
 ```
-grid://app:secret@127.0.0.1:15432,127.0.0.1:15433/public
+grid://grid:grid@127.0.0.1:15432,127.0.0.1:15433/public
 ```
 
 Create a table and write a row on the primary, then read it back from the replica (`readEndpoints=127.0.0.1:15433`). Node health is visible through Actuator: `gridReadiness` covers both engine and replication readiness, so it is safe to use as a readiness probe.

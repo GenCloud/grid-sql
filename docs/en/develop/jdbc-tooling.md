@@ -22,7 +22,7 @@ When the stack is synchronous but you do not want `java.sql.*`, use the Sync fa�
 
 ```java
 try (SyncConnectionFactory factory = SyncConnectionFactory.fromUrl(
-        "grid://app:secret@127.0.0.1:15432/public")) {
+        "grid://grid:grid@127.0.0.1:15432/public")) {
     SyncConnection c = factory.open();
     try {
         long n = c.executeUpdate("UPSERT INTO t (id) VALUES (1)");
@@ -140,7 +140,7 @@ DBeaver often defaults to `Auto-commit = OFF` (`Connection.setAutoCommit(false)`
 
 ## EXEC / STRICT errors
 
-Server EXEC failures append ` | sql=… binds=[…]` (SQL ≤ **512** chars, binds redacted). JDBC surfaces that string as `SQLException.getMessage()`. STRICT / UNIQUE collisions use `NonUniqueValueException` text `domain=… index=… value=[…] not unique for strict index.` Details: [API reference](../api-reference/README.md), [Java client](java-client.md).
+Server EXEC failures append ` | sql=… binds=[…]` (SQL ≤ **512** chars, binds redacted). JDBC surfaces that string as `SQLException.getMessage()` — not the server exception class. STRICT / UNIQUE collisions use message shape `domain=… index=… value=[…] not unique for strict index.` Details: [API reference](../api-reference/README.md), [Java client](java-client.md).
 
 ## A common error: `bad frameLen …`
 

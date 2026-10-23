@@ -1429,6 +1429,14 @@ public class OrchidNode {
 	}
 
 	/**
+	 * Test hook: out-of-order peer commit holdback size (contiguous drain pending).
+	 */
+	@VisibleForTesting
+	public int testingCommitHoldbackSize() {
+		return commitHoldback.size();
+	}
+
+	/**
 	 * Test hook: oldest unfinished local propose id, or {@code -1} when idle.
 	 */
 	@VisibleForTesting

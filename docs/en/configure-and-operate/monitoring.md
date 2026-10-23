@@ -114,7 +114,7 @@ Write latency splits cleanly into a consensus stage and a disk stage. Read both 
 | Observation | Interpretation | Next step |
 |-------------|----------------|-----------|
 | `orchid_wait_p99_ns` rises, fsync flat | Peer network, phase threshold, or digest load | Check `connect_failures`, peer round-trip time, `orchid_r` |
-| `oplog_fsync_p99_ns` rises, consensus wait flat | Disk service time or segment rotation | Check device latency, `op-log.segment-size`, competing I/O |
+| `oplog_fsync_p99_ns` rises, consensus wait flat | Disk service time or group-force contention | Check device latency, competing I/O; `op-log.segment-size` is ship-buffer op count (not file MiB) |
 | Both rise together | Host-level saturation | Treat the measurement as invalid for comparison; reduce contention and repeat |
 | `ship_backpressure` rises | Shipping cannot keep up with commits | Check peer apply rate and `flow.max-inflight-ops` |
 | `map_hit_rate` falls while sealed misses rise | Working set too small for the traffic | Raise `working-set-max-entries` if heap allows — [durability](configuration/durability.md) |
@@ -153,7 +153,7 @@ Build alerts on the fields above rather than on invented thresholds.
 | Readiness DOWN | SQL not listening yet, or ORCHID not synced | Check probe details (`orchidSynced`), start logs; do not send traffic |
 | `orchid_r` below threshold | No write admission | Check peer network, `peers` list, digest load — [replication](configuration/replication.md) |
 | `applyLagStale: true` | Replica too far behind for reads | Do not read from it; catch-up / repair; threshold `ha.max-stale-lag` |
-| Rising OpLog lag | Catch-up between nodes cannot keep up | Network, Applier disk, write load; seq on both. `/replication/compare` is lab-only, not day-to-day HA |
+| Rising OpLog lag | Catch-up between nodes cannot keep up | Network, Applier disk, write load; seq on both; readiness `applyLagStale` |
 | `writerEligible: false` after promote | Client still on the old writer **or** tip behind peers / catch-up after claim | `PROMOTE_NOTIFY` or `rediscoverWriter()`; on tip-behind wait for catch-up, do not rotate the URL — [promote](operations/ha-promote.md) |
 | Reject on `regionEpoch` | Client on a stale site epoch | `rediscoverWriter()`, do not rotate the next URL host |
 | `repair_issued` rising, `repair_applied` flat | Catch-up is not applying | HomologousRepair logs, disk, seq mismatch |
@@ -173,8 +173,7 @@ Procedure: [role promotion](operations/ha-promote.md). Topologies: [single-site 
 | Surface | Scope |
 |---------|-------|
 | Wire `ServerMeta` and `PROMOTE_NOTIFY` | The only source a client uses to pin a writer |
-| Actuator health and Micrometer | Orchestrator probes, dashboards, alerts |
-| `GET /replication/compare` | Lag comparison between two nodes on a test stand. Not writer discovery, not an operational consistency check |
+| Actuator health and Micrometer | Orchestrator probes, dashboards, alerts (`/health/readiness`, `/prometheus`) |
 
 Incident procedures: [failures](operations/failures.md).
 

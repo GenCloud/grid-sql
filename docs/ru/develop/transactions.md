@@ -78,7 +78,7 @@ tx.executeBatchBound(List.of(
 
 Если сервер отвечает `maxTxContexts=N exhausted`, поднимите `grid.sql-server.max-tx-contexts` и/или откройте ещё один `Connection`. Подробнее: [SQL-сервер](../configure-and-operate/configuration/sql-server.md).
 
-Это не пул JDBC: не заводите N соединений, чтобы получить N транзакций. Изоляция между ними держится на блокировках записей, маркерах `TX_*` в журнале и дескрипторе PREPARE, а не на отдельных TCP-каналах.
+На **reactive** SPI не заводите N TCP-сокетов ради N транзакций — несколько `connection.begin()` / `TxContext` делят один `Connection`. Изоляция — блокировки записей, маркеры `TX_*` и дескриптор PREPARE. **JDBC** иначе: один открытый TX на `java.sql.Connection`, поэтому параллельные TX = N JDBC-соединений с одной фабрики (multiplex) — [JDBC-клиент](jdbc-tooling.md).
 
 ## Точки сохранения
 
