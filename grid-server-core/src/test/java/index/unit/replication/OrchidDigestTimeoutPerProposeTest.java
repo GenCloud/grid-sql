@@ -48,8 +48,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class OrchidDigestTimeoutPerProposeTest {
 	private static final long AWAIT_MS = 5_000L;
-	private static final long FIRST_PROPOSE_ID = 1L;
-	private static final long STALE_BACKDATE_MS = 6_000L;
+	private static final long DIGEST_TIMEOUT_WAIT_MS = 5_500L;
+	private static final long YOUNG_ADMIT_MAX_AGE_MS = 1_000L;
 
 	private final Map<String, OrchidNode> nodes = new ConcurrentHashMap<>();
 	private final HoldPhaseMesh mesh = new HoldPhaseMesh(nodes);
@@ -75,14 +75,11 @@ class OrchidDigestTimeoutPerProposeTest {
 		final CompletableFuture<Long> future = primary.appendAndWaitCommit(op);
 		Thread.sleep(50L);
 		assertFalse(future.isDone(), "phase ACKs held — tip must not commit yet");
-		assertTrue(primary.pendingProposeAgeMs() < STALE_BACKDATE_MS);
+		assertTrue(primary.pendingProposeAgeMs() < YOUNG_ADMIT_MAX_AGE_MS,
+				"young admit must not false-timeout while pending is non-empty");
 
-		primary.testingExpireStaleLocalProposes();
-		assertFalse(future.isDone(), "young admit must not false-timeout while pending is non-empty");
-
-		assertTrue(primary.testingBackdateAdmit(FIRST_PROPOSE_ID, System.currentTimeMillis() - STALE_BACKDATE_MS));
-		primary.testingExpireStaleLocalProposes();
-		assertTrue(future.isCompletedExceptionally(), "backdated admit must fail-closed on digest timeout");
+		Thread.sleep(DIGEST_TIMEOUT_WAIT_MS);
+		assertTrue(future.isCompletedExceptionally(), "stale admit must fail-closed on digest timeout");
 		try {
 			future.get(AWAIT_MS, TimeUnit.MILLISECONDS);
 		} catch (Exception ex) {

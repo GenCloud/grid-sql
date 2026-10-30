@@ -69,7 +69,7 @@ class CatalogOpLogNestedHydrateBootIT {
 			final SqlEngine engine = first.engine();
 			engine.execute("CREATE TABLE " + TABLE + " (id INT PRIMARY KEY, v VARCHAR)");
 			engine.execute("INSERT INTO " + TABLE + " (id, v) VALUES (1, 'a')");
-			final ReplicationCoordinator coord = first.ownedReplication();
+			final ReplicationCoordinator coord = first.replication();
 			assertNotNull(coord);
 			assertTrue(coord.dumpDomainSnapshot(TABLE) > 0);
 		}

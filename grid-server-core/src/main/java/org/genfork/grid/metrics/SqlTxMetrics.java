@@ -31,12 +31,17 @@ public final class SqlTxMetrics {
 	private static final LongAdder SESSION_OPENS = new LongAdder();
 	private static final LongAdder REPLICA_READS = new LongAdder();
 	private static final LongAdder REPLICA_READ_DENIED = new LongAdder();
+	private static final LongAdder AUTH_FAILURES = new LongAdder();
 
 	private SqlTxMetrics() {
 	}
 
 	public static void recordExecution() {
 		EXECUTIONS.increment();
+	}
+
+	public static void recordAuthFailure() {
+		AUTH_FAILURES.increment();
 	}
 
 	public static void recordCommit() {
@@ -81,5 +86,9 @@ public final class SqlTxMetrics {
 
 	public static long replicaReadDenied() {
 		return REPLICA_READ_DENIED.sum();
+	}
+
+	public static long authFailures() {
+		return AUTH_FAILURES.sum();
 	}
 }

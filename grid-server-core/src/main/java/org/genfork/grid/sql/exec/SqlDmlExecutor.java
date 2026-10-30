@@ -16,6 +16,7 @@
 package org.genfork.grid.sql.exec;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -939,7 +940,13 @@ public final class SqlDmlExecutor {
 				session, engine, table, TriggerEvent.UPDATE, existing, encoded.valueBytes());
 		final long affected;
 		if (session.inTransaction()) {
-			SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
+			if (!Arrays.equals(encoded.keyBytes(), key)) {
+				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.DELETE, store.encodeDeletePk(
+						SerialUtil.readPrimitives(key, 0, store.schema().pkColumn().javaType())));
+				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
+			} else {
+				SqlDmlLockOps.stage(session, table, SqlTxBuffer.Op.UPSERT, encoded);
+			}
 			affected = 1L;
 		} else {
 			affected = store.updateSetLiteralsByKey(key, resolved);

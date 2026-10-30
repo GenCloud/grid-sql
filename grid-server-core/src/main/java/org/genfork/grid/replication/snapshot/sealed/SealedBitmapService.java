@@ -19,9 +19,7 @@ import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -40,7 +38,8 @@ public final class SealedBitmapService implements AutoCloseable {
 
 	public Path indexFile(String domain, int shard, String indexName) {
 		final String hex = SealedShardPack.domainHex(domain);
-		return sealedRoot.resolve(hex + "_" + shard + "_idx_" + safeName(indexName) + ".sbm");
+		return sealedRoot.resolve(hex + "_" + shard + "_idx_"
+				+ SealedIndexPathUtil.safeIndexFileName(indexName) + ".sbm");
 	}
 
 	/**
@@ -67,7 +66,7 @@ public final class SealedBitmapService implements AutoCloseable {
 	 */
 	public GridBitmapIndex openIfPresent(String domain, int shard, String indexName) throws IOException {
 		final Path file = indexFile(domain, shard, indexName);
-		if (!Files.isRegularFile(file)) {
+		if (!GridFs.isRegularFile(file)) {
 			return null;
 		}
 		final byte[] payload = SealedBitmapWriter.readPayload(file);
@@ -77,14 +76,5 @@ public final class SealedBitmapService implements AutoCloseable {
 	@Override
 	public void close() {
 		// Stateless path helper — nothing to release.
-	}
-
-	private static String safeName(String indexName) {
-		Objects.requireNonNull(indexName, "indexName");
-		final String safe = indexName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]", "_");
-		if (safe.isBlank()) {
-			throw new IllegalArgumentException("indexName has no safe filename characters");
-		}
-		return safe;
 	}
 }

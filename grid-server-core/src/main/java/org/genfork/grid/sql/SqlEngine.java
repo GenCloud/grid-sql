@@ -23,8 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.genfork.grid.catalog.CatalogDdlJournalUtil;
 import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.catalog.FunctionKind;
@@ -203,17 +201,14 @@ public final class SqlEngine {
 	 * Test/internal wiring for opt-in remote dirty upsert fan-out.
 	 * Production transports must provide ORCHID-admitted, transaction-scoped suppliers.
 	 */
-	@VisibleForTesting
 	public void setRemoteDirtyPeerKeyExecutors(List<Function<String, List<byte[]>>> peers) {
 		tables.setRemoteDirtyPeerKeyExecutors(peers);
 	}
 
-	@VisibleForTesting
 	public void setRemoteDirtyPeerRowBlobFetchers(List<BiFunction<String, byte[], byte[]>> fetchers) {
 		tables.setRemoteDirtyPeerRowBlobFetchers(fetchers);
 	}
 
-	@VisibleForTesting
 	public void setRemoteDirtyPeerTombstoneKeyExecutors(List<Function<String, List<byte[]>>> peers) {
 		tables.setRemoteDirtyPeerTombstoneKeyExecutors(peers);
 	}
@@ -222,7 +217,6 @@ public final class SqlEngine {
 	 * Peer FOR UPDATE lock agents (Phase 3). Empty = local locks only.
 	 * Prefer {@link org.genfork.grid.sql.tx.InProcessDistForUpdatePeerLockAgent} in tests.
 	 */
-	@VisibleForTesting
 	public void setDistForUpdatePeerLockAgents(List<DistForUpdatePeerLockAgent> agents) {
 		tables.setDistForUpdatePeerLockAgents(agents);
 	}
@@ -249,14 +243,6 @@ public final class SqlEngine {
 		this.defaultTimezone = zone == null ? ZoneOffset.UTC : zone;
 	}
 
-	public ZoneId defaultTimezone() {
-		return defaultTimezone;
-	}
-
-	public OverlayStore overlayStore() {
-		return overlayStore;
-	}
-
 	public TableCatalog catalog() {
 		return catalog;
 	}
@@ -274,6 +260,10 @@ public final class SqlEngine {
 	/** Shared fair record lock manager (SQL TX / DML). */
 	public SqlRecordLockManager lockManager() {
 		return lockManager;
+	}
+
+	public ReplicationCoordinator replication() {
+		return replication;
 	}
 
 	public SqlSession newSession() {
@@ -897,15 +887,4 @@ public final class SqlEngine {
 		}
 	}
 
-	/** Test hook: privilege catalog snapshot bytes. */
-	@VisibleForTesting
-	public byte[] privilegeSnapshotBytes() {
-		return privileges.toSnapshotBytes();
-	}
-
-	/** Test hook: replace privilege catalog from snapshot bytes. */
-	@VisibleForTesting
-	public void loadPrivilegeSnapshotBytes(byte[] bytes) {
-		privileges.loadSnapshotBytes(bytes);
-	}
 }

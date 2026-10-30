@@ -15,10 +15,11 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
-
-import com.google.common.annotations.VisibleForTesting;
+import java.util.function.Function;
 
 import org.genfork.grid.mem.index.AbstractIndexOperation;
 import org.genfork.grid.mem.index.btree.TreeKey;
@@ -32,6 +33,8 @@ import org.genfork.grid.mem.index.btree.TreeKey;
  */
 public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 		extends AbstractSealedFallbackIndex<K, T> {
+	private static final String CLOSED_TOKEN = "closed";
+
 	private final CopyOnWriteArrayList<SealedBPTreeReader> readers = new CopyOnWriteArrayList<>();
 
 	protected AbstractSealedBpTreeFallback(AbstractIndexOperation<K, T> delegate) {
@@ -44,9 +47,15 @@ public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 		readers.add(reader);
 	}
 
-	@VisibleForTesting
-	public int sealedReaderCount() {
-		return readers.size();
+	/**
+	 * {@code true} when at least one open sealed {@code .sbpt} reader is attached (portal-ineligible PK).
+	 */
+	public boolean hasSealedReaders() {
+		return !openReaders().isEmpty();
+	}
+
+	int sealedReaderCount() {
+		return openReaders().size();
 	}
 
 	protected final CopyOnWriteArrayList<SealedBPTreeReader> readers() {
@@ -54,7 +63,71 @@ public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 	}
 
 	protected final boolean readersEmpty() {
+		readers.removeIf(SealedBPTreeReader::isClosed);
 		return readers.isEmpty();
+	}
+
+	/**
+	 * Drop closed readers from the COW list and collect still-open ones for sealed merge.
+	 */
+	protected final List<SealedBPTreeReader> openReaders() {
+		readers.removeIf(SealedBPTreeReader::isClosed);
+		if (readers.isEmpty()) {
+			return List.of();
+		}
+		final List<SealedBPTreeReader> open = new ArrayList<>(readers.size());
+		for (SealedBPTreeReader reader : readers) {
+			if (reader != null && !reader.isClosed()) {
+				open.add(reader);
+			}
+		}
+		return open;
+	}
+
+	/**
+	 * Merge sealed probe results from every open reader (skips closed; no ISE on query path).
+	 * <p>
+	 * TOCTOU: a reader may close after {@link #openReaders()} and before/during {@code probe};
+	 * {@link SealedBPTreeReader} probes soft-miss when closed under read lock. Any residual
+	 * closed ISE is pruned here so the query path stays fail-soft.
+	 */
+	protected final List<byte[]> collectFromOpenReaders(Function<SealedBPTreeReader, List<byte[]>> probe) {
+		Objects.requireNonNull(probe, "probe");
+		final List<SealedBPTreeReader> open = openReaders();
+		if (open.isEmpty()) {
+			return List.of();
+		}
+		final List<byte[]> sealed = new ArrayList<>();
+		for (int i = 0, n = open.size(); i < n; i++) {
+			final SealedBPTreeReader reader = open.get(i);
+			try {
+				final List<byte[]> part = probe.apply(reader);
+				if (part != null && !part.isEmpty()) {
+					sealed.addAll(part);
+				}
+			} catch (IllegalStateException closedRace) {
+				if (!isClosedReaderFailure(closedRace)) {
+					throw closedRace;
+				}
+				readers.remove(reader);
+			}
+		}
+		return sealed;
+	}
+
+	private static boolean isClosedReaderFailure(Throwable error) {
+		Throwable cursor = error;
+		while (cursor != null) {
+			final String message = cursor.getMessage();
+			if (message != null && message.startsWith(SealedBPTreeReader.CLOSED_READER_MESSAGE_PREFIX)) {
+				return true;
+			}
+			if (message != null && message.toLowerCase().contains(CLOSED_TOKEN)) {
+				return true;
+			}
+			cursor = cursor.getCause();
+		}
+		return false;
 	}
 
 	/** Open-bound compare modes shared by single-column and composite sealed leaf walks. */

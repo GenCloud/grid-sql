@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.query.adaptive;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -101,9 +99,4 @@ public final class HeavyQueryAdmission {
 		}
 	}
 
-	/** Test helper: reset inflight to zero without changing quotas. */
-	@VisibleForTesting
-	public void resetInflightForTests() {
-		inflightHeavy.set(RELEASE_FLOOR);
-	}
 }

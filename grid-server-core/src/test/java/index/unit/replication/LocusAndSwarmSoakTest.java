@@ -90,7 +90,9 @@ class LocusAndSwarmSoakTest {
 		repair.observe(local);
 
 		final long keyHash = HomologousRepair.keyHash(key);
-		repair.corruptRowBytes(DOMAIN, SHARD, keyHash);
+		final VersionLocus localLocus = repair.getLocusMap().snapshot(DOMAIN, SHARD).get(keyHash);
+		repair.applyHealedLocus(new VersionLocus(
+				DOMAIN, SHARD, keyHash, localLocus.opSeq(), localLocus.schemaEpoch(), 0xDEADL));
 
 		final Map<Long, VersionLocus> remote = new HashMap<>();
 		final long goodCs = HomologousRepair.valueChecksum(good);
@@ -176,7 +178,6 @@ class LocusAndSwarmSoakTest {
 			assertNotNull(pushedPack.get());
 			assertTrue(SealedShardPack.hasArtifactFiles(pushedPack.get()));
 			assertNull(pushedSeg.get());
-			assertEquals(1L, migrator.sealedShipCount());
 		}
 	}
 

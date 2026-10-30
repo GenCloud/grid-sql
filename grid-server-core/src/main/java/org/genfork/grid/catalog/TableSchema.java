@@ -330,22 +330,31 @@ public final class TableSchema {
 		return new TableSchema(catalogKey, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
-	/** Immutable copy without named index (not the synthetic PK index). */
+	/**
+	 * Immutable copy without a named secondary index.
+	 * <p>
+	 * Rejects the synthetic PRIMARY KEY covering index ({@code table_pk}) — dropping it would
+	 * strip the sole RAM PK tree while the ctor would re-synthesize the IndexDef (schema/RAM desync).
+	 */
 	public TableSchema withoutIndex(String indexName, long newEpoch) {
 		if (indexName == null || indexName.isBlank()) {
 			throw new IllegalArgumentException("index name required");
 		}
+		IndexDef removed = null;
 		final List<IndexDef> next = new ArrayList<>(indexes.size());
-		boolean found = false;
 		for (IndexDef existing : indexes) {
 			if (existing.name().equalsIgnoreCase(indexName)) {
-				found = true;
+				removed = existing;
 				continue;
 			}
 			next.add(existing);
 		}
-		if (!found) {
+		if (removed == null) {
 			throw new IllegalStateException("Index not found: " + indexName);
+		}
+		if (SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndex(this, removed)
+				|| SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndexName(catalogKey, indexName)) {
+			throw new IllegalStateException(SyntheticPkIndexUtil.cannotDropMessage(removed.name()));
 		}
 		return new TableSchema(catalogKey, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}

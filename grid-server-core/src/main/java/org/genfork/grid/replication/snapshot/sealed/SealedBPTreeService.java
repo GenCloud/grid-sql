@@ -23,7 +23,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -48,7 +47,8 @@ public final class SealedBPTreeService implements AutoCloseable {
 
 	public Path indexFile(String domain, int shard, String indexName) {
 		final String hex = SealedShardPack.domainHex(domain);
-		return sealedRoot.resolve(hex + "_" + shard + "_idx_" + safeName(indexName) + ".sbpt");
+		return sealedRoot.resolve(hex + "_" + shard + "_idx_"
+				+ SealedIndexPathUtil.safeIndexFileName(indexName) + ".sbpt");
 	}
 
 	public void dumpIndex(String domain, int shard, String indexName,
@@ -126,16 +126,6 @@ public final class SealedBPTreeService implements AutoCloseable {
 	@Override
 	public void close() {
 		closeAll();
-	}
-
-	private static String safeName(String indexName) {
-		Objects.requireNonNull(indexName, "indexName");
-		// Allow '+' so composite sealed names (col1+col2) stay distinct from col1_col2.
-		final String safe = indexName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._+-]", "_");
-		if (safe.isBlank()) {
-			throw new IllegalArgumentException("indexName has no safe filename characters");
-		}
-		return safe;
 	}
 
 	private static void closeQuietly(SealedBPTreeReader reader) {

@@ -73,7 +73,7 @@ class DropTableIndexCkptHygieneIT {
 				.durability(true)
 				.build()) {
 			runtime.engine().execute("CREATE TABLE purge_t (id INT PRIMARY KEY)");
-			runtime.ownedReplication().purgeDomainArtifacts("purge_t");
+			runtime.replication().purgeDomainArtifacts("purge_t");
 			runtime.engine().execute("DROP TABLE purge_t");
 			assertFalse(runtime.engine().catalog().exists("purge_t"));
 		}

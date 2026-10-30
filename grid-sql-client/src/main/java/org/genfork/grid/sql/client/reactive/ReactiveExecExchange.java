@@ -16,7 +16,6 @@
 package org.genfork.grid.sql.client.reactive;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
 
 import reactor.core.publisher.Mono;
@@ -25,6 +24,7 @@ import reactor.core.publisher.Sinks;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.client.Result;
 import org.genfork.grid.sql.client.ServerMeta;
+import org.genfork.grid.sql.client.transport.ExecExchangeSupport;
 import org.genfork.grid.sql.client.transport.FetchPortal;
 import org.genfork.grid.sql.client.transport.PendingExchange;
 import org.genfork.grid.sql.client.transport.TransportOutcome;
@@ -41,14 +41,8 @@ import org.genfork.grid.sql.netty.SqlWire;
  * @since: 1.0
  */
 public final class ReactiveExecExchange implements PendingExchange {
-	private final int fetchWindow;
-	private final IntConsumer fetchSender;
-	private final Runnable cancelSender;
+	private final ExecExchangeSupport.State state;
 	private final Sinks.One<Result> sink = Sinks.one();
-	private final AtomicBoolean done = new AtomicBoolean();
-	private final AtomicBoolean resultEmitted = new AtomicBoolean();
-	private volatile boolean streaming;
-	private volatile FetchPortal portal;
 	private final Mono<Result> mono;
 
 	public ReactiveExecExchange() {
@@ -64,9 +58,8 @@ public final class ReactiveExecExchange implements PendingExchange {
 	}
 
 	public ReactiveExecExchange(int fetchWindow, IntConsumer fetchSender, Runnable cancelSender) {
-		this.fetchWindow = fetchWindow > 0 ? fetchWindow : SqlWire.DEFAULT_FETCH_WINDOW;
-		this.fetchSender = fetchSender;
-		this.cancelSender = cancelSender;
+		final int window = fetchWindow > 0 ? fetchWindow : SqlWire.DEFAULT_FETCH_WINDOW;
+		this.state = new ExecExchangeSupport.State(window, fetchSender, cancelSender);
 		this.mono = sink.asMono().doOnCancel(this::cancel);
 	}
 
@@ -79,12 +72,7 @@ public final class ReactiveExecExchange implements PendingExchange {
 
 	/** Best-effort CANCEL when the subscriber abandons the exchange. */
 	public void cancel() {
-		final FetchPortal live = portal;
-		if (live != null) {
-			live.cancel();
-		} else if (cancelSender != null) {
-			cancelSender.run();
-		}
+		state.cancel();
 	}
 
 	@Override
@@ -104,61 +92,32 @@ public final class ReactiveExecExchange implements PendingExchange {
 
 	@Override
 	public void onRowDesc(List<SqlResult.ColumnMeta> columns) {
-		streaming = true;
-		final FetchPortal created = new FetchPortal(fetchWindow, fetchSender, cancelSender);
-		portal = created;
-		emitOutcome(new TransportOutcome.ResultSet(columns, created));
+		state.onRowDesc(columns, this::deliverOutcome);
 	}
 
 	@Override
 	public void onRowData(Object[] row) {
-		if (done.get()) {
-			return;
-		}
-		final FetchPortal live = portal;
-		if (live != null) {
-			live.offerRow(row);
-		}
+		state.onRowData(row);
 	}
 
 	@Override
 	public boolean completeExec(long affected, String tag) {
-		if (!done.compareAndSet(false, true)) {
-			return true;
-		}
-
-		if (streaming) {
-			final FetchPortal live = portal;
-			if (live != null) {
-				live.complete();
-			}
-			return true;
-		}
-
-		if (TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
-			emitOutcome(new TransportOutcome.Dml(0L, TransportOutcome.CANCEL_TAG));
-			return true;
-		}
-
-		emitOutcome(new TransportOutcome.Dml(affected, tag));
-		return true;
+		return state.completeExec(affected, tag, this::deliverOutcome);
 	}
 
 	@Override
 	public void fail(Throwable t) {
-		done.set(true);
-		final FetchPortal live = portal;
-		if (live != null) {
-			live.fail(t);
-		}
-		if (resultEmitted.compareAndSet(false, true)) {
+		state.failPortal(t);
+		if (state.resultEmitted().compareAndSet(false, true)) {
 			sink.tryEmitError(t);
 		}
 	}
 
 	private void emitOutcome(TransportOutcome value) {
-		if (resultEmitted.compareAndSet(false, true)) {
-			sink.tryEmitValue(TransportReactive.toResult(value));
-		}
+		state.emitOutcomeOnce(value, this::deliverOutcome);
+	}
+
+	private void deliverOutcome(TransportOutcome value) {
+		sink.tryEmitValue(TransportReactive.toResult(value));
 	}
 }

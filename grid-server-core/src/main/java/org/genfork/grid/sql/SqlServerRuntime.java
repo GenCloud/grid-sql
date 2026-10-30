@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.sql;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.genfork.grid.catalog.CatalogMetaCache;
 import org.genfork.grid.catalog.PrivilegeCatalog;
 import org.genfork.grid.catalog.TableCatalog;
@@ -86,11 +84,10 @@ public final class SqlServerRuntime implements AutoCloseable {
 	}
 
 	/**
-	 * Owned solo durability coordinator (tests: seal dump / eviction). Null if external replication.
+	 * Effective replication coordinator (solo-built or {@link Builder#replication}).
 	 */
-	@VisibleForTesting
-	public ReplicationCoordinator ownedReplication() {
-		return ownedReplication;
+	public ReplicationCoordinator replication() {
+		return engine.replication();
 	}
 
 	public SqlServerRuntime start() {

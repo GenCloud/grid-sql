@@ -24,7 +24,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
@@ -147,11 +146,6 @@ public final class TxEnvelopeCoordinator {
 		commitDecisions.remove(txId);
 	}
 
-	@VisibleForTesting
-	public boolean hasOpenLockPhase(long txId) {
-		return lockPhases.containsKey(txId);
-	}
-
 	/**
 	 * Register expected peer prepare ACKs for {@code txId} (FOR UPDATE prepare votes).
 	 */
@@ -196,19 +190,9 @@ public final class TxEnvelopeCoordinator {
 		}
 	}
 
-	@VisibleForTesting
-	public Boolean commitDecision(long txId) {
-		return commitDecisions.get(txId);
-	}
-
 	/** Drop prepare-phase votes (COMMIT/ROLLBACK / failure). Decision retained until lock discard. */
 	public void discardPreparePhase(long txId) {
 		preparePhases.remove(txId);
-	}
-
-	@VisibleForTesting
-	public boolean hasOpenPreparePhase(long txId) {
-		return preparePhases.containsKey(txId);
 	}
 
 	public void registerApply(TxEnvelopeCodec.Membership membership) {
@@ -382,10 +366,6 @@ public final class TxEnvelopeCoordinator {
 		return n;
 	}
 
-	public boolean hasOpenApplyEnvelope(long txId) {
-		return applyOpen.containsKey(txId);
-	}
-
 	/**
 	 * {@code true} when a non-aborted apply envelope still lists {@code domain#shard}
 	 * in its membership (including after that stream's local {@code TX_COMMIT} while
@@ -406,10 +386,6 @@ public final class TxEnvelopeCoordinator {
 			}
 		}
 		return false;
-	}
-
-	public boolean hasOpenShipEnvelope(long txId) {
-		return shipOpen.containsKey(txId);
 	}
 
 	public static Map<String, List<ReplicationOp>> groupByStream(List<ReplicationOp> ops) {

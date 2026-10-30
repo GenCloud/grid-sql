@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.zip.CRC32;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.mem.LifecycleRwGate;
@@ -57,6 +56,8 @@ public final class SealedBPTreeReader implements AutoCloseable {
 	private static final int NEXT_LEAF_OFFSET = 1 + Short.BYTES + Integer.BYTES;
 	/** Minimum bytes for a readable sealed BPTree header (magic/version/pageSize + fields). */
 	public static final int MIN_FILE_BYTES = 48;
+	/** Prefix of legacy closed-reader ISE text (tests / fallthrough classifiers). */
+	static final String CLOSED_READER_MESSAGE_PREFIX = "sealed BPTree reader is closed: ";
 
 	private final Path path;
 	private final FileChannel channel;
@@ -66,6 +67,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 	private final int firstLeafPageId;
 	private final int shard;
 	private final int pageCount;
+	private final long entryCount;
 
 	private final LifecycleRwGate lifecycle = new LifecycleRwGate();
 
@@ -86,6 +88,7 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		this.firstLeafPageId = header.firstLeafPageId;
 		this.shard = header.shard;
 		this.pageCount = header.pageCount;
+		this.entryCount = header.entryCount;
 		this.pagesMap = pagesMap;
 		if (pagesMap != null) {
 			this.pageCache = new ByteBuffer[pageCount];
@@ -136,7 +139,9 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		Objects.requireNonNull(indexKey, "indexKey");
 		lifecycle.lockRead();
 		try {
-			ensureOpen();
+			if (!openForProbe()) {
+				return List.of();
+			}
 			final ByteBuffer leaf = page(findLeaf(indexKey));
 			final int count = unsignedShort(leaf, 1);
 			final int entryStart = LEAF_HEADER_SKIP;
@@ -161,7 +166,9 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		Objects.requireNonNull(highInclusive, "highInclusive");
 		lifecycle.lockRead();
 		try {
-			ensureOpen();
+			if (!openForProbe()) {
+				return List.of();
+			}
 			if (compareBytes(low, highInclusive) > 0) {
 				return List.of();
 			}
@@ -201,11 +208,20 @@ public final class SealedBPTreeReader implements AutoCloseable {
 	 * Used for composite left-prefix / mid-column partial EQ and LIKE (length-first order
 	 * is not contiguous for those predicates).
 	 */
+	/**
+	 * Header entry count (0 for empty DDL-time / deferred-seal accelerator shells).
+	 */
+	public long entryCount() {
+		return entryCount;
+	}
+
 	public List<byte[]> searchMatching(SealedKeyMatcher matcher) {
 		Objects.requireNonNull(matcher, "matcher");
 		lifecycle.lockRead();
 		try {
-			ensureOpen();
+			if (!openForProbe()) {
+				return List.of();
+			}
 			final List<byte[]> result = new ArrayList<>();
 			forEachLeafIndexEntry((indexKey, leaf, posting) -> {
 				if (matcher.test(indexKey)) {
@@ -226,7 +242,9 @@ public final class SealedBPTreeReader implements AutoCloseable {
 	public List<byte[]> searchAll() {
 		lifecycle.lockRead();
 		try {
-			ensureOpen();
+			if (!openForProbe()) {
+				return List.of();
+			}
 			final List<byte[]> result = new ArrayList<>();
 			forEachLeafIndexEntry((_, leaf, posting) -> result.addAll(readRows(leaf, posting)));
 			return rangeResult(result);
@@ -243,7 +261,9 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		Objects.requireNonNull(consumer, "consumer");
 		lifecycle.lockRead();
 		try {
-			ensureOpen();
+			if (!openForProbe()) {
+				return;
+			}
 			forEachLeafIndexEntry((indexKey, leaf, posting) -> {
 				int offset = posting;
 				final int rowCount = unsignedShort(leaf, offset);
@@ -280,11 +300,6 @@ public final class SealedBPTreeReader implements AutoCloseable {
 			}
 			leafId = leaf.getInt(NEXT_LEAF_OFFSET);
 		}
-	}
-
-	@VisibleForTesting
-	int firstLeafPageId() {
-		return firstLeafPageId;
 	}
 
 	/**
@@ -592,10 +607,15 @@ public final class SealedBPTreeReader implements AutoCloseable {
 		}
 	}
 
-	private void ensureOpen() {
-		if (closed) {
-			throw new IllegalStateException("sealed BPTree reader is closed: " + path);
-		}
+	/**
+	 * Soft open check under {@link #lifecycle} read lock.
+	 * <p>
+	 * Dump/detach may close between COW snapshot and {@code lockRead}; probe paths treat
+	 * that as a sealed miss (empty), not {@link IllegalStateException}, so the query path
+	 * never surfaces {@code sealed BPTree reader is closed}.
+	 */
+	private boolean openForProbe() {
+		return !closed;
 	}
 
 	private void unmapStickyPage() {
@@ -630,6 +650,13 @@ public final class SealedBPTreeReader implements AutoCloseable {
 
 	public int shard() {
 		return shard;
+	}
+
+	/**
+	 * {@code true} after {@link #close()} / {@link #closeForOverwrite()}.
+	 */
+	public boolean isClosed() {
+		return closed;
 	}
 
 	@Override

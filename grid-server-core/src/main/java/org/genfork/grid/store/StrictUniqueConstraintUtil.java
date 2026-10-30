@@ -30,23 +30,44 @@ import org.genfork.grid.serial.WireSpan;
  * <p>
  * Probe keys are taken from the encoded row blob through {@link LogicalFieldCursor}
  * — no mid-pipeline {@code Object} re-encode.
+ * <p>
+ * Sealed {@code .sbpt} may still advertise a PK that is gone from the map (stale).
+ * Ignore non-live hits. Self-owner UPDATE of the same PK is OK; any <em>other live</em>
+ * owner fails closed ({@link NonUniqueValueException}) — duplicate prevention is hydrate
+ * single-flight, not STRICT soft-allow.
  *
  * @author: GenCloud
  * @date: 2026/10
  * @since: 1.2
  */
 public final class StrictUniqueConstraintUtil {
+	private static final String STRICT_PROBE_SUBJECT = "row";
+
 	private StrictUniqueConstraintUtil() {
 	}
 
 	/**
-	 * Fail-closed when another row PK already owns any STRICT secondary unique of {@code valueBytes}.
+	 * Fail-closed when another <em>live</em> row PK already owns any STRICT secondary unique of
+	 * {@code valueBytes}. Self-owner (same {@code keyBytes}) alone is allowed.
 	 */
 	public static void validateSecondaryStrict(
 			TableStore store,
 			TableSchema schema,
 			byte[] valueBytes,
 			byte[] keyBytes
+	) {
+		validateSecondaryStrict(store, schema, valueBytes, keyBytes, null);
+	}
+
+	/**
+	 * @param supersededOwnerKeyOrNull prior PK being replaced (ON CONFLICT DO UPDATE SET pk)
+	 */
+	public static void validateSecondaryStrict(
+			TableStore store,
+			TableSchema schema,
+			byte[] valueBytes,
+			byte[] keyBytes,
+			byte[] supersededOwnerKeyOrNull
 	) {
 		final List<IndexDef> indexes = schema.indexes();
 		if (indexes.isEmpty()) {
@@ -71,12 +92,26 @@ public final class StrictUniqueConstraintUtil {
 			if (want == null) {
 				continue;
 			}
+			final byte[][] otherLive = {null};
 			store.forEachEqKey(columns, want, hit -> {
-				if (hit != null && !Arrays.equals(hit, keyBytes)) {
-					throw new NonUniqueValueException(
-							NonUniqueValueException.formatMessage(schema.catalogKey(), idx.name(), "row"));
+				if (hit == null || otherLive[0] != null) {
+					return;
+				}
+				if (Arrays.equals(hit, keyBytes)) {
+					return;
+				}
+				if (supersededOwnerKeyOrNull != null && Arrays.equals(hit, supersededOwnerKeyOrNull)) {
+					return;
+				}
+				if (store.getCommittedBytes(hit) != null) {
+					otherLive[0] = hit;
 				}
 			});
+			if (otherLive[0] != null) {
+				throw new NonUniqueValueException(
+						NonUniqueValueException.formatMessage(
+								schema.catalogKey(), idx.name(), STRICT_PROBE_SUBJECT));
+			}
 		}
 	}
 

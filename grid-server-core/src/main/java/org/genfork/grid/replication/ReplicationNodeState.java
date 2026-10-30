@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.genfork.grid.replication.orchid.OrchidNode;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 /**
  * Per-node replication runtime state (schema epoch, seq allocators, watermarks).
@@ -74,21 +75,18 @@ public class ReplicationNodeState {
 		this.schemaEpoch = schemaEpoch;
 	}
 
-	private static String key(String domainType, int shard) {
-		return domainType + "#" + shard;
-	}
-
 	public long nextOpSeq(String domainType, int shard) {
-		return nextOpSeq.computeIfAbsent(key(domainType, shard), k -> new AtomicLong(0)).incrementAndGet();
+		return nextOpSeq.computeIfAbsent(OpLogStreamKeyUtil.format(domainType, shard), k -> new AtomicLong(0))
+				.incrementAndGet();
 	}
 
 	public void observeOpSeq(String domainType, int shard, long opSeq) {
-		nextOpSeq.computeIfAbsent(key(domainType, shard), k -> new AtomicLong(0))
+		nextOpSeq.computeIfAbsent(OpLogStreamKeyUtil.format(domainType, shard), k -> new AtomicLong(0))
 				.updateAndGet(cur -> Math.max(cur, opSeq));
 	}
 
 	public long appliedWatermark(String domainType, int shard) {
-		return appliedWatermark.getOrDefault(key(domainType, shard), new AtomicLong(0)).get();
+		return appliedWatermark.getOrDefault(OpLogStreamKeyUtil.format(domainType, shard), new AtomicLong(0)).get();
 	}
 
 	/**
@@ -134,7 +132,7 @@ public class ReplicationNodeState {
 	}
 
 	public void advanceApplied(String domainType, int shard, long opSeq) {
-		appliedWatermark.computeIfAbsent(key(domainType, shard), k -> new AtomicLong(0))
+		appliedWatermark.computeIfAbsent(OpLogStreamKeyUtil.format(domainType, shard), k -> new AtomicLong(0))
 				.updateAndGet(cur -> Math.max(cur, opSeq));
 		observeOpSeq(domainType, shard, opSeq);
 	}
@@ -148,13 +146,13 @@ public class ReplicationNodeState {
 		if (lastSeq <= 0) {
 			return;
 		}
-		nextOpSeq.computeIfAbsent(key(domainType, shard), k -> new AtomicLong(0))
+		nextOpSeq.computeIfAbsent(OpLogStreamKeyUtil.format(domainType, shard), k -> new AtomicLong(0))
 				.updateAndGet(cur -> Math.max(cur, lastSeq));
 	}
 
 	/** Reset applied watermark so OpLog hydrate can re-apply into an empty map. */
 	public void resetApplied(String domainType, int shard) {
-		appliedWatermark.put(key(domainType, shard), new AtomicLong(0));
+		appliedWatermark.put(OpLogStreamKeyUtil.format(domainType, shard), new AtomicLong(0));
 	}
 
 	/** Max (lastSeq - applied) across known streams; used by swarm applyLag sensor. */
@@ -192,7 +190,7 @@ public class ReplicationNodeState {
 	}
 
 	public void advancePeerAck(String peerId, String domainType, int shard, long opSeq) {
-		peerAckWatermark.computeIfAbsent(peerId + "|" + key(domainType, shard), k -> new AtomicLong(0))
+		peerAckWatermark.computeIfAbsent(peerId + "|" + OpLogStreamKeyUtil.format(domainType, shard), k -> new AtomicLong(0))
 				.updateAndGet(cur -> Math.max(cur, opSeq));
 	}
 
@@ -201,12 +199,12 @@ public class ReplicationNodeState {
 		if (peerId == null) {
 			return 0L;
 		}
-		final AtomicLong v = peerAckWatermark.get(peerId + "|" + key(domainType, shard));
+		final AtomicLong v = peerAckWatermark.get(peerId + "|" + OpLogStreamKeyUtil.format(domainType, shard));
 		return v == null ? 0L : v.get();
 	}
 
 	public long minPeerAck(String domainType, int shard) {
-		final String suffix = "|" + key(domainType, shard);
+		final String suffix = "|" + OpLogStreamKeyUtil.format(domainType, shard);
 		long min = Long.MAX_VALUE;
 		boolean any = false;
 		for (Map.Entry<String, AtomicLong> e : peerAckWatermark.entrySet()) {

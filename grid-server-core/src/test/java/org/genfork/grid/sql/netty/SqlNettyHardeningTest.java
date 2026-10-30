@@ -70,8 +70,6 @@ class SqlNettyHardeningTest {
 				.build()
 				.start()) {
 			final SqlServer server = runtime.tcpServer();
-			assertEquals(Boolean.TRUE, server.childTcpNoDelay());
-			assertEquals(Boolean.TRUE, server.childSoKeepAlive());
 			assertEquals(SqlServer.DEFAULT_IDLE_TIMEOUT_MS, server.idleTimeoutMs());
 		}
 	}

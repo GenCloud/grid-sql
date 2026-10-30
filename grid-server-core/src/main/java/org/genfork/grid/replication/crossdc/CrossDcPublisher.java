@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.crossdc;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.OpLogSegment;
@@ -25,6 +24,7 @@ import org.genfork.grid.replication.swarm.AdaptiveReplicaSwarm;
 import org.genfork.grid.replication.transport.ReplicationPeer;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 import org.genfork.grid.replication.tx.TxUnitShardBuffer;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.threading.ThreadService;
 
 import java.util.ArrayList;
@@ -158,7 +158,7 @@ public class CrossDcPublisher {
 		if (shipTargets().isEmpty()) {
 			return;
 		}
-		final String key = op.domainType() + "#" + op.shard();
+		final String key = OpLogStreamKeyUtil.format(op.domainType(), op.shard());
 		final TxUnitShardBuffer buffer = buffers.computeIfAbsent(key, _ -> new TxUnitShardBuffer(true));
 		buffer.offer(op);
 		final ReplicationOpType type = op.type();
@@ -171,13 +171,6 @@ public class CrossDcPublisher {
 				|| buffer.size() >= batchMaxOps) {
 			flushBuffer(buffer);
 		}
-	}
-
-	/** Test helper: ops currently held waiting for TX unit completion. */
-	@VisibleForTesting
-	public int bufferedOpCount(String domainType, int shard) {
-		final TxUnitShardBuffer buffer = buffers.get(domainType + "#" + shard);
-		return buffer == null ? 0 : buffer.size();
 	}
 
 	/**
@@ -306,15 +299,16 @@ public class CrossDcPublisher {
 		nodeState.advancePeerAck("remote", domainType, shard, opSeq);
 		metrics.recordRemoteAckLatency(latencyMs);
 		metrics.recordLag(latencyMs, 0);
-		final String waitKey = domainType + "#" + shard + "@" + opSeq;
+		final String waitKey = OpLogStreamKeyUtil.format(domainType, shard) + "@" + opSeq;
 		final CompletableFuture<Void> waiter = remoteAckWaiters.remove(waitKey);
 		if (waiter != null) {
 			waiter.complete(null);
 		}
 		// Also complete any waiters for lower seq on same stream
+		final String streamSeqPrefix = OpLogStreamKeyUtil.format(domainType, shard) + "@";
 		remoteAckWaiters.entrySet().removeIf(e -> {
 			final String k = e.getKey();
-			final String prefix = domainType + "#" + shard + "@";
+			final String prefix = streamSeqPrefix;
 			if (!k.startsWith(prefix)) {
 				return false;
 			}
@@ -338,7 +332,7 @@ public class CrossDcPublisher {
 		if (shipTargets().isEmpty()) {
 			return;
 		}
-		final String waitKey = domainType + "#" + shard + "@" + opSeq;
+		final String waitKey = OpLogStreamKeyUtil.format(domainType, shard) + "@" + opSeq;
 		final CompletableFuture<Void> future = remoteAckWaiters.computeIfAbsent(waitKey, _ -> new CompletableFuture<>());
 		try {
 			future.get(Math.max(1L, timeoutMs > 0 ? timeoutMs : remoteAckTimeoutMs), TimeUnit.MILLISECONDS);

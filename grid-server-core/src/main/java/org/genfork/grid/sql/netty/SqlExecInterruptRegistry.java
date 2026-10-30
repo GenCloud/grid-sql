@@ -19,8 +19,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import com.google.common.annotations.VisibleForTesting;
-
 /**
  * Maps in-flight EXEC / BATCH_EXEC {@code requestId} → logic VT for cooperative CANCEL interrupt.
  * <p>
@@ -73,13 +71,4 @@ public final class SqlExecInterruptRegistry {
 		sizeHint.set(0);
 	}
 
-	@VisibleForTesting
-	int size() {
-		return inflight.size();
-	}
-
-	@VisibleForTesting
-	Thread peek(int requestId) {
-		return inflight.get(requestId);
-	}
 }

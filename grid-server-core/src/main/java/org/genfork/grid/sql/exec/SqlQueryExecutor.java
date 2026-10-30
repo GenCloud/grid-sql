@@ -22,6 +22,7 @@ import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableCatalog.FunctionDef;
 import org.genfork.grid.catalog.TableCatalog.ViewDef;
 import org.genfork.grid.catalog.TableSchema;
+import org.genfork.grid.exceptions.PrimaryKeyPortalUnavailableException;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.query.distributed.DistributedKeyFanOut;
 import org.genfork.grid.query.filters.FilterCondition;
@@ -217,7 +218,13 @@ public final class SqlQueryExecutor {
 				raw = selectLockedKeys(session, table, store, lockBatch.selectedKeys(), metas, projection);
 			} else if (!session.inTransaction()
 					&& canUsePortalPullCursor(session, store, s)) {
-				return SqlResult.resultSetPull(metas, new PkLeafSelectRowWindowSource(store, projection, s.offset(), s.limitOrNull()));
+				// Eligibility hydrates first; sealed bind mid-flight can still flip portal→searchAll.
+				try {
+					return SqlResult.resultSetPull(metas,
+							new PkLeafSelectRowWindowSource(store, projection, s.offset(), s.limitOrNull()));
+				} catch (PrimaryKeyPortalUnavailableException ignored) {
+					raw = selectCommitted(store, s, metas, projection);
+				}
 			} else if (!session.inTransaction()) {
 				raw = selectCommitted(store, s, metas, projection);
 			} else {

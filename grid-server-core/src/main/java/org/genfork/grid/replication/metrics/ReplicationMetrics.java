@@ -53,6 +53,8 @@ public final class ReplicationMetrics {
 	private static final LongAdder MIGRATE_IO_SUPPRESSED_PIN = new LongAdder();
 	/** Sealed dump shard skipped (open TX / envelope defer). */
 	private static final LongAdder SEALED_DUMP_DEFERRED = new LongAdder();
+	/** At-risk sealed dump (huge OpLog delta, no {@code .sbpt}) attempted or deferred. */
+	private static final LongAdder SEALED_DUMP_AT_RISK = new LongAdder();
 
 	private static final long[] ORCHID_WAIT_NS = new long[LATENCY_SAMPLES];
 	private static final AtomicInteger ORCHID_WAIT_IDX = new AtomicInteger();
@@ -179,6 +181,14 @@ public final class ReplicationMetrics {
 
 	public static long sealedDumpDeferred() {
 		return SEALED_DUMP_DEFERRED.sum();
+	}
+
+	public static void recordSealedDumpAtRisk() {
+		SEALED_DUMP_AT_RISK.increment();
+	}
+
+	public static long sealedDumpAtRisk() {
+		return SEALED_DUMP_AT_RISK.sum();
 	}
 
 	public static long oplogPushSent() {

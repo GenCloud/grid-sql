@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.mem.stage;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.index.GridCompositeIndex;
@@ -102,16 +101,6 @@ public class GridIndexWorker implements Runnable {
 
 	public void add(Entry entry) {
 		queue.addLast(entry);
-	}
-
-	/**
-	 * Pending async index entries (background {@link #run} drain). Product SQL and
-	 * {@code installCommitted} / sealed miss warm use sync {@code indexNow*}; this depth
-	 * is for remaining staged queue paths only.
-	 */
-	@VisibleForTesting
-	public int pendingQueueSize() {
-		return queue.size();
 	}
 
 	/**

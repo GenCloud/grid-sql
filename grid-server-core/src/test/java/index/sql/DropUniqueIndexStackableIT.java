@@ -16,6 +16,7 @@
 package index.sql;
 
 import org.genfork.grid.exceptions.NonUniqueValueException;
+import org.genfork.grid.mem.index.IndexColumnResolveUtil;
 import org.genfork.grid.replication.snapshot.sealed.SealedCompositeIndexNames;
 import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
 import org.genfork.grid.sql.SqlEngine;
@@ -75,7 +76,7 @@ class DropUniqueIndexStackableIT {
 				assertThrows(NonUniqueValueException.class, () -> engine.execute(
 						"INSERT INTO " + TABLE + " VALUES (2, 100, 57, 'INVENTORY', 1)"));
 
-				runtime.ownedReplication().dumpDomainSnapshot(TABLE);
+				runtime.replication().dumpDomainSnapshot(TABLE);
 
 				engine.execute("DROP INDEX " + INDEX + " ON " + TABLE);
 
@@ -83,7 +84,8 @@ class DropUniqueIndexStackableIT {
 				assertNotNull(store);
 				assertTrue(store.schema().findIndex(INDEX) == null, "schema index must be gone");
 				assertFalse(store.index().hasNamedIndex(INDEX), "RAM named index must be gone");
-				assertTrue(store.index().resolveCompositeIndex(COMPOSITE_COLS) == null,
+				assertTrue(IndexColumnResolveUtil.resolveCompositeIndex(
+								store.index().compositeIndexMap(), COMPOSITE_COLS) == null,
 						"composite STRICT tree must be removed");
 
 				assertNoSealedComposite(dataDir, TABLE);

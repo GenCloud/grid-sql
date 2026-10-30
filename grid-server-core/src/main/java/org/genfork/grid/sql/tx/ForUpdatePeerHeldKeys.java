@@ -26,8 +26,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.genfork.grid.metrics.SqlLockMetrics;
 import org.genfork.grid.threading.ThreadService;
 
@@ -85,18 +83,15 @@ public final class ForUpdatePeerHeldKeys {
 		}
 	}
 
-	@VisibleForTesting
-	public void setLeaseTtlMs(long ttlMs) {
+	void setLeaseTtlMs(long ttlMs) {
 		leaseTtlMs.set(Math.max(MIN_LEASE_TTL_MS, ttlMs));
 	}
 
-	@VisibleForTesting
-	public void setNanoClock(LongSupplier nanoClock) {
+	void setNanoClock(LongSupplier nanoClock) {
 		this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
 	}
 
-	@VisibleForTesting
-	public void sweepExpiredForTest() {
+	void sweepExpiredForTest() {
 		sweepExpired();
 	}
 

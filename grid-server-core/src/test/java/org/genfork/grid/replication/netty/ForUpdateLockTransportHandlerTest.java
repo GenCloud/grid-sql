@@ -78,7 +78,8 @@ class ForUpdateLockTransportHandlerTest {
 		assertFalse(locks.tryLock(TABLE, KEY), "peer manager must hold after GRANT");
 
 		transport.handleForUpdateLockRelease(
-				ReplicationRpcCodec.encodeForUpdateLockRelease(TX_ID, TABLE, KEY));
+				ReplicationRpcCodec.encodeForUpdateLockRelease(TX_ID, TABLE, KEY),
+				null);
 		assertTrue(locks.tryLock(TABLE, KEY), "peer manager free after RELEASE");
 		locks.unlock(TABLE, KEY);
 	}

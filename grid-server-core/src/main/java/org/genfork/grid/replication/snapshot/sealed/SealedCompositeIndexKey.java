@@ -20,7 +20,6 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.Objects;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.serial.WireLikeMatcher;
 
@@ -215,12 +214,10 @@ public final class SealedCompositeIndexKey {
 		return true;
 	}
 
-	@VisibleForTesting
 	static int compare(byte[] left, byte[] right) {
 		return SealedIndexKeyOrder.compare(left, right);
 	}
 
-	@VisibleForTesting
 	static boolean startsWithEncoded(byte[] encoded, byte[] encodedPrefix) {
 		if (encodedPrefix.length > encoded.length) {
 			return false;

@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.catalog;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.utils.AtomicBitSet;
 import org.genfork.grid.utils.HexBytes;
@@ -305,13 +304,4 @@ public final class SequenceAllocator {
 		GridFs.deleteQuietly(metaFile);
 	}
 
-	@VisibleForTesting
-	public int persistBatchAllocs() {
-		return PERSIST_BATCH_ALLOCS;
-	}
-
-	@VisibleForTesting
-	public long durableLimitForTest() {
-		return durableLimit.get();
-	}
 }

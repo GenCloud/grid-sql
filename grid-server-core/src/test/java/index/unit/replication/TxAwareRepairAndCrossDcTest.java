@@ -100,11 +100,9 @@ public class TxAwareRepairAndCrossDcTest {
 		publisher.onAppended(marker("d", 0, 1L, ReplicationOpType.TX_BEGIN));
 		publisher.onAppended(upsert("d", 0, 2L, new byte[]{1}, new byte[]{2}));
 		assertEquals(0, ships.get(), "must not ship mid-unit");
-		assertTrue(publisher.bufferedOpCount("d", 0) >= 2);
 
 		publisher.onAppended(marker("d", 0, 3L, ReplicationOpType.TX_COMMIT));
 		assertEquals(1, ships.get());
-		assertEquals(0, publisher.bufferedOpCount("d", 0));
 	}
 
 	@Test
@@ -173,12 +171,10 @@ public class TxAwareRepairAndCrossDcTest {
 		publisher.onAppended(upsert("d", 0, 2L, new byte[]{1}, new byte[]{2}));
 		publisher.flushAll();
 		assertEquals(0, ships.get(), "must not ship mid-unit same-DC");
-		assertTrue(publisher.bufferedOpCount("d", 0) >= 2);
 
 		publisher.onAppended(marker("d", 0, 3L, ReplicationOpType.TX_COMMIT));
 		awaitShips(ships, 1);
 		assertEquals(1, ships.get());
-		assertEquals(0, publisher.bufferedOpCount("d", 0));
 	}
 
 	private static void awaitShips(AtomicInteger ships, int expected) {

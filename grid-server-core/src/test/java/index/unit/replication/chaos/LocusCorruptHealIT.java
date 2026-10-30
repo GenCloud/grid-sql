@@ -57,12 +57,16 @@ public class LocusCorruptHealIT {
 		remote.observe(op);
 
 		final long hash = HomologousRepair.keyHash(key);
-		local.corruptLocus("chaos.Heal", 0, hash);
+		final VersionLocus observed = local.getLocusMap().snapshot("chaos.Heal", 0).get(hash);
+		local.applyHealedLocus(new VersionLocus(
+				"chaos.Heal", 0, hash, observed.opSeq(), observed.schemaEpoch(), 0xDEADL));
 
 		final Map<Long, VersionLocus> remoteView = remote.getLocusMap().snapshot("chaos.Heal", 0);
 		final List<RepairCommand> cmds = local.reconcile("chaos.Heal", 0, remoteView);
 		assertTrue(cmds.stream().anyMatch(c ->
-				c.type() == RepairCommandType.RESHIP_SEGMENT || c.type() == RepairCommandType.FETCH_OP));
+				c.type() == RepairCommandType.RESHIP_SEGMENT
+						|| c.type() == RepairCommandType.FETCH_OP
+						|| c.type() == RepairCommandType.FETCH_ROW));
 
 		final VersionLocus good = remoteView.get(hash);
 		local.applyHealedLocus(good);

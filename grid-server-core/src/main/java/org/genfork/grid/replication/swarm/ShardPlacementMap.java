@@ -18,6 +18,8 @@ package org.genfork.grid.replication.swarm;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+
 /**
  * Shard ownership placement: primary write affinity, drain lifecycle, and optional peer pins.
  *
@@ -37,19 +39,15 @@ public class ShardPlacementMap {
 	private final Map<String, DrainState> drainByStream = new ConcurrentHashMap<>();
 	private final Map<String, String> affinityByStream = new ConcurrentHashMap<>();
 
-	private static String key(String domainType, int shard) {
-		return domainType + "#" + shard;
-	}
-
 	public void setOwner(String domainType, int shard, String peerId) {
 		if (domainType == null || peerId == null) {
 			return;
 		}
-		ownerByStream.put(key(domainType, shard), peerId);
+		ownerByStream.put(OpLogStreamKeyUtil.format(domainType, shard), peerId);
 	}
 
 	public String owner(String domainType, int shard) {
-		return ownerByStream.get(key(domainType, shard));
+		return ownerByStream.get(OpLogStreamKeyUtil.format(domainType, shard));
 	}
 
 	public Map<String, String> snapshot() {
@@ -60,7 +58,7 @@ public class ShardPlacementMap {
 		if (domainType == null || state == null) {
 			return;
 		}
-		final String k = key(domainType, shard);
+		final String k = OpLogStreamKeyUtil.format(domainType, shard);
 		if (state == DrainState.NONE) {
 			drainByStream.remove(k);
 		} else {
@@ -69,7 +67,7 @@ public class ShardPlacementMap {
 	}
 
 	public DrainState drainState(String domainType, int shard) {
-		return drainByStream.getOrDefault(key(domainType, shard), DrainState.NONE);
+		return drainByStream.getOrDefault(OpLogStreamKeyUtil.format(domainType, shard), DrainState.NONE);
 	}
 
 	public boolean isDraining(String domainType, int shard) {
@@ -82,7 +80,7 @@ public class ShardPlacementMap {
 		if (domainType == null) {
 			return;
 		}
-		final String k = key(domainType, shard);
+		final String k = OpLogStreamKeyUtil.format(domainType, shard);
 		if (peerId == null) {
 			affinityByStream.remove(k);
 		} else {
@@ -91,7 +89,7 @@ public class ShardPlacementMap {
 	}
 
 	public String affinity(String domainType, int shard) {
-		return affinityByStream.get(key(domainType, shard));
+		return affinityByStream.get(OpLogStreamKeyUtil.format(domainType, shard));
 	}
 
 	public Map<String, String> affinitySnapshot() {

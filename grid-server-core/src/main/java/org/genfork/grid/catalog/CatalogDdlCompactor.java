@@ -74,6 +74,11 @@ public final class CatalogDdlCompactor {
 			}
 			lines.add(renderCreateTable(schema));
 			for (IndexDef idx : schema.indexes()) {
+				// CREATE TABLE … PRIMARY KEY already wires synthetic table_pk — do not emit
+				// CREATE UNIQUE INDEX table_pk (DROP footgun / redundant recover line).
+				if (SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndex(schema, idx)) {
+					continue;
+				}
 				lines.add(renderCreateIndex(table, idx));
 			}
 		}

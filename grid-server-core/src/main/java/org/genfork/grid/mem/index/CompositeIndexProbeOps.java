@@ -31,6 +31,7 @@ import org.genfork.grid.query.filters.impl.OrCondition;
 import org.genfork.grid.serial.FieldMetaData;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.SqlWireUtil;
+import org.genfork.grid.serial.WireCompositeKeys;
 import org.genfork.grid.serial.WireFieldBytes;
 
 /**
@@ -44,7 +45,6 @@ import org.genfork.grid.serial.WireFieldBytes;
  * @since: 1.0
  */
 final class CompositeIndexProbeOps {
-	private static final byte FIELD_SEP = 0x1F;
 
 	private CompositeIndexProbeOps() {
 	}
@@ -125,7 +125,6 @@ final class CompositeIndexProbeOps {
 			return readFieldBytes(valueBytes, schema, fields.getFirst());
 		}
 		final LogicalFieldCursor cur = LogicalFieldCursor.open(schema, valueBytes);
-		int total = 0;
 		final byte[][] parts = new byte[fields.size()][];
 		for (int i = 0; i < fields.size(); i++) {
 			final ColumnDef col = schema.column(fields.get(i).getName());
@@ -134,16 +133,8 @@ final class CompositeIndexProbeOps {
 			} else {
 				parts[i] = cur.indexKeyBytes(col.ordinal());
 			}
-			total += parts[i].length + 1;
 		}
-		final byte[] composite = new byte[total];
-		int pos = 0;
-		for (byte[] part : parts) {
-			System.arraycopy(part, 0, composite, pos, part.length);
-			pos += part.length;
-			composite[pos++] = FIELD_SEP;
-		}
-		return new WireFieldBytes(composite);
+		return WireCompositeKeys.joinToWireField(parts);
 	}
 
 	/** Format GROUP BY count rows as key/tab/count UTF-8 lines. */

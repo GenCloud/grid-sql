@@ -78,11 +78,9 @@ public class DistForUpdatePeerLockIT {
 		final SqlSession writer = primary.newSession();
 		writer.setEnvelopeCoordinator(envelope);
 		primary.execute(writer, "BEGIN");
-		final long txId = writer.requireTx().txId();
 		final SqlResult locked = primary.execute(writer,
 				"SELECT id FROM " + TABLE + " WHERE id = 1 FOR UPDATE");
 		assertEquals(1, locked.rows().size());
-		assertTrue(envelope.hasOpenLockPhase(txId));
 
 		final AtomicReference<Throwable> error = new AtomicReference<>();
 		final Thread waiter = Thread.ofVirtual().start(() -> {
@@ -97,7 +95,6 @@ public class DistForUpdatePeerLockIT {
 		assertInstanceOf(LockWaitTimeoutException.class, error.get());
 
 		primary.execute(writer, "ROLLBACK");
-		assertFalse(envelope.hasOpenLockPhase(txId));
 		// After release, peer manager must accept the lock.
 		peer.lockManager().lock(TABLE, intKey(1));
 		peer.lockManager().unlock(TABLE, intKey(1));

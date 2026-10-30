@@ -16,6 +16,7 @@
 package org.genfork.grid.store;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,19 +32,17 @@ import java.util.function.ToLongFunction;
 
 import org.springframework.util.CollectionUtils;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.genfork.grid.catalog.CatalogPersistUtil;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.CheckDef;
 import org.genfork.grid.catalog.IndexDef;
+import org.genfork.grid.catalog.SyntheticPkIndexUtil;
 import org.genfork.grid.catalog.TableAnalyzeStats;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.GridScalableMap;
 import org.genfork.grid.mem.index.GridCompositeIndex;
-import org.genfork.grid.mem.index.IndexType;
 import org.genfork.grid.mem.index.btree.AbstractBPTree;
 import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.mem.stage.GridEntriesProcessor.AddEntry;
@@ -202,6 +201,11 @@ public final class TableStore {
 		if (def == null) {
 			def = index.findNamedIndex(indexName);
 		}
+		if (SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndex(schema, def)
+				|| SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndexName(schema.catalogKey(), indexName)) {
+			final String rejectName = def != null ? def.name() : indexName;
+			throw new IllegalStateException(SyntheticPkIndexUtil.cannotDropMessage(rejectName));
+		}
 		final String catalogName = def != null ? def.name() : indexName;
 		final List<String> columns = def != null ? def.columns() : List.of();
 		if (index.hasNamedIndex(indexName)) {
@@ -321,7 +325,7 @@ public final class TableStore {
 	public void rebuildAllSecondaryIndexes() {
 		final List<IndexDef> defs = new ArrayList<>(schema.indexes());
 		for (IndexDef def : defs) {
-			if (isSyntheticPrimaryKeyIndex(def)) {
+			if (SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndex(schema, def)) {
 				continue;
 			}
 			if (index.hasNamedIndex(def.name())) {
@@ -330,30 +334,6 @@ public final class TableStore {
 			index.addNamedIndex(def, schema);
 			backfillIndex(def);
 		}
-	}
-
-	/** Synthetic STRICT PK covering index — never drop during secondary rebuild. */
-	private boolean isSyntheticPrimaryKeyIndex(IndexDef def) {
-		if (def.kind() != IndexType.STRICT) {
-			return false;
-		}
-		final String syntheticName = CatalogPersistUtil.syntheticPkIndexName(schema.catalogKey());
-		if (def.name().equalsIgnoreCase(syntheticName)) {
-			return true;
-		}
-		final List<String> pkNames = new ArrayList<>(schema.pkColumns().size());
-		for (ColumnDef col : schema.pkColumns()) {
-			pkNames.add(col.name());
-		}
-		if (def.columns().size() != pkNames.size()) {
-			return false;
-		}
-		for (int i = 0; i < pkNames.size(); i++) {
-			if (!def.columns().get(i).equalsIgnoreCase(pkNames.get(i))) {
-				return false;
-			}
-		}
-		return true;
 	}
 
 	private void applySchema(TableSchema next) {
@@ -508,15 +488,15 @@ public final class TableStore {
 	}
 
 	/**
-	 * {@code true} when SELECT plan uses ascending PK-leaf order for ORDER BY.
+	 * {@code true} when PRIMARY KEY is an in-RAM B+ tree (Portal pull eligible).
+	 * <p>
+	 * Hydrates shards first: LAZY sealed bind may wrap the PK tree in
+	 * {@code SealedFallbackIndex}, which is portal-ineligible (use searchAll merge).
+	 * Sampling eligibility before hydrate caused AlwaysTrue SELECT to open a portal
+	 * cursor after bind and throw a false {@code PRIMARY KEY index missing}.
 	 */
-	@VisibleForTesting
-	public boolean isUseSameOrderAscendingIndex(String selectSql) {
-		return index.isUseSameOrderAscendingIndex(selectSql);
-	}
-
-	/** {@code true} when PRIMARY KEY is an in-RAM B+ tree (Portal pull eligible). */
 	public boolean isRamPrimaryKeyBptree() {
+		ensureAllShardsHydrated();
 		return index.isRamPrimaryKeyBptree();
 	}
 
@@ -676,35 +656,24 @@ public final class TableStore {
 				final ColumnDef col = schema.requireColumn(e.getKey());
 				values[col.ordinal()] = RowEncoder.coerce(col, e.getValue());
 			}
-			final byte[] merged = validateConstraintsEncoded(values, keyBytes, false);
+			final byte[] logicalKey = PrimaryKeyCodec.encodeRow(schema, values);
+			final byte[] merged = validateConstraintsEncoded(values, logicalKey, false);
 			if (mutationRecorder == null) {
-				processor.installCommitted(keyBytes, merged, false);
+				installCommittedWithPkMigration(keyBytes, logicalKey, merged);
 				return 1L;
 			}
-			mutationRecorder.recordCommittedBlocking(shard, new AddEntry(null, keyBytes, merged));
+			mutationRecorder.recordCommittedBlocking(getShard(logicalKey),
+					new AddEntry(null, logicalKey, merged));
+			if (!Arrays.equals(logicalKey, keyBytes)) {
+				mutationRecorder.recordCommittedBlocking(getShard(keyBytes),
+						new RemoveEntry(keyBytes));
+			}
 		}
 		return 1L;
 	}
 
 	public long deleteByPk(Object pkValue) {
 		return deleteByKeyBytes(PrimaryKeyCodec.encodeArgument(schema, pkValue));
-	}
-
-	public long updateByPlan(UpdatePlan plan) {
-		return updateByPlan(plan, Map.of());
-	}
-
-	/**
-	 * Apply RMW plan plus optional SET literals in one {@link BlobFieldModifier} pass.
-	 */
-	public long updateByPlan(UpdatePlan plan, Map<String, Object> literals) {
-		if (!schema.pkColumn().name().equalsIgnoreCase(plan.pkColumn())) {
-			throw new IllegalArgumentException("WHERE must use PK " + schema.pkColumn().name());
-		}
-		final Object keyObj = RowEncoder.coerce(schema.pkColumn(), plan.pkValue());
-		final List<ModifyPayload.Decoded> assigns =
-				UpdateAssignMergeUtil.toDecoded(plan, literals, schema);
-		return applyFieldModify(keyObj, assigns);
 	}
 
 	/**
@@ -728,31 +697,6 @@ public final class TableStore {
 				return 1L;
 			}
 			mutationRecorder.recordCommittedBlocking(shard, new AddEntry(null, keyBytes, valueBytes));
-		}
-		return 1L;
-	}
-
-	public long applyFieldModify(Object keyObj, List<ModifyPayload.Decoded> assigns) {
-		final byte[] keyArray = SqlWireUtil.toGenericArray(keyObj);
-		final int shard = getShard(keyArray);
-		ensureWritable(shard);
-		final GridEntriesProcessor processor = processors[shard];
-		final GridEntriesProcessor.KeyEntry keyLock = new GridEntriesProcessor.KeyEntry(keyArray);
-		final Object lock = fieldModifyLocks.computeIfAbsent(keyLock, k -> new Object());
-		final byte[] merged;
-		synchronized (lock) {
-			byte[] existing = processor.getCommitted(keyArray);
-			if (existing == null) {
-				// UPDATE must not invent rows; callers that need upsert use installEncodedUpsert.
-				return 0L;
-			}
-			merged = BlobFieldModifier.apply(schema, existing, assigns);
-			validateEncodedChecks(merged);
-			if (mutationRecorder == null) {
-				processor.installCommitted(keyArray, merged, false);
-				return 1L;
-			}
-			mutationRecorder.recordCommittedBlocking(shard, new AddEntry(null, keyArray, merged));
 		}
 		return 1L;
 	}
@@ -842,6 +786,15 @@ public final class TableStore {
 	 * Encode once, then CHECK + STRICT secondary unique (wire EQ) + optional PK reject.
 	 */
 	private byte[] validateConstraintsEncoded(Object[] coerced, byte[] keyBytes, boolean rejectExistingPk) {
+		return validateConstraintsEncoded(coerced, keyBytes, rejectExistingPk, null);
+	}
+
+	private byte[] validateConstraintsEncoded(
+			Object[] coerced,
+			byte[] keyBytes,
+			boolean rejectExistingPk,
+			byte[] supersededOwnerKeyOrNull
+	) {
 		Objects.requireNonNull(coerced, "coerced");
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		if (rejectExistingPk && getCommittedBytes(keyBytes) != null) {
@@ -853,7 +806,8 @@ public final class TableStore {
 		}
 		final byte[] valueBytes = RowEncoder.encode(schema, coerced);
 		validateEncodedChecks(valueBytes);
-		StrictUniqueConstraintUtil.validateSecondaryStrict(this, schema, valueBytes, keyBytes);
+		StrictUniqueConstraintUtil.validateSecondaryStrict(
+				this, schema, valueBytes, keyBytes, supersededOwnerKeyOrNull);
 		return valueBytes;
 	}
 
@@ -887,14 +841,6 @@ public final class TableStore {
 			replicationCoordinator.ensureShardHydrated(schema.catalogKey(), shard);
 		}
 		return processors[shard];
-	}
-
-	/**
-	 * Test hook: shard processor for a key (installCommitted / map visibility IT).
-	 */
-	@VisibleForTesting
-	public GridEntriesProcessor processorForTest(byte[] key) {
-		return getProcessor(key);
 	}
 
 	private void ensureAllShardsHydrated() {
@@ -960,8 +906,34 @@ public final class TableStore {
 			final ColumnDef col = schema.requireColumn(e.getKey());
 			values[col.ordinal()] = RowEncoder.coerce(col, e.getValue());
 		}
-		final byte[] merged = validateConstraintsEncoded(values, keyBytes, false);
-		return new EncodedRow(keyBytes, merged, getShard(keyBytes));
+		final byte[] logicalKey = PrimaryKeyCodec.encodeRow(schema, values);
+		final byte[] superseded = Arrays.equals(logicalKey, keyBytes) ? null : keyBytes;
+		final byte[] merged = validateConstraintsEncoded(values, logicalKey, false, superseded);
+		return new EncodedRow(logicalKey, merged, getShard(logicalKey));
+	}
+
+	/**
+	 * Install row at logical PK; tombstone staged map key when ON CONFLICT / UPDATE changes PK.
+	 */
+	private void installCommittedWithPkMigration(
+			byte[] stagedKeyBytes,
+			byte[] logicalKeyBytes,
+			byte[] valueBytes
+	) {
+		if (Arrays.equals(logicalKeyBytes, stagedKeyBytes)) {
+			getProcessor(stagedKeyBytes).installCommitted(stagedKeyBytes, valueBytes, false);
+			return;
+		}
+		getProcessor(stagedKeyBytes).tombstoneDisplacedStrictOwner(stagedKeyBytes);
+		getProcessor(logicalKeyBytes).installCommitted(logicalKeyBytes, valueBytes, false);
+	}
+
+	private byte[] keyBytesFromValueBlob(byte[] valueBytes) {
+		if (valueBytes == null || !LogicalFieldCursor.canOpen(schema, valueBytes)) {
+			throw new IllegalStateException("upsert value bytes missing or corrupt");
+		}
+		final Object[] values = RowEncoder.decode(schema, valueBytes);
+		return PrimaryKeyCodec.encodeRow(schema, values);
 	}
 
 	/** Encode RMW UpdatePlan against base bytes (or seed missing row). */
@@ -1008,21 +980,22 @@ public final class TableStore {
 		Objects.requireNonNull(keyBytes, "keyBytes");
 		validateEncodedChecks(valueBytes);
 		maybeInjectFlushFail();
-		final int shard = getShard(keyBytes);
+		final byte[] logicalKey = keyBytesFromValueBlob(valueBytes);
+		final int shard = getShard(logicalKey);
 		ensureWritable(shard);
 		final GridEntriesProcessor processor = processors[shard];
 		final byte[] prior = processor.getCommitted(keyBytes);
 		if (mutationRecorder == null) {
-			if (prior != null) {
-				index.remove(keyBytes);
-			}
-			processor.putMapOnly(keyBytes, valueBytes);
-			indexWorker.indexNow(keyBytes, valueBytes);
-			maybeAutoPin(keyBytes);
+			installCommittedWithPkMigration(keyBytes, logicalKey, valueBytes);
+			maybeAutoPin(logicalKey);
 			return new PriorBytes(keyBytes, prior);
 		}
-		mutationRecorder.recordCommittedBlocking(shard, new AddEntry(null, keyBytes, valueBytes));
-		maybeAutoPin(keyBytes);
+		mutationRecorder.recordCommittedBlocking(getShard(logicalKey),
+				new AddEntry(null, logicalKey, valueBytes));
+		if (!Arrays.equals(logicalKey, keyBytes)) {
+			mutationRecorder.recordCommittedBlocking(getShard(keyBytes), new RemoveEntry(keyBytes));
+		}
+		maybeAutoPin(logicalKey);
 		return new PriorBytes(keyBytes, prior);
 	}
 
@@ -1164,15 +1137,5 @@ public final class TableStore {
 	private void ensureWritable(int shard) {
 		ensureWriterEligible();
 		ReplicaAccessGate.ensureShardWritable(replicationCoordinator, schema.catalogKey(), shard);
-	}
-
-	/** Convenience for lit SET assigns not covered by RMW UpdatePlan forms. */
-	public long updateSetLiterals(String pkColumn, Object pkValue, Map<String, Object> sets) {
-		if (!schema.pkColumn().name().equalsIgnoreCase(pkColumn)) {
-			throw new IllegalArgumentException("WHERE must use PK " + schema.pkColumn().name());
-		}
-		final Object keyObj = RowEncoder.coerce(schema.pkColumn(), pkValue);
-		final byte[] keyArray = SqlWireUtil.toGenericArray(keyObj);
-		return updateSetLiteralsByKey(keyArray, sets);
 	}
 }

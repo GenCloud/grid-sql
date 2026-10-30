@@ -21,8 +21,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.genfork.grid.metrics.SqlLockMetrics;
 
 /**
@@ -151,16 +149,6 @@ public final class SqlRecordLockManager {
 				LockSupport.unpark(w);
 			}
 		}
-	}
-
-	@VisibleForTesting
-	public void setDefaultWaitNanosForTest(long nanos) {
-		this.defaultWaitNanos = Math.max(0L, nanos);
-	}
-
-	@VisibleForTesting
-	public int size() {
-		return locks.size();
 	}
 
 	private static final class Entry {

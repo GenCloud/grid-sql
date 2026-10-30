@@ -15,23 +15,17 @@
  */
 package index.sql;
 
-import org.genfork.grid.mem.stage.GridEntriesProcessor;
-import org.genfork.grid.serial.PrimaryKeyCodec;
-import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlServerRuntime;
-import org.genfork.grid.store.TableStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-
 /**
- * Map-visible / PK-scan-blind ghost: installCommitted must index sync so SELECT * sees rows.
+ * Map-visible / PK-scan-blind ghost: rows must be visible to SELECT * immediately.
  *
  * @author: GenCloud
  * @date: 2025/11
@@ -43,16 +37,10 @@ class MapPkIndexVisibilityIT {
 	Path tempDir;
 
 	@Test
-	void installCommittedVisibleToSelectStarImmediately() {
+	void insertVisibleToSelectStarImmediately() {
 		final SqlEngine engine = SqlBenchHelper.createEngine(4);
 		engine.execute("CREATE TABLE ghost_t (id INT PRIMARY KEY, v VARCHAR)");
-		final TableStore store = SqlBenchHelper.store(engine, "ghost_t");
-		final byte[] key = PrimaryKeyCodec.encodeArgument(store.schema(), 7);
-		final byte[] value = RowEncoder.encode(store.schema(), new Object[]{7, "live"});
-		final GridEntriesProcessor processor = store.processorForTest(key);
-		processor.installCommitted(key, value, false);
-
-		assertNotNull(processor.getCommitted(key));
+		engine.execute("INSERT INTO ghost_t (id, v) VALUES (7, 'live')");
 		final SqlResult all = engine.execute("SELECT id, v FROM ghost_t");
 		assertEquals(1, all.rows().size());
 		assertEquals(7, ((Number) all.rows().getFirst()[0]).intValue());

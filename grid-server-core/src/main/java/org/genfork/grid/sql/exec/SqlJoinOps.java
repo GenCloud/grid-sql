@@ -27,6 +27,7 @@ import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.query.filters.FilterCondition;
 import org.genfork.grid.serial.LogicalFieldCursor;
+import org.genfork.grid.serial.WireCompositeKeys;
 import org.genfork.grid.serial.WireSpan;
 import org.genfork.grid.sql.SqlIdentParseUtil;
 import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
@@ -59,9 +60,6 @@ public final class SqlJoinOps {
 
 	/** Wire EQ arity for single-column right index probe. */
 	private static final int LOOKUP_EQ_WIRE_ARITY = 1;
-
-	/** Same separator as {@link SqlWireAggOps} composite GROUP BY keys. */
-	private static final byte COMPOSITE_FIELD_SEP = 0x1F;
 
 	private SqlJoinOps() {
 	}
@@ -421,20 +419,11 @@ public final class SqlJoinOps {
 			return wireKeyFromJoined(row, sideSchemas, globalOrds[0]);
 		}
 		final byte[][] parts = new byte[globalOrds.length][];
-		int total = 0;
 		for (int i = 0; i < globalOrds.length; i++) {
 			final WireSpan part = wireKeyFromJoined(row, sideSchemas, globalOrds[i]);
 			parts[i] = part.toOwnedBytes();
-			total += parts[i].length + 1;
 		}
-		final byte[] composite = new byte[total];
-		int pos = 0;
-		for (byte[] part : parts) {
-			System.arraycopy(part, 0, composite, pos, part.length);
-			pos += part.length;
-			composite[pos++] = COMPOSITE_FIELD_SEP;
-		}
-		return WireSpan.ofOwned(composite);
+		return WireSpan.ofOwned(WireCompositeKeys.joinOwnedParts(parts));
 	}
 
 

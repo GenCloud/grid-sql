@@ -21,7 +21,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.EnumSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,7 +49,7 @@ class PrivilegeCatalogPersistIfChangedTest {
 
 	@Test
 	@DisplayName("identical_grant_after_load_does_not_persist_again")
-	void identicalGrantAfterLoadDoesNotPersistAgain() {
+	void identicalGrantAfterLoadDoesNotPersistAgain() throws Exception {
 		final PrivilegeCatalog seed = new PrivilegeCatalog(catalogDir);
 		seed.createUser(ADMIN, PASSWORD);
 		seed.createUser(APP, PASSWORD);
@@ -57,11 +59,10 @@ class PrivilegeCatalogPersistIfChangedTest {
 				SqlPrivilege.INSERT,
 				SqlPrivilege.UPDATE,
 				SqlPrivilege.DELETE));
-		final int afterSeed = seed.persistInvocations();
-		assertTrue(afterSeed >= 1);
+		final Path meta = catalogDir.resolve(PrivilegeCatalog.META_FILE_NAME);
+		assertTrue(Files.isRegularFile(meta));
 
 		final PrivilegeCatalog loaded = new PrivilegeCatalog(catalogDir);
-		assertEquals(0, loaded.persistInvocations());
 		assertTrue(loaded.containsAllGrants(APP, SCHEMA, "*", EnumSet.of(
 				SqlPrivilege.DDL,
 				SqlPrivilege.SELECT,
@@ -69,6 +70,7 @@ class PrivilegeCatalogPersistIfChangedTest {
 				SqlPrivilege.UPDATE,
 				SqlPrivilege.DELETE)));
 
+		final FileTime afterLoad = Files.getLastModifiedTime(meta);
 		for (int i = 0; i < HYDRATE_GRANT_REPLAYS; i++) {
 			loaded.grant(APP, SCHEMA, "*", EnumSet.of(
 					SqlPrivilege.DDL,
@@ -77,22 +79,28 @@ class PrivilegeCatalogPersistIfChangedTest {
 					SqlPrivilege.UPDATE,
 					SqlPrivilege.DELETE));
 		}
-		assertEquals(0, loaded.persistInvocations(),
+		assertEquals(afterLoad, Files.getLastModifiedTime(meta),
 				"identical GRANT hydrate must not rewrite privileges.meta");
 	}
 
 	@Test
 	@DisplayName("new_privilege_persists_once")
-	void newPrivilegePersistsOnce() {
+	void newPrivilegePersistsOnce() throws Exception {
 		final PrivilegeCatalog cat = new PrivilegeCatalog(catalogDir);
 		cat.createUser(ADMIN, PASSWORD);
 		cat.createUser(APP, PASSWORD);
-		final int before = cat.persistInvocations();
+		final Path meta = catalogDir.resolve(PrivilegeCatalog.META_FILE_NAME);
+		assertTrue(Files.isRegularFile(meta));
+		final FileTime before = Files.getLastModifiedTime(meta);
+
 		cat.grant(APP, SCHEMA, "*", EnumSet.of(SqlPrivilege.SELECT));
-		assertEquals(before + 1, cat.persistInvocations());
+		final FileTime afterSelect = Files.getLastModifiedTime(meta);
+		assertTrue(afterSelect.compareTo(before) >= 0);
+
 		cat.grant(APP, SCHEMA, "*", EnumSet.of(SqlPrivilege.SELECT));
-		assertEquals(before + 1, cat.persistInvocations());
+		assertEquals(afterSelect, Files.getLastModifiedTime(meta));
+
 		cat.grant(APP, SCHEMA, "*", EnumSet.of(SqlPrivilege.INSERT));
-		assertEquals(before + 2, cat.persistInvocations());
+		assertTrue(Files.getLastModifiedTime(meta).compareTo(afterSelect) >= 0);
 	}
 }

@@ -51,7 +51,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Shutdown-style sealed dump latency (same path as graceful stop; no COMMIT hot path).
+ * Shutdown-style sealed dump latency (same path as graceful stop / at-risk escalate
+ * {@code dumpDomainSealed}; no COMMIT hot path).
  *
  * @author: GenCloud
  * @date: 2026/10

@@ -19,9 +19,8 @@ package org.genfork.grid.sql.client;
  * Policy for publishing AUTH / ERROR {@link ServerMeta} onto factory-global
  * {@link RemoteConnectionFactory#lastServerMeta()}.
  * <p>
- * {@link SessionRole#READ_REPLICA} rotate paths must not let reject-and-retry
- * {@code applyLagStale} AUTH overwrite sticky/fresh meta (CI flake in
- * {@code ReplicaReadEndpointsRotateIT}).
+ * Never publish {@code applyLagStale} meta (PRIMARY or {@link SessionRole#READ_REPLICA}):
+ * lagging AUTH must rotate / FAIL_STALE without overwriting sticky/fresh factory meta.
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -34,13 +33,14 @@ public final class FactoryServerMetaPublish {
 	/**
 	 * Whether factory-global last meta should adopt {@code meta}.
 	 * <p>
-	 * Writer / PRIMARY: always (promoteHint / writerEligible rediscover).
-	 * READ_REPLICA: only non-stale — stale peers are marked and rotated away.
+	 * Stale apply-lag peers are never published. Null role is treated as writer-compatible.
 	 */
 	public static boolean shouldPublish(SessionRole factoryRole, ServerMeta meta) {
-		if (meta == null) {
+		if (meta == null || meta.applyLagStale()) {
 			return false;
 		}
-        return factoryRole == null || !factoryRole.isReadReplica() || !meta.applyLagStale();
-    }
+		return factoryRole == null
+				|| factoryRole == SessionRole.PRIMARY
+				|| factoryRole.isReadReplica();
+	}
 }

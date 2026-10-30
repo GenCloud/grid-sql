@@ -6,13 +6,13 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-10-16-jepsen-smoke |
-| date | 2026-10-16T12:25:37.8852708+03:00 |
-| git | 9375f53 |
+| stamp | 2026-10-30-jepsen-edge-matrix-1dc-join-shards |
+| date | 2026-10-30T00:50:14.5889217+03:00 |
+| git | 2557415 |
 | host | local |
-| mode | `smoke` |
-| outcome | `HARNESS_READY` |
-| notes | compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows) |
+| mode | `1dc-join-shards-chaos` |
+| outcome | `PASS` |
+| notes | join-shards=PASS |
 
 ## History
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
@@ -895,3 +895,63 @@ Details + p50/p95/p99: [multidc/RESULTS.md](multidc/RESULTS.md).
 - full-jepsen: not-run
 - command: run-jepsen-smoke.ps1
 - notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-10-29-sealed-lifecycle-regress-jepsen
+- mode: full-jepsen
+- outcome: PASS
+- git: 2557415
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS
+
+### 2026-10-30-jepsen-edge-matrix-1dc-chaos
+- mode: full-jepsen
+- outcome: PASS
+- git: 2557415
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=45)
+- notes: register=PASS; append=PASS
+
+### 2026-10-30-jepsen-edge-matrix-1dc-nochao
+- mode: nochao
+- outcome: PASS
+- git: 2557415
+- compose: up
+- chaos-it: no-nemesis
+- full-jepsen: PASS
+- command: run-jepsen-nochao.ps1 register+append (time-limit=45)
+- notes: register=PASS; append=PASS; no-nemesis
+
+### 2026-10-30-jepsen-edge-matrix-1dc-unclean-revive
+- mode: full-jepsen
+- outcome: PASS
+- git: 2557415
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=45)
+- notes: register=PASS; append=PASS
+
+### 2026-10-30-jepsen-edge-matrix-1dc-swarm-chaos
+- mode: 1dc-swarm-chaos
+- outcome: PASS
+- git: 2557415
+- compose: up-swarm
+- chaos-it: partition+kill+swarm-bounce
+- full-jepsen: PASS
+- command: run-jepsen-swarm.ps1 append (time-limit=60)
+- notes: swarm-append=PASS
+
+### 2026-10-30-jepsen-edge-matrix-1dc-join-shards
+- mode: 1dc-join-shards-chaos
+- outcome: PASS
+- git: 2557415
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen-join.ps1 join (time-limit=45)
+- notes: join-shards=PASS

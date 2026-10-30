@@ -676,10 +676,10 @@ public final class TableCatalog {
 		}
 		final Map<String, List<String>> edges = new HashMap<>();
 		for (TableSchema existing : schemas.values()) {
-			addFkEdges(edges, existing);
+			CatalogFkGraphUtil.addFkEdges(edges, existing);
 		}
-		addFkEdges(edges, schema);
-		if (hasCycleFrom(edges, self, new LinkedHashSet<>())) {
+		CatalogFkGraphUtil.addFkEdges(edges, schema);
+		if (CatalogFkGraphUtil.hasCycleFrom(edges, self, new LinkedHashSet<>())) {
 			throw new IllegalArgumentException(
 					"cyclic FOREIGN KEY rejected for table " + schema.catalogKey());
 		}
@@ -748,35 +748,6 @@ public final class TableCatalog {
 			}
 		}
 		return true;
-	}
-
-	private static void addFkEdges(Map<String, List<String>> edges, TableSchema schema) {
-		final String from = key(schema.catalogKey());
-		for (FkDef fk : schema.foreignKeys()) {
-			final String parent = key(fk.parentCatalogKey());
-			if (parent.equals(from)) {
-				continue;
-			}
-			edges.computeIfAbsent(from, _ -> new ArrayList<>()).add(parent);
-		}
-	}
-
-	private static boolean hasCycleFrom(
-			Map<String, List<String>> edges,
-			String node,
-			LinkedHashSet<String> stack
-	) {
-		if (!stack.add(node)) {
-			return true;
-		}
-		final List<String> next = edges.getOrDefault(node, List.of());
-		for (String child : next) {
-			if (hasCycleFrom(edges, child, stack)) {
-				return true;
-			}
-		}
-		stack.remove(node);
-		return false;
 	}
 
 	/** True when any registered table references {@code parentTable} via FK. */
@@ -893,7 +864,7 @@ public final class TableCatalog {
 			return;
 		}
 		final String k = key(tableName);
-		final Path file = statsDir().resolve(safeFileName(k) + TableAnalyzeStats.FILE_SUFFIX);
+		final Path file = statsDir().resolve(CatalogFkGraphUtil.safeFileName(k) + TableAnalyzeStats.FILE_SUFFIX);
 		if (!GridFs.isRegularFile(file)) {
 			return;
 		}
@@ -912,7 +883,7 @@ public final class TableCatalog {
 		try {
 			final Path dir = statsDir();
 			GridFs.createDirs(dir);
-			final Path file = dir.resolve(safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX);
+			final Path file = dir.resolve(CatalogFkGraphUtil.safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX);
 			GridFs.writeAtomic(file, stats.toFileBody(), StandardCharsets.UTF_8);
 		} catch (IOException ex) {
 			throw new IllegalStateException("Failed to persist ANALYZE stats for " + tableKey, ex);
@@ -928,14 +899,10 @@ public final class TableCatalog {
 			return;
 		}
 		try {
-			GridFs.deleteIfExists(statsDir().resolve(safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX));
+			GridFs.deleteIfExists(statsDir().resolve(CatalogFkGraphUtil.safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX));
 		} catch (IOException ignored) {
 			// best-effort
 		}
-	}
-
-	private static String safeFileName(String tableKey) {
-		return tableKey.replace('.', '_').replace('/', '_');
 	}
 
 	public boolean exists(String tableName) {

@@ -27,6 +27,7 @@ import io.netty.channel.ChannelFutureListener;
 import reactor.core.publisher.Mono;
 
 import org.genfork.grid.sql.client.ConnectionOptions;
+import org.genfork.grid.sql.client.FactoryAuthRedirectUtil;
 import org.genfork.grid.sql.client.HostEndpoint;
 
 /**
@@ -37,6 +38,9 @@ import org.genfork.grid.sql.client.HostEndpoint;
  * <p>
  * Reactive {@link #connectOnce} is subscribe-driven ({@link Mono#create}); Sync uses
  * {@link #connectOnceStage} (write-immediate CompletionStage).
+ * <p>
+ * {@link FactoryAuthRedirectUtil#ERR_APPLY_LAG_STALE} is <em>retryable</em> under
+ * {@link ConnectionOptions#retryMode()} (LAZY catch-up window) — not classified as AUTH fail.
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -49,12 +53,31 @@ public final class RemoteConnectSupport {
 	private RemoteConnectSupport() {
 	}
 
-	/** Auth failures are not retried across endpoints. */
+	/**
+	 * Auth credential failures are not retried across endpoints.
+	 * Apply-lag stale ({@link FactoryAuthRedirectUtil#ERR_APPLY_LAG_STALE}) is retryable.
+	 */
 	public static boolean isNonRetryable(Throwable err) {
+		if (isApplyLagStaleError(err)) {
+			return false;
+		}
 		Throwable cur = err;
 		while (cur != null) {
 			final String msg = cur.getMessage();
 			if (msg != null && msg.toLowerCase(Locale.ROOT).contains(AUTH_MARKER)) {
+				return true;
+			}
+			cur = cur.getCause();
+		}
+		return false;
+	}
+
+	/** True when the throwable chain is AUTH / obtain apply-lag FAIL_STALE. */
+	public static boolean isApplyLagStaleError(Throwable err) {
+		Throwable cur = err;
+		while (cur != null) {
+			final String msg = cur.getMessage();
+			if (msg != null && msg.contains(FactoryAuthRedirectUtil.ERR_APPLY_LAG_STALE)) {
 				return true;
 			}
 			cur = cur.getCause();

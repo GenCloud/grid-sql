@@ -17,6 +17,7 @@ package org.genfork.grid.jdbc;
 
 import org.genfork.grid.sql.SqlScriptStatements;
 import org.genfork.grid.sql.client.DefaultRowMetadata;
+import org.genfork.grid.sql.client.WriterFenceRetryUtil;
 import org.genfork.grid.sql.client.Row;
 import org.genfork.grid.sql.client.RowMetadata;
 import org.genfork.grid.sql.client.sync.SyncResult;
@@ -32,6 +33,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * JDBC {@link Statement} over Sync* / transport CompletionStage.
@@ -120,7 +122,7 @@ public class GridStatement implements Statement {
 			throw new SQLException("SQL must not be blank", SQLSTATE_GENERAL);
 		}
 		if (parts.size() == 1) {
-			return run(connection.syncStatement(parts.getFirst(), queryTimeoutDuration()), parts.getFirst());
+			return run(parts.getFirst());
 		}
 		return runBatchParts(parts);
 	}
@@ -131,7 +133,14 @@ public class GridStatement implements Statement {
 		activeSyncResult = null;
 		pendingSyncResults.clear();
 		lastSqlOrNull = parts.getFirst();
-		final List<SyncResult> results = connection.syncBatch(parts, queryTimeoutDuration());
+		final List<SyncResult> results;
+		try {
+			results = WriterFenceRetryUtil.callWithOneRediscover(
+					connection::rediscoverWriterAfterFence,
+					() -> syncBatchUnchecked(parts));
+		} catch (RuntimeException e) {
+			throw JdbcSync.toSqlException(e);
+		}
 		if (results.isEmpty()) {
 			updateCount = 0L;
 			return new ExecOutcome(null, 0L);
@@ -142,6 +151,14 @@ public class GridStatement implements Statement {
 		return applySyncResult(results.getFirst(), parts.getFirst());
 	}
 
+	private List<SyncResult> syncBatchUnchecked(List<String> parts) {
+		try {
+			return connection.syncBatch(parts, queryTimeoutDuration());
+		} catch (SQLException e) {
+			throw new IllegalStateException(e.getMessage(), e);
+		}
+	}
+
 	Duration queryTimeoutDuration() {
 		if (queryTimeoutSeconds <= 0) {
 			return null;
@@ -149,17 +166,20 @@ public class GridStatement implements Statement {
 		return Duration.ofSeconds(queryTimeoutSeconds);
 	}
 
-	ExecOutcome run(SyncStatement statement, String sqlOrNull) throws SQLException {
+	/**
+	 * Execute one statement with one fence rediscover retry ({@link WriterFenceRetryUtil}).
+	 */
+	ExecOutcome run(String sqlOrNull) throws SQLException {
 		clearCurrent();
 		cancelHook = null;
 		activeSyncResult = null;
 		pendingSyncResults.clear();
 		lastSqlOrNull = sqlOrNull;
-		applyFetchWindow(statement);
-		statement.cancelSlot(hook -> cancelHook = hook);
 		final List<SyncResult> results;
 		try {
-			results = statement.execute();
+			results = WriterFenceRetryUtil.callWithOneRediscover(
+					connection::rediscoverWriterAfterFence,
+					() -> executeOnce(sqlOrNull));
 		} catch (RuntimeException e) {
 			throw JdbcSync.toSqlException(e);
 		} finally {
@@ -173,6 +193,55 @@ public class GridStatement implements Statement {
 			pendingSyncResults.add(results.get(i));
 		}
 		return applySyncResult(results.getFirst(), sqlOrNull);
+	}
+
+	/**
+	 * Prepared / bound path: {@code statementFactory} rebuilds binds after fence rediscover.
+	 */
+	ExecOutcome runBound(Supplier<SyncStatement> statementFactory, String sqlOrNull) throws SQLException {
+		Objects.requireNonNull(statementFactory, "statementFactory");
+		clearCurrent();
+		cancelHook = null;
+		activeSyncResult = null;
+		pendingSyncResults.clear();
+		lastSqlOrNull = sqlOrNull;
+		final List<SyncResult> results;
+		try {
+			results = WriterFenceRetryUtil.callWithOneRediscover(
+					connection::rediscoverWriterAfterFence,
+					() -> executeFromFactory(statementFactory));
+		} catch (RuntimeException e) {
+			throw JdbcSync.toSqlException(e);
+		} finally {
+			cancelHook = null;
+		}
+		if (results.isEmpty()) {
+			updateCount = 0L;
+			return new ExecOutcome(null, 0L);
+		}
+		for (int i = 1; i < results.size(); i++) {
+			pendingSyncResults.add(results.get(i));
+		}
+		return applySyncResult(results.getFirst(), sqlOrNull);
+	}
+
+	private List<SyncResult> executeOnce(String sqlOrNull) {
+		try {
+			final SyncStatement statement =
+					connection.syncStatement(sqlOrNull, queryTimeoutDuration());
+			applyFetchWindow(statement);
+			statement.cancelSlot(hook -> cancelHook = hook);
+			return statement.execute();
+		} catch (SQLException e) {
+			throw new IllegalStateException(e.getMessage(), e);
+		}
+	}
+
+	private List<SyncResult> executeFromFactory(Supplier<SyncStatement> statementFactory) {
+		final SyncStatement statement = statementFactory.get();
+		applyFetchWindow(statement);
+		statement.cancelSlot(hook -> cancelHook = hook);
+		return statement.execute();
 	}
 
 	/**

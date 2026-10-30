@@ -167,10 +167,14 @@ public final class SqlMergeMatchOps {
 			throw new IllegalArgumentException(GridCompositeIndex.MSG_EQ_REQUIRES_INDEX + ": " + columns);
 		}
 		final List<byte[]> candidates = store.lookupEqKeys(columns, want);
-		if (candidates.isEmpty()) {
-			return null;
+		// Prefer a live map row — sealed .sbpt may still list a deleted / superseded PK.
+		for (int i = 0, n = candidates.size(); i < n; i++) {
+			final byte[] candidate = candidates.get(i);
+			if (candidate != null && store.getCommittedBytes(candidate) != null) {
+				return candidate;
+			}
 		}
-		return candidates.getFirst();
+		return null;
 	}
 
 	static void validateUniqueTarget(TableSchema schema, List<String> columns) {

@@ -6,8 +6,8 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 
 | Field | Value |
 |-------|--------|
-| stamp | `2026-10-14-jepsen-edge-matrix-multidc-unclean-revive` |
-| date | 2026-10-14T19:12:22+03:00 |
+| stamp | `2026-10-30-jepsen-edge-matrix-multidc-unclean-revive` |
+| date | 2026-10-30T01:18:11+03:00 |
 | git | unknown |
 | host | DESKTOP-4IC511D |
 | mode | ASYNC_SHIP (async) |
@@ -15,7 +15,7 @@ Honest PASS/FAIL after Docker+lein (never invent `:valid? true`).
 | register | PASS |
 | append | PASS |
 | chaos | unclean-revive+dc-link+kill-voter+kill-dc-a+revive-dc-a |
-| notes | FULL lein chaos=unclean-revive+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=register,append; register=PASS; append=PASS; join=n/a |
+| notes | FULL lein chaos=unclean-revive+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=45 workloads=register,append; register=PASS; append=PASS; join=n/a |
 
 Multi-host SQL URL:
 
@@ -74,3 +74,10 @@ See [README.md](README.md). Coverage: [../COVERAGE.md](../COVERAGE.md). Parent 1
 | `2026-10-14-jepsen-edge-matrix-multidc-async-swarm` | ASYNC_SHIP+SWARM | n/a | PASS | PASS | FULL lein chaos=swarm-bounce+dc-link+kill-voter time-limit=60 workloads=append; register=n/a; append=PASS; join=n/a |
 | `2026-10-14-jepsen-edge-matrix-multidc-async-join` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=join; register=n/a; append=PASS; join=PASS |
 | `2026-10-14-jepsen-edge-matrix-multidc-unclean-revive` | ASYNC_SHIP | PASS | PASS | PASS | FULL lein chaos=unclean-revive+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=60 workloads=register,append; register=PASS; append=PASS; join=n/a |
+| `2026-10-30-jepsen-edge-matrix-multidc-async-chaos` | ASYNC_SHIP | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=45 |
+| `2026-10-30-jepsen-edge-matrix-multidc-sync-chaos` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=45 |
+| `2026-10-30-jepsen-edge-matrix-multidc-async-nochao` | ASYNC_SHIP | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=45 |
+| `2026-10-30-jepsen-edge-matrix-multidc-sync-nochao` | SYNC_VOTERS_ACROSS_DC | PASS (:valid? true) | PASS (:valid? true) | PASS | register=PASS (:valid? true); append=PASS (:valid? true); time-limit=45 |
+| `2026-10-30-jepsen-edge-matrix-multidc-async-swarm` | ASYNC_SHIP+SWARM | n/a | PASS | PASS | FULL lein chaos=swarm-bounce+dc-link+kill-voter time-limit=45 workloads=append; register=n/a; append=PASS; join=n/a |
+| `2026-10-30-jepsen-edge-matrix-multidc-async-join` | ASYNC_SHIP | n/a | PASS | PASS | FULL lein chaos=join-shards+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=45 workloads=join; register=n/a; append=PASS; join=PASS |
+| `2026-10-30-jepsen-edge-matrix-multidc-unclean-revive` | ASYNC_SHIP | PASS | PASS | PASS | FULL lein chaos=unclean-revive+dc-link+kill-voter+kill-dc-a+revive-dc-a time-limit=45 workloads=register,append; register=PASS; append=PASS; join=n/a |

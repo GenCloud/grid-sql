@@ -37,7 +37,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.utils.ArrayUtil;
@@ -154,14 +153,6 @@ public final class SealedGridMapReader implements AutoCloseable {
 		this.nodeReaders = null;
 		this.nodePaths = nodePaths;
 		this.lazyNodes = new AtomicReferenceArray<>(SealedGridMapWriter.NODE_COUNT);
-	}
-
-	/**
-	 * Opens one physical VERSION=2 node GMAP file.
-	 */
-	@VisibleForTesting
-	public static SealedGridMapReader open(Path path) throws IOException {
-		return openPhysicalFile(path);
 	}
 
 	private static SealedGridMapReader openPhysicalFile(Path path) throws IOException {

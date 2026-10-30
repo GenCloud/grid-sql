@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.replication;
 
-import com.google.common.annotations.VisibleForTesting;
-
 /**
  * Shared write / read admission for SQL paths (no duplicated checks).
  * <p>
@@ -76,8 +74,7 @@ public final class ReplicaAccessGate {
 		}
 	}
 
-	@VisibleForTesting
-	public static void ensureShardWritableState(boolean draining) {
+	static void ensureShardWritableState(boolean draining) {
 		if (draining) {
 			throw new OrchidNotSyncedException(WRITE_SHARD_DRAINING);
 		}
@@ -121,21 +118,18 @@ public final class ReplicaAccessGate {
 				replication.regionAllowsReplicaReads());
 	}
 
-	@VisibleForTesting
-	public static void ensureWriteState(boolean writeAdmission, boolean writerEligible) {
+	static void ensureWriteState(boolean writeAdmission, boolean writerEligible) {
 		ensureWriteState(writeAdmission, writerEligible, false, true);
 	}
 
-	@VisibleForTesting
-	public static void ensureWriteState(
+	static void ensureWriteState(
 			boolean writeAdmission,
 			boolean writerEligible,
 			boolean applyLagStale) {
 		ensureWriteState(writeAdmission, writerEligible, applyLagStale, true);
 	}
 
-	@VisibleForTesting
-	public static void ensureWriteState(
+	static void ensureWriteState(
 			boolean writeAdmission,
 			boolean writerEligible,
 			boolean applyLagStale,
@@ -159,16 +153,14 @@ public final class ReplicaAccessGate {
 	 * @param applyLagStale  apply lag exceeded {@code ha.max-stale-lag}
 	 * @param writerEligible phase-ranked proposer with write-admission
 	 */
-	@VisibleForTesting
-	public static void ensureReadState(
+	static void ensureReadState(
 			boolean writeAdmission,
 			boolean applyLagStale,
 			boolean writerEligible) {
 		ensureLinearizableReadState(writeAdmission, applyLagStale, writerEligible);
 	}
 
-	@VisibleForTesting
-	public static void ensureLinearizableReadState(
+	static void ensureLinearizableReadState(
 			boolean writeAdmission,
 			boolean applyLagStale,
 			boolean writerEligible) {
@@ -179,8 +171,7 @@ public final class ReplicaAccessGate {
 		}
 	}
 
-	@VisibleForTesting
-	public static void ensureReplicaReadState(
+	static void ensureReplicaReadState(
 			boolean writeAdmission,
 			boolean applyLagStale,
 			boolean replicaReadsEnabled,

@@ -18,7 +18,6 @@ package org.genfork.grid.query.adaptive;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.google.common.annotations.VisibleForTesting;
 
 /**
  * Mid-flight chunk split / coalesce helpers for AQE v2 (logic-VT map stages).
@@ -68,7 +67,6 @@ public final class AdaptiveChunkScheduler {
 	 * Re-split a flat remaining key list into {@code parts} size-balanced contiguous chunks.
 	 * Prefer this over hash buckets when residual work is proportional to key count.
 	 */
-	@VisibleForTesting
 	public static List<List<byte[]>> resplit(List<byte[]> remaining, int parts) {
 		return resplitSizeBalanced(remaining, parts);
 	}
@@ -76,7 +74,6 @@ public final class AdaptiveChunkScheduler {
 	/**
 	 * Contiguous size-balanced partition (ceil division); empty input → empty list.
 	 */
-	@VisibleForTesting
 	public static List<List<byte[]>> resplitSizeBalanced(List<byte[]> remaining, int parts) {
 		if (remaining == null || remaining.isEmpty()) {
 			return List.of();
@@ -95,7 +92,6 @@ public final class AdaptiveChunkScheduler {
 	/**
 	 * Coalesce unfinished chunks down toward {@code targetParts} by concatenation order.
 	 */
-	@VisibleForTesting
 	public static List<List<byte[]>> coalesce(List<List<byte[]>> unfinished, int targetParts) {
 		if (unfinished == null || unfinished.isEmpty()) {
 			return List.of();

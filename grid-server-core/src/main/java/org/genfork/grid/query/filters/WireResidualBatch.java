@@ -18,7 +18,6 @@ package org.genfork.grid.query.filters;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.TableSchema;
@@ -93,7 +92,6 @@ public final class WireResidualBatch {
 		return filter.matches(blob, schema);
 	}
 
-	@VisibleForTesting
 	public static boolean isSimpleEq(FilterCondition filter) {
 		if (!(filter instanceof LogicalOperatorCondition loc)) {
 			return false;

@@ -93,7 +93,6 @@ public class AdaptiveParallelScanBenchmark extends AbstractLatencyBenchmark {
 	@TearDown(Level.Trial)
 	public void tearDownBenchmark() {
 		if (admission != null) {
-			admission.resetInflightForTests();
 		}
 	}
 

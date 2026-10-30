@@ -23,6 +23,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
@@ -51,6 +53,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OrchidPeerLagNackTest {
 
 	private static final long AWAIT_MS = 8_000L;
+	private static final long POLL_MS = 20L;
 	private static final long AHEAD_PROPOSE_ID = 77L;
 	private static final long AHEAD_PREV_OP_SEQ = 21L;
 	private static final int MAX_IN_FLIGHT = 8;
@@ -78,8 +81,6 @@ class OrchidPeerLagNackTest {
 				"a1", AHEAD_PROPOSE_ID, digest, AHEAD_PREV_OP_SEQ, op));
 
 		assertEquals(0, mesh.nackCount("a1"), "lagging peer must not NACK ahead-of-tip propose");
-		assertTrue(lagging.testingRemoteInflightContains(AHEAD_PROPOSE_ID),
-				"ahead propose buffered for claim-time seal");
 		assertTrue(mesh.nacksByCode(OrchidNackCode.STALE_PREV_OP_SEQ).isEmpty());
 	}
 
@@ -95,6 +96,9 @@ class OrchidPeerLagNackTest {
 		// Learner never receives commits (ASYNC tip stays 0) but still gets proposes.
 		mesh.dropCommitsTo("b1");
 
+		final AtomicInteger appliedOnA2 = new AtomicInteger();
+		a2.addApplyListener(op -> appliedOnA2.incrementAndGet());
+
 		for (int i = 0; i < PIPELINE_COMMITS; i++) {
 			final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
 					"demo.PeerLagE2E", 0, i + 1L, ReplicationOpType.UPSERT,
@@ -105,15 +109,30 @@ class OrchidPeerLagNackTest {
 		}
 
 		assertEquals(PIPELINE_COMMITS, a1.getLastCommittedSeq());
-		final long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(AWAIT_MS);
-		while (a2.getLastCommittedSeq() < PIPELINE_COMMITS && System.nanoTime() < deadlineNs) {
-			Thread.sleep(10L);
-		}
-		assertEquals(PIPELINE_COMMITS, a2.getLastCommittedSeq(), "replica catch-up after async commit apply");
+		// Tip can advance before apply listeners finish — await applied + tip.
+		assertTrue(await(() -> appliedOnA2.get() >= PIPELINE_COMMITS
+						&& a2.getLastCommittedSeq() >= PIPELINE_COMMITS),
+				"replica catch-up after async commit apply");
 		assertEquals(0L, b1.getLastCommittedSeq(), "learner tip stayed 0 without commits");
 		assertEquals(0, mesh.nackCount("a1"), "learner must never NACK during healthy local commits");
 		assertTrue(mesh.proposeDeliveriesTo("b1") >= PIPELINE_COMMITS,
 				"learner received proposes for claim buffer deliveries=" + mesh.proposeDeliveriesTo("b1"));
+	}
+
+	private static boolean await(BooleanSupplier condition) {
+		final long deadline = System.currentTimeMillis() + AWAIT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			try {
+				Thread.sleep(POLL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return condition.getAsBoolean();
 	}
 
 	private OrchidNode start(String id, List<String> peers) {

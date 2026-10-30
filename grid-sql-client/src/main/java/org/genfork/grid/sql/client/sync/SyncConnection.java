@@ -96,10 +96,6 @@ public final class SyncConnection implements AutoCloseable {
 		return remoteConnection;
 	}
 
-	public Connection reactive() {
-		return remote;
-	}
-
 	/** Underlying remote transport (JDBC / Sync edge — avoids SPI/JDBC {@code Connection} name clash). */
 	public RemoteConnection remote() {
 		return remote;

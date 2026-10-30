@@ -100,9 +100,9 @@ class RbacSqlIT {
 		engine.execute(admin, "CREATE USER bob PASSWORD 'b'");
 		engine.execute(admin, "GRANT SELECT ON TABLE snap_t TO bob");
 
-		final byte[] snapshot = engine.privilegeSnapshotBytes();
+		final byte[] snapshot = engine.privileges().toSnapshotBytes();
 		final SqlEngine restored = new SqlEngine(new TableCatalog(), null, SHARDS);
-		restored.loadPrivilegeSnapshotBytes(snapshot);
+		restored.privileges().loadSnapshotBytes(snapshot);
 		assertTrue(restored.privileges().authenticate("bob", "b"));
 		assertDoesNotThrow(() -> restored.privileges().ensure("bob", "public", "snap_t",
 				SqlPrivilege.SELECT));

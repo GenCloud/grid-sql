@@ -20,6 +20,7 @@ import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.AbstractIndexOperation;
 import org.genfork.grid.mem.index.GridCompositeIndex;
+import org.genfork.grid.mem.index.IndexColumnResolveUtil;
 import org.genfork.grid.mem.index.IndexPointerRef;
 import org.genfork.grid.mem.index.IndexType;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
@@ -75,7 +76,8 @@ class SealedFallbackBitmapIT {
 				.build();
 		final GridCompositeIndex composite = new GridCompositeIndex(schema);
 
-		composite.resolveSingleColumnIndex(PROPERTY).insert(key("open"), ptr("ram-1"));
+		IndexColumnResolveUtil.resolveSingleColumnIndex(composite.singleColumnIndexMap(), PROPERTY)
+				.insert(key("open"), ptr("ram-1"));
 
 		final GridBitmapIndex sealed = new GridBitmapIndex(PROPERTY + "-BITMAP", BITMAP_CAPACITY);
 		sealed.insert(key("open"), ptr("cold-1"));
@@ -83,7 +85,7 @@ class SealedFallbackBitmapIT {
 		composite.installSealedBitmapFallback(PROPERTY, SHARD, sealed);
 
 		final AbstractIndexOperation<byte[], SingleTreeKey> index =
-				composite.resolveSingleColumnIndex(PROPERTY);
+				IndexColumnResolveUtil.resolveSingleColumnIndex(composite.singleColumnIndexMap(), PROPERTY);
 		assertInstanceOf(SealedFallbackBitmap.class, index);
 		assertTrue(SealedFallbackBitmap.isBitmapIndex(index));
 		assertKeys(index.searchEq(key("open")), "ram-1", "cold-1");

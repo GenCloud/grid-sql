@@ -39,7 +39,7 @@ class WireSpanTest {
 	@Test
 	void spanEqualsOwnedCopy() {
 		final byte[] blob = new byte[]{0, 1, 2, 3, 4, 5, 6, 7};
-		final WireSpan span = WireSpan.wrapForTest(blob, 2, 4);
+		final WireSpan span = WireSpan.of(blob, 2, 4);
 		final WireFieldBytes owned = new WireFieldBytes(Arrays.copyOfRange(blob, 2, 6));
 		assertEquals(span.hashCode(), owned.hashCode());
 		assertEquals(span, owned);

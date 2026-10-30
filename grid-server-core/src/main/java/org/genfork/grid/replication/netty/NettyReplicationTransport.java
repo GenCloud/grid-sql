@@ -55,7 +55,6 @@ import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil;
 import org.genfork.grid.sql.tx.LockWaitCancelledException;
 import org.genfork.grid.sql.tx.LockWaitTimeoutException;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
-import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -388,16 +387,6 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		sealedShardPackHandler.accept(msg);
 	}
 
-	public void sendApplyAck(String peerId, ReplicationOp op) {
-		final ApplyAck ack = new ApplyAck(localNodeId, op.domainType(), op.shard(), op.opSeq());
-		if (Boolean.TRUE.equals(applyAckCoalesceActive.get())) {
-			coalesceApplyAcks.get().add(ack);
-			return;
-		}
-		write(peerId, new WireMessage(ReplicationMessageType.APPLY_ACK.opcode(), ReplicationRpcCodec.encodeApplyAck(ack)));
-		ReplicationMetrics.recordApplyAckSent();
-	}
-
 	public void sendApplyNack(String peerId, ReplicationOp op, String reason) {
 		final ApplyNack nack = new ApplyNack(localNodeId, op.domainType(), op.shard(), op.opSeq(), reason);
 		write(peerId, new WireMessage(ReplicationMessageType.APPLY_NACK.opcode(), ReplicationRpcCodec.encodeApplyNack(nack)));
@@ -452,10 +441,6 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		}
 	}
 
-	public void pullOps(String peerId, String domainType, int shard, long fromSeqInclusive) {
-		write(peerId, new WireMessage(ReplicationMessageType.OPLOG_PULL.opcode(), ReplicationRpcCodec.encodeOplogPull(localNodeId, domainType, shard, fromSeqInclusive)));
-	}
-
 	public void sendRepairRequest(String peerId, String domainType, int shard, Map<Long, VersionLocus> view) {
 		write(peerId, new WireMessage(ReplicationMessageType.REPAIR_REQUEST.opcode(), ReplicationRpcCodec.encodeRepairRequest(localNodeId, domainType, shard, view)));
 	}
@@ -466,10 +451,6 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	public void broadcastRegionClaimReq(long claimId, long proposedEpoch, byte claimantRoleWire) {
 		final byte[] body = ReplicationRpcCodec.encodeRegionClaimReq(claimId, proposedEpoch, localNodeId, localDc, claimantRoleWire);
 		broadcastEncoded(new WireMessage(ReplicationMessageType.REGION_CLAIM_REQ.opcode(), body));
-	}
-
-	public void sendRegionClaimAck(String peerId, long claimId, byte voterRoleWire) {
-		write(peerId, new WireMessage(ReplicationMessageType.REGION_CLAIM_ACK.opcode(), ReplicationRpcCodec.encodeRegionClaimAck(claimId, localNodeId, voterRoleWire)));
 	}
 
 	public void setRegionClaimHandlers(Function<ReplicationRpcCodec.RegionClaimReq, byte[]> onReq, Consumer<ReplicationRpcCodec.RegionClaimAck> onAck) {
@@ -496,16 +477,6 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	public void setForUpdateLockManager(SqlRecordLockManager locks) {
 		forUpdateLockManager.set(locks);
 		forUpdatePeerHeldKeys.bindLockManager(locks);
-	}
-
-	@VisibleForTesting
-	public SqlRecordLockManager forUpdateLockManager() {
-		return forUpdateLockManager.get();
-	}
-
-	@VisibleForTesting
-	public ForUpdatePeerHeldKeys forUpdatePeerHeldKeys() {
-		return forUpdatePeerHeldKeys;
 	}
 
 	/**
@@ -685,25 +656,6 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		}
 	}
 
-	@VisibleForTesting
-	void handleForUpdateLockRelease(byte[] body) {
-		handleForUpdateLockRelease(body, null);
-	}
-
-	/**
-	 * Send {@link ReplicationMessageType#FOR_UPDATE_PREPARE_REQ} with key-set and wait for ACK (logic VT only).
-	 *
-	 * @return {@code true} when peer prepared
-	 */
-	/**
-	 * Send prepare with empty key-set (always NACK under fail-closed {@code containsAll}).
-	 * Prefer {@link #sendForUpdatePrepareReq(String, long, List)}.
-	 */
-	@VisibleForTesting
-	public boolean sendForUpdatePrepareReq(String peerId, long txId) {
-		return sendForUpdatePrepareReq(peerId, txId, List.of());
-	}
-
 	public boolean sendForUpdatePrepareReq(
 			String peerId,
 			long txId,
@@ -776,7 +728,6 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		}
 	}
 
-	@VisibleForTesting
 	CompletableFuture<Boolean> offerForUpdateLockWaiter(String peerId, long txId) {
 		final CompletableFuture<Boolean> waiter = new CompletableFuture<>();
 		final CompletableFuture<Boolean> prev = forUpdateLockWaiters.putIfAbsent(
@@ -820,10 +771,6 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		if (ch != null && ch.isActive()) {
 			ch.flush();
 		}
-	}
-
-	private void broadcast(WireMessage message) {
-		broadcastEncoded(message);
 	}
 
 	/**

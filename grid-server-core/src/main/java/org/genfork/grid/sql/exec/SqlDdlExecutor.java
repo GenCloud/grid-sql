@@ -28,6 +28,7 @@ import org.genfork.grid.catalog.SequenceDef;
 import org.genfork.grid.catalog.FkDef;
 import org.genfork.grid.catalog.FkAction;
 import org.genfork.grid.catalog.IndexDef;
+import org.genfork.grid.catalog.SyntheticPkIndexUtil;
 import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableCatalog.ViewDef;
@@ -328,6 +329,19 @@ public final class SqlDdlExecutor {
 				return SqlResult.ddl(SqlStatementTag.DROP_INDEX);
 			}
 			throw new IllegalStateException("Index not found: " + s.indexName());
+		}
+		final IndexDef existing = store.schema().findIndex(s.indexName());
+		final IndexDef named = existing != null ? existing : store.index().findNamedIndex(s.indexName());
+		// Live DROP of synthetic PK is fail-closed. OpLog/peer apply may still carry a pre-guard
+		// DROP — skip as noop so restart does not APPLY_NACK the catalog stream.
+		if (SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndex(store.schema(), named)
+				|| SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndexName(
+						store.schema().catalogKey(), s.indexName())) {
+			if (applyingReplicatedDdl.get()) {
+				return SqlResult.ddl(SqlStatementTag.DROP_INDEX);
+			}
+			throw new IllegalStateException(SyntheticPkIndexUtil.cannotDropMessage(
+					named != null ? named.name() : s.indexName()));
 		}
 		final long epoch = catalog.nextEpoch();
 		store.dropIndex(s.indexName(), epoch);

@@ -83,7 +83,7 @@ class SealedFallbackPrefixLikeIT {
 		try (SealedBPTreeReader reader = service.open(DOMAIN, SHARD, sealedName)) {
 			final SealedFallbackCompositeIndex fallback = new SealedFallbackCompositeIndex(ram);
 			fallback.addReader(reader);
-			assertEquals(1, fallback.sealedReaderCount());
+			assertTrue(fallback.hasSealedReaders());
 			fallback.clear();
 
 			final CompositeTreeKey prefix = new CompositeTreeKey(new byte[][]{bytes("open")}, 0);
@@ -156,7 +156,7 @@ class SealedFallbackPrefixLikeIT {
 		try (SealedBPTreeReader reader = SealedBPTreeReader.open(file)) {
 			final SealedFallbackIndex fallback = new SealedFallbackIndex(ram);
 			fallback.addReader(reader);
-			assertEquals(1, fallback.sealedReaderCount());
+			assertTrue(fallback.hasSealedReaders());
 			fallback.clear();
 
 			final IndexOperationResult likeFoo = fallback.searchLike(

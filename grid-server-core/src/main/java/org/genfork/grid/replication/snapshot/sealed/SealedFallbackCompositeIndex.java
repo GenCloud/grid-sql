@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -32,6 +31,7 @@ import org.genfork.grid.mem.index.btree.IndexOperationResult;
  * stay on {@link SealedBPTreeReader#searchEq}/{@link SealedBPTreeReader#searchRange}.
  * {@link #searchAll} / {@link #searchNotEq} merge RAM with sealed leaf walk (no FULL
  * {@code .sbpt} hydrate into RAM BPTree).
+ * Closed readers are pruned and skipped (no ISE on the query path).
  *
  * @author: GenCloud
  * @date: 2026/05
@@ -89,11 +89,8 @@ public final class SealedFallbackCompositeIndex
 		}
 		final byte[] lowEncoded = SealedCompositeIndexKey.encode(low.getKey());
 		final byte[] highEncoded = SealedCompositeIndexKey.encode(high.getKey());
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchRange(lowEncoded, highEncoded));
-		}
-		return mergeRamAndSealed(ram, sealed, NO_LIMIT);
+		return mergeRamAndSealed(ram, collectFromOpenReaders(
+				reader -> reader.searchRange(lowEncoded, highEncoded)), NO_LIMIT);
 	}
 
 	private List<byte[]> sealedPartialRange(CompositeTreeKey low, CompositeTreeKey high) {
@@ -101,22 +98,14 @@ public final class SealedFallbackCompositeIndex
 		final byte[] lowBound = low.getKey().length > 0 ? low.getKey()[0] : null;
 		final byte[] highBound = high.getKey().length > 0 ? high.getKey()[0] : null;
 		final int col = column < 0 ? LEFT_PREFIX_COLUMN : column;
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(
-					indexKey -> SealedCompositeIndexKey.matchesComponentRange(
-							indexKey, col, lowBound, highBound)));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchMatching(
+				indexKey -> SealedCompositeIndexKey.matchesComponentRange(
+						indexKey, col, lowBound, highBound)));
 	}
 
 	private List<byte[]> sealedEq(CompositeTreeKey key) {
 		final byte[] encoded = SealedCompositeIndexKey.encode(key.getKey());
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchEq(encoded));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchEq(encoded));
 	}
 
 	/**
@@ -125,21 +114,14 @@ public final class SealedFallbackCompositeIndex
 	private List<byte[]> sealedPrefix(CompositeTreeKey key) {
 		final byte[][] parts = key.getKey();
 		final int column = key.partialColumnIndex();
-		final List<byte[]> sealed = new ArrayList<>();
 		if (parts.length > 1 || column <= LEFT_PREFIX_COLUMN) {
 			final byte[][] prefix = parts;
-			for (SealedBPTreeReader reader : readers()) {
-				sealed.addAll(reader.searchMatching(
-						indexKey -> SealedCompositeIndexKey.matchesLeftPrefix(indexKey, prefix)));
-			}
-			return sealed;
+			return collectFromOpenReaders(reader -> reader.searchMatching(
+					indexKey -> SealedCompositeIndexKey.matchesLeftPrefix(indexKey, prefix)));
 		}
 		final byte[] expected = parts[0];
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(
-					indexKey -> SealedCompositeIndexKey.matchesComponent(indexKey, column, expected)));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchMatching(
+				indexKey -> SealedCompositeIndexKey.matchesComponent(indexKey, column, expected)));
 	}
 
 	private static boolean fullKey(CompositeTreeKey key) {
@@ -159,11 +141,8 @@ public final class SealedFallbackCompositeIndex
 
 	private List<byte[]> sealedNotEq(CompositeTreeKey key) {
 		final byte[] encoded = SealedCompositeIndexKey.encode(key.getKey());
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(indexKey -> !Arrays.equals(indexKey, encoded)));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchMatching(
+				indexKey -> !Arrays.equals(indexKey, encoded)));
 	}
 
 	/**
@@ -184,25 +163,18 @@ public final class SealedFallbackCompositeIndex
 
 	private List<byte[]> sealedLike(CompositeTreeKey pattern) {
 		final byte[][] parts = pattern.getKey();
-		final List<byte[]> sealed = new ArrayList<>();
 		if (parts == null || parts.length == 0) {
-			return sealed;
+			return List.of();
 		}
 		final int column = pattern.partialColumnIndex();
 		if (column > LEFT_PREFIX_COLUMN && parts.length == 1) {
 			final byte[] patternWire = parts[0];
-			for (SealedBPTreeReader reader : readers()) {
-				sealed.addAll(reader.searchMatching(
-						indexKey -> SealedCompositeIndexKey.matchesComponentLike(
-								indexKey, column, patternWire)));
-			}
-			return sealed;
+			return collectFromOpenReaders(reader -> reader.searchMatching(
+					indexKey -> SealedCompositeIndexKey.matchesComponentLike(
+							indexKey, column, patternWire)));
 		}
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(
-					indexKey -> SealedCompositeIndexKey.matchesLikePatterns(indexKey, parts)));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchMatching(
+				indexKey -> SealedCompositeIndexKey.matchesLikePatterns(indexKey, parts)));
 	}
 
 	@Override
@@ -237,11 +209,8 @@ public final class SealedFallbackCompositeIndex
 			return ram == null ? IndexOperationResult.EMPTY : ram;
 		}
 		final byte[] encodedBound = SealedCompositeIndexKey.encode(key.getKey());
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(indexKey -> openCmp(indexKey, encodedBound, bound)));
-		}
-		return mergeRamAndSealed(ram, sealed, NO_LIMIT);
+		return mergeRamAndSealed(ram, collectFromOpenReaders(
+				reader -> reader.searchMatching(indexKey -> openCmp(indexKey, encodedBound, bound))), NO_LIMIT);
 	}
 
 	@Override
@@ -254,10 +223,6 @@ public final class SealedFallbackCompositeIndex
 	}
 
 	private List<byte[]> sealedAll() {
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchAll());
-		}
-		return sealed;
+		return collectFromOpenReaders(SealedBPTreeReader::searchAll);
 	}
 }

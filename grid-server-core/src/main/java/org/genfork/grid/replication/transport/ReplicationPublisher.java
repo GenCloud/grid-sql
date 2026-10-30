@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.transport;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -102,13 +101,6 @@ public class ReplicationPublisher {
 		if (unitBoundary || buffer.size() >= segmentSize) {
 			shipExecutor.execute(() -> flushBuffer(buffer));
 		}
-	}
-
-	/** Test helper: ops held waiting for TX unit completion. */
-	@VisibleForTesting
-	public int bufferedOpCount(String domainType, int shard) {
-		final TxUnitShardBuffer buffer = buffers.get(domainType + "#" + shard);
-		return buffer == null ? 0 : buffer.size();
 	}
 
 	/** Park until flow permit; never silently drop a committed op. VT-safe (no Thread.sleep). */

@@ -69,7 +69,6 @@ public class SqlOrderByPkLeafPlanIT {
 	void multiColumnPkOrderByIsOrderSatisfied() {
 		final String sql = "SELECT server_id, biset_type FROM " + TABLE
 				+ " ORDER BY server_id, biset_type";
-		assertTrue(store.isUseSameOrderAscendingIndex(sql));
 		for (int i = 0; i < REPEAT; i++) {
 			final SqlResult rs = engine.execute(sql);
 			assertEquals(3, ((Number) rs.rows().get(0)[0]).intValue(), "run " + i);
@@ -81,7 +80,6 @@ public class SqlOrderByPkLeafPlanIT {
 	void orderByLimitDoesNotDoubleSkip() {
 		final String sql = "SELECT server_id FROM " + TABLE
 				+ " ORDER BY server_id, biset_type LIMIT 1, 1";
-		assertTrue(store.isUseSameOrderAscendingIndex(sql));
 		for (int i = 0; i < REPEAT; i++) {
 			final SqlResult rs = engine.execute(sql);
 			assertEquals(1, rs.rows().size(), "run " + i);

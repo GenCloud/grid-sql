@@ -81,7 +81,8 @@ public class RegionEpochCoordinatorTest {
 				dataDir, false, true, RegionRole.ACTIVE, 1L, "a1", "dc-a", 1L, 2)) {
 			assertFalse(coord.regionAllowsWrites(), "Active cold start unconfirmed");
 			assertFalse(coord.isEpochConfirmed());
-			coord.confirmEpoch();
+			assertFalse(coord.noteRemotePeerRegion(1L, RegionRole.HOLD.wireCode()));
+			assertTrue(coord.isEpochConfirmed());
 			assertTrue(coord.regionAllowsWrites());
 			assertTrue(coord.observePeerEpoch(2L, "b1"));
 			assertEquals(RegionRole.HOLD, coord.regionRole());
@@ -111,7 +112,8 @@ public class RegionEpochCoordinatorTest {
 		}
 		try (RegionRoleCoordinator dual = new RegionRoleCoordinator(
 				dataDir.resolve("a3"), false, true, RegionRole.ACTIVE, 2L, "a1", "dc-a", 5_000L, 2)) {
-			dual.confirmEpoch();
+			assertFalse(dual.noteRemotePeerRegion(1L, RegionRole.HOLD.wireCode()));
+			assertTrue(dual.isEpochConfirmed());
 			assertTrue(dual.noteRemotePeerRegion(2L, RegionRole.ACTIVE.wireCode()));
 			assertEquals(RegionRole.HOLD, dual.regionRole());
 		}

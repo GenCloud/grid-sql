@@ -22,12 +22,12 @@ import java.util.ArrayList;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstMode;
@@ -38,13 +38,17 @@ import org.genfork.grid.replication.codec.OpLogSegment;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.SealedShardPackMsg;
+import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.snapshot.IndexCheckpointService;
 import org.genfork.grid.replication.snapshot.SnapshotService;
 import org.genfork.grid.replication.snapshot.sealed.SealedDumpSafetyUtil;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapReader;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
+import org.genfork.grid.replication.util.LazyShardHydrateFlightUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+import org.genfork.grid.replication.util.OrchidTipCatchUpUtil;
+import org.genfork.grid.replication.util.SealedHydrateTxFenceUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,15 +94,25 @@ public final class SealedHydrateService {
 	private final SealedGridMapService sealedGridMapService;
 	private final HomologousRepair homologousRepair;
 	private final Map<String, ReplicaApplier> appliers;
-	private final Set<String> hydratedShards = ConcurrentHashMap.newKeySet();
+	final Set<String> hydratedShards = ConcurrentHashMap.newKeySet();
+	/**
+	 * Single-flight LAZY shard hydrate: losers must wait for the winner to finish binding
+	 * sealed {@code .sbpt} — early {@code return} after lost {@code add} left UNIQUE indexes
+	 * empty and {@code ON CONFLICT} inserted duplicate IDENTITY rows.
+	 */
+	final ConcurrentHashMap<String, CompletableFuture<Void>> lazyShardHydrateFlights =
+			new ConcurrentHashMap<>();
 	private final AtomicInteger hydrateShardsDone = new AtomicInteger();
 	private final AtomicInteger hydrateShardsTotal = new AtomicInteger();
 	/**
 	 * False until {@link #markCatalogBootstrapComplete()} — HELLO sealed packs are queued so they
-	 * cannot race nested FULL hydrate during {@code _catalog} DDL replay.
+	 * cannot race nested FULL hydrate during {@code _catalog} DDL replay. Repl-only (no SQL)
+	 * opens the gate from {@link ReplicationCoordinator#start()} when catalog was never bound.
 	 */
 	private final AtomicBoolean catalogBootstrapComplete = new AtomicBoolean(false);
 	private final ConcurrentLinkedQueue<SealedShardPackMsg> pendingSealedPacks = new ConcurrentLinkedQueue<>();
+	/** Single-flight drain of {@link #pendingSealedPacks} + tip catch-up (no monitor wait). */
+	private final AtomicBoolean sealedPackDrainRunning = new AtomicBoolean(false);
 
 	public SealedHydrateService(
 			boolean enabled,
@@ -172,9 +186,17 @@ public final class SealedHydrateService {
 		}
 		hydrateShardsDone.set(hydratedShards.size());
 		hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
+		catchUpTipFromJournal();
 		return sealedWm;
 	}
 
+	/**
+	 * LAZY first-touch hydrate for one shard.
+	 * <p>
+	 * Single-flight: losers park on the winner's future until sealed {@code .sbpt} bind completes.
+	 * <strong>Logic VT / SQL mailbox only</strong> — never call from Netty EL
+	 * ({@code reactive-vt.mdc}). Does not use {@code CompletableFuture.*Async} / commonPool.
+	 */
 	public void ensureShardHydrated(String domainType, int shard) {
 		if (!enabled || domainType == null) {
 			return;
@@ -183,18 +205,50 @@ public final class SealedHydrateService {
 			return;
 		}
 		final String key = OpLogStreamKeyUtil.format(domainType, shard);
-		// contains before add: hot getProcessor path hits already-hydrated shards under load.
+		// Hot path: shard already fully hydrated (sealed indexes bound).
 		if (hydratedShards.contains(key)) {
 			return;
 		}
-		if (!hydratedShards.add(key)) {
+		final CompletableFuture<Void> inFlight = lazyShardHydrateFlights.get(key);
+		if (inFlight != null) {
+			LazyShardHydrateFlightUtil.await(inFlight, key);
 			return;
 		}
+		final CompletableFuture<Void> created = new CompletableFuture<>();
+		final CompletableFuture<Void> winner = lazyShardHydrateFlights.putIfAbsent(key, created);
+		if (winner != null) {
+			LazyShardHydrateFlightUtil.await(winner, key);
+			return;
+		}
+		try {
+			if (runLazyShardHydrate(domainType, shard, key)) {
+				hydratedShards.add(key);
+				hydrateShardsDone.set(hydratedShards.size());
+				hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
+			}
+			created.complete(null);
+		} catch (RuntimeException | Error ex) {
+			lazyShardHydrateFlights.remove(key, created);
+			created.completeExceptionally(ex);
+			throw ex;
+		} finally {
+			lazyShardHydrateFlights.remove(key, created);
+		}
+	}
+
+	/**
+	 * Open sealed mmap, bind {@code .sbpt}, replay OpLog tail.
+	 *
+	 * @return {@code true} when hydrate ran (applier present); {@code false} when skipped — do not
+	 *         mark {@link #hydratedShards} (no false done)
+	 */
+	private boolean runLazyShardHydrate(String domainType, int shard, String key) {
 		final ReplicaApplier applier = appliers.get(domainType);
 		if (applier == null) {
-			hydratedShards.remove(key);
-			return;
+			return false;
 		}
+		// Drop live open TX before watermark reset (hydrateOpLogFrom fences again).
+		SealedHydrateTxFenceUtil.beforeSealedOrLazyOpLogHydrate(applier, domainType, shard);
 		long wm = sealedGridMapService.openShardLazy(domainType, shard);
 		if (wm > 0) {
 			nodeState.resetApplied(domainType, shard);
@@ -210,11 +264,14 @@ public final class SealedHydrateService {
 		if (n > 0 || wm > 0) {
 			log.debug("Lazy-hydrated domain={} shard={} ops={} sealedWm={}", domainType, shard, n, wm);
 		}
+		maybeHealIncompleteSealedIndexes(domainType, shard);
 		final byte[] ckpt = indexCheckpointService.loadIndexBytes(domainType, -1L);
 		if (ckpt != null && ckpt.length > 0) {
 			log.debug("Index checkpoint present domain={} shard={} bytes={} (miss path uses sealed mmap)",
 					domainType, shard, ckpt.length);
 		}
+		catchUpTipFromJournal();
+		return true;
 	}
 
 	public boolean isLazyHydrate() {
@@ -311,8 +368,7 @@ public final class SealedHydrateService {
 	/**
 	 * Effective periodic sealed-dump interval after clamp.
 	 */
-	@VisibleForTesting
-	public long sealedDumpIntervalMs() {
+	long sealedDumpIntervalMs() {
 		return sealedDumpIntervalMs;
 	}
 
@@ -336,6 +392,9 @@ public final class SealedHydrateService {
 		}
 		final String prefix = domainType + "#";
 		hydratedShards.removeIf(key -> key != null && key.startsWith(prefix));
+		LazyShardHydrateFlightUtil.removeMatching(
+				lazyShardHydrateFlights,
+				key -> key.startsWith(prefix));
 	}
 
 	private void rejectHugeOpLogDeltaWithoutSbpt(String domainType, int shard, long sealedWm) {
@@ -347,15 +406,46 @@ public final class SealedHydrateService {
 		if (delta <= MAX_OPLOG_DELTA_WITHOUT_SBPT) {
 			return;
 		}
-		if (sealedGridMapService.hasAnySealedIndex(domainType, shard)) {
+		// Empty shells count as absent (hasUsableSealedIndex).
+		if (sealedGridMapService.hasUsableSealedIndex(domainType, shard)) {
 			return;
 		}
 		hydratedShards.remove(OpLogStreamKeyUtil.format(domainType, shard));
 		throw new IllegalStateException(
 				"OpLog delta " + delta + " after wm=" + sealedWm
 						+ " exceeds " + MAX_OPLOG_DELTA_WITHOUT_SBPT
-						+ " without sealed .sbpt for " + domainType + "#" + shard
+						+ " without sealed .sbpt for " + OpLogStreamKeyUtil.format(domainType, shard)
 						+ " — force seal dump before reopen");
+	}
+
+	/**
+	 * Incomplete {@code .sbpt} (missing / empty shell) with sealed∪OpLog∪RAM rows:
+	 * heal via existing {@link #dumpDomainSealed} under OPEN_TX/ENVELOPE gates — not RAM-on-open.
+	 */
+	private void maybeHealIncompleteSealedIndexes(String domainType, int shard) {
+		if (sealedGridMapService == null || domainType == null) {
+			return;
+		}
+		if (!sealedGridMapService.shardAcceleratorsIncomplete(domainType, shard)) {
+			return;
+		}
+		final SealedGridMapReader reader = sealedGridMapService.reader(domainType, shard);
+		final boolean sealedHasRows = reader != null && reader.entryCount() > 0;
+		final long last = opLog == null ? 0L : opLog.lastSeq(domainType, shard);
+		final long wm = Math.max(nodeState == null ? 0L : nodeState.appliedWatermark(domainType, shard), 0L);
+		final boolean oplogTail = last > wm;
+		if (!sealedHasRows && !oplogTail) {
+			// Mode B with nothing to merge — index rewrite cannot invent rows.
+			return;
+		}
+		try {
+			final int sealedRows = dumpDomainSealed(domainType, true);
+			log.debug("Healed incomplete .sbpt via sealed dump domain={} shard={} rows={}",
+					domainType, shard, sealedRows);
+		} catch (RuntimeException ex) {
+			log.warn("Incomplete .sbpt heal dump failed domain={} shard={}: {}",
+					domainType, shard, ex.toString());
+		}
 	}
 
 	public int installFromOpLog(String domainType, int shard, long fromSeqInclusive, int limit) {
@@ -365,11 +455,97 @@ public final class SealedHydrateService {
 	public void maybeDumpSealedAllDomains() {
 		if (ReplicationMetrics.oplogFsyncSampleCount() >= SEALED_DUMP_FSYNC_MIN_SAMPLES
 				&& ReplicationMetrics.oplogFsyncP50Ns() >= SEALED_DUMP_FSYNC_PRESSURE_P50_NS) {
-			log.debug("Sealed dump skipped under OpLog fsync pressure p50Ns={}",
+			log.debug("Sealed dump full pass skipped under OpLog fsync pressure p50Ns={} — at-risk only",
 					ReplicationMetrics.oplogFsyncP50Ns());
+			// Do not starve shards with no .sbpt and huge OpLog: fence would fail-close on first touch.
+			dumpAtRiskDomainsOnly(false);
 			return;
 		}
 		dumpAllDomainsInternal(false);
+		dumpAtRiskDomainsOnly(false);
+	}
+
+	/**
+	 * Seal domains that have at least one shard with OpLog delta above
+	 * {@link #MAX_OPLOG_DELTA_WITHOUT_SBPT} and no usable {@code .sbpt} (empty shell = absent),
+	 * or incomplete declared accelerators with sealed/OpLog rows. OPEN_TX/ENVELOPE gates still apply.
+	 */
+	void dumpAtRiskDomainsOnly(boolean shutdownForce) {
+		if (sealedGridMapService == null || appliers == null || appliers.isEmpty() || opLog == null) {
+			return;
+		}
+		final boolean truncateOpLog = !shutdownForce;
+		for (String domain : appliers.keySet()) {
+			if (!domainHasAtRiskShardWithoutSbpt(domain) && !domainHasIncompleteAccelerators(domain)) {
+				continue;
+			}
+			try {
+				dumpDomainSealed(domain, truncateOpLog);
+			} catch (RuntimeException ex) {
+				log.warn("At-risk sealed dump failed domain={}: {}", domain, ex.toString());
+			}
+		}
+	}
+
+	private boolean domainHasAtRiskShardWithoutSbpt(String domainType) {
+		if (domainType == null || opLog == null || sealedGridMapService == null) {
+			return false;
+		}
+		boolean atRisk = false;
+		for (String streamKey : opLog.streamKeys()) {
+			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
+				continue;
+			}
+			final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+			if (parsed == null) {
+				continue;
+			}
+			final int shard = parsed.shard();
+			final long last = opLog.lastSeq(domainType, shard);
+			final long wm = Math.max(
+					nodeState == null ? 0L : nodeState.appliedWatermark(domainType, shard),
+					0L);
+			final boolean hasUsableSbpt = sealedGridMapService.hasUsableSealedIndex(domainType, shard);
+			if (!SealedDumpSafetyUtil.isAtRiskWithoutSbpt(
+					last, wm, hasUsableSbpt, MAX_OPLOG_DELTA_WITHOUT_SBPT)) {
+				continue;
+			}
+			atRisk = true;
+			SealedDumpSafetyUtil.warnAtRiskWithoutSbpt(
+					domainType, shard, Math.max(0L, last - wm), MAX_OPLOG_DELTA_WITHOUT_SBPT);
+		}
+		return atRisk;
+	}
+
+	private boolean domainHasIncompleteAccelerators(String domainType) {
+		if (domainType == null || sealedGridMapService == null) {
+			return false;
+		}
+		for (String streamKey : opLog.streamKeys()) {
+			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
+				continue;
+			}
+			final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+			if (parsed == null) {
+				continue;
+			}
+			final int shard = parsed.shard();
+			if (!sealedGridMapService.shardAcceleratorsIncomplete(domainType, shard)) {
+				continue;
+			}
+			final SealedGridMapReader reader = sealedGridMapService.reader(domainType, shard);
+			if (reader != null && reader.entryCount() > 0) {
+				return true;
+			}
+			final long last = opLog.lastSeq(domainType, shard);
+			final long wm = Math.max(
+					nodeState == null ? 0L : nodeState.appliedWatermark(domainType, shard),
+					0L);
+			if (last > wm) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -484,13 +660,21 @@ public final class SealedHydrateService {
 		if (msg == null || sealedGridMapService == null || msg.packed() == null || msg.packed().length == 0) {
 			return;
 		}
+		pendingSealedPacks.offer(msg);
 		if (!catalogBootstrapComplete.get()) {
-			pendingSealedPacks.offer(msg);
 			log.debug("Deferred sealed shard pack until catalog bootstrap from={} domain={} shard={}",
 					msg.fromNodeId(), msg.domainType(), msg.shard());
 			return;
 		}
-		applySealedShardPackLocal(msg);
+		drainPendingSealedPacksWithTipCatchUp();
+	}
+
+	/**
+	 * SQL-only: re-gate HELLO sealed packs until catalog recover finishes
+	 * (bind may run after a repl-only {@link #markCatalogBootstrapComplete()} on start).
+	 */
+	public void beginCatalogBootstrap() {
+		catalogBootstrapComplete.set(false);
 	}
 
 	/**
@@ -499,17 +683,61 @@ public final class SealedHydrateService {
 	 */
 	public void markCatalogBootstrapComplete() {
 		catalogBootstrapComplete.set(true);
-		SealedShardPackMsg pending;
-		while ((pending = pendingSealedPacks.poll()) != null) {
-			applySealedShardPackLocal(pending);
+		drainPendingSealedPacksWithTipCatchUp();
+	}
+
+	/**
+	 * Drain queued sealed packs then journal / peer-tip catch-up (retired OpLog gap).
+	 * Single-flight via CAS — no monitor wait on Netty / VT; no recursive re-entry.
+	 */
+	private void drainPendingSealedPacksWithTipCatchUp() {
+		while (catalogBootstrapComplete.get()) {
+			if (!sealedPackDrainRunning.compareAndSet(false, true)) {
+				return;
+			}
+			int applied = 0;
+			try {
+				SealedShardPackMsg pending;
+				while ((pending = pendingSealedPacks.poll()) != null) {
+					if (applySealedShardPackLocal(pending)) {
+						applied++;
+					}
+				}
+				catchUpTipFromJournal();
+				if (applied >= OrchidTipCatchUpUtil.MIN_SEALED_PACKS_FOR_PEER_TIP) {
+					final OrchidNode orchid = nodeState.getOrchidNode();
+					if (orchid != null) {
+						OrchidTipCatchUpUtil.catchUpToPeerTipAfterSealedBaselineRound(
+								orchid,
+								opLog,
+								orchid.maxSeenPeerCommittedSeq(),
+								applied);
+					}
+				}
+			} finally {
+				sealedPackDrainRunning.set(false);
+			}
+			if (pendingSealedPacks.isEmpty() || !catalogBootstrapComplete.get()) {
+				return;
+			}
 		}
+	}
+
+	private void catchUpTipFromJournal() {
+		final OrchidNode orchid = nodeState.getOrchidNode();
+		if (orchid == null || opLog == null) {
+			return;
+		}
+		OrchidTipCatchUpUtil.catchUpFromJournal(orchid, opLog);
 	}
 
 	/**
 	 * Unpack one shard and reopen + OpLog-tail hydrate that shard only.
 	 * Must not call {@link #hydrateDomainFull} per pack (stampede × shardCount).
+	 *
+	 * @return {@code true} when unpack + open completed without I/O failure
 	 */
-	private void applySealedShardPackLocal(SealedShardPackMsg msg) {
+	private boolean applySealedShardPackLocal(SealedShardPackMsg msg) {
 		final String domainType = msg.domainType();
 		final int shard = msg.shard();
 		try {
@@ -517,12 +745,14 @@ public final class SealedHydrateService {
 			sealedGridMapService.unpackShardArtifacts(domainType, shard, msg.packed());
 			log.debug("Unpacked sealed shard pack from={} domain={} shard={} bytes={}",
 					msg.fromNodeId(), domainType, shard, msg.packed().length);
-			long wm = sealedGridMapService.openShardLazy(domainType, shard);
-			if (wm > 0) {
+			final ReplicaApplier applier = appliers.get(domainType);
+			// Drop live open TX before watermark reset (hydrateOpLogFrom fences again).
+			SealedHydrateTxFenceUtil.beforeSealedOrLazyOpLogHydrate(applier, domainType, shard);
+			final long wm = sealedGridMapService.openShardLazy(domainType, shard);
+			if (wm > 0L) {
 				nodeState.resetApplied(domainType, shard);
 				nodeState.advanceApplied(domainType, shard, wm);
 			}
-			final ReplicaApplier applier = appliers.get(domainType);
 			if (applier != null) {
 				snapshotService.hydrateOpLogFrom(domainType, shard, wm, applier, homologousRepair);
 			}
@@ -530,9 +760,11 @@ public final class SealedHydrateService {
 			hydratedShards.add(key);
 			hydrateShardsDone.set(hydratedShards.size());
 			hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
+			return true;
 		} catch (IOException failure) {
 			log.warn("Failed to unpack sealed shard pack from={} domain={} shard={}: {}",
 					msg.fromNodeId(), domainType, shard, failure.toString());
+			return false;
 		}
 	}
 

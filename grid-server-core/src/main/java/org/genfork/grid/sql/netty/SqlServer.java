@@ -17,9 +17,6 @@ package org.genfork.grid.sql.netty;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
-
-import com.google.common.annotations.VisibleForTesting;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
@@ -64,11 +61,6 @@ public final class SqlServer implements AutoCloseable {
 	private final int maxTxContexts;
 	private final long idleTimeoutMs;
 	private final ReplicationCoordinator replication;
-	/**
-	 * Test hook: when non-null, AUTH/ERROR {@code ServerMeta.applyLagStale} uses this value
-	 * (lightweight multi-replica IT without full HA lag).
-	 */
-	private final AtomicReference<Boolean> applyLagStaleOverride = new AtomicReference<>();
 	private final SqlChannelRegistry channelRegistry = new SqlChannelRegistry();
 	private final Runnable promotionListener = channelRegistry::pushPromoteNotify;
 	private final AtomicBoolean started = new AtomicBoolean();
@@ -144,41 +136,6 @@ public final class SqlServer implements AutoCloseable {
 		return idleTimeoutMs;
 	}
 
-	/**
-	 * Force {@code applyLagStale} on AUTH_OK / ERROR meta for this listen (IT / chaos).
-	 * Pass {@code null} to clear the override.
-	 */
-	@VisibleForTesting
-	public void overrideApplyLagStale(Boolean applyLagStale) {
-		applyLagStaleOverride.set(applyLagStale);
-	}
-
-	/**
-	 * Child {@link ChannelOption#SO_KEEPALIVE} after bind (tests).
-	 */
-	@VisibleForTesting
-	Boolean childSoKeepAlive() {
-		final ServerBootstrap bootstrap = lastBootstrap;
-		if (bootstrap == null) {
-			return null;
-		}
-		final Object value = bootstrap.config().childOptions().get(ChannelOption.SO_KEEPALIVE);
-		return value instanceof Boolean keepAlive ? keepAlive : null;
-	}
-
-	/**
-	 * Child {@link ChannelOption#TCP_NODELAY} after bind (tests).
-	 */
-	@VisibleForTesting
-	Boolean childTcpNoDelay() {
-		final ServerBootstrap bootstrap = lastBootstrap;
-		if (bootstrap == null) {
-			return null;
-		}
-		final Object value = bootstrap.config().childOptions().get(ChannelOption.TCP_NODELAY);
-		return value instanceof Boolean tcpNoDelay ? tcpNoDelay : null;
-	}
-
 	public void start() {
 		if (!started.compareAndSet(false, true)) {
 			return;
@@ -201,8 +158,7 @@ public final class SqlServer implements AutoCloseable {
 							maxTxContexts,
 							idleTimeoutMs,
 							replication,
-							channelRegistry,
-							applyLagStaleOverride
+							channelRegistry
 					));
 			lastBootstrap = b;
 			channel = b.bind(host, port).sync().channel();

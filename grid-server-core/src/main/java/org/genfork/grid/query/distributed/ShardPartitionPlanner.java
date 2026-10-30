@@ -21,7 +21,6 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.store.TableStore;
 
@@ -81,7 +80,6 @@ public final class ShardPartitionPlanner {
 	/**
 	 * Split keys into non-empty domain-shard buckets (order = ascending shard id).
 	 */
-	@VisibleForTesting
 	public static List<List<byte[]>> partitionByDomainShard(List<byte[]> keys, TableStore store) {
 		Objects.requireNonNull(store, "store");
 		final List<byte[]> input = keys == null ? List.of() : keys;

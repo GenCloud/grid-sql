@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Factory-global {@link ServerMeta} publish policy (READ_REPLICA stale skip).
+ * Factory-global {@link ServerMeta} publish policy (skip {@code applyLagStale} for all roles).
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -38,9 +38,9 @@ public class FactoryServerMetaPublishTest {
 	}
 
 	@Test
-	void primaryPublishesStaleAndFresh() {
+	void primaryPublishesFreshOnly() {
 		assertTrue(FactoryServerMetaPublish.shouldPublish(SessionRole.PRIMARY, freshMeta()));
-		assertTrue(FactoryServerMetaPublish.shouldPublish(SessionRole.PRIMARY, staleMeta()));
+		assertFalse(FactoryServerMetaPublish.shouldPublish(SessionRole.PRIMARY, staleMeta()));
 	}
 
 	@Test
@@ -50,8 +50,9 @@ public class FactoryServerMetaPublishTest {
 	}
 
 	@Test
-	void nullRoleTreatsAsWriterPublish() {
-		assertTrue(FactoryServerMetaPublish.shouldPublish(null, staleMeta()));
+	void nullRoleAlsoSkipsStale() {
+		assertTrue(FactoryServerMetaPublish.shouldPublish(null, freshMeta()));
+		assertFalse(FactoryServerMetaPublish.shouldPublish(null, staleMeta()));
 	}
 
 	private static ServerMeta freshMeta() {

@@ -26,6 +26,8 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Fail-closed gates for sealed dump so mid-TX / mid-envelope merge cannot
  * stamp dirty staging into sealed and truncate OpLog past an open unit.
+ * <p>
+ * Also rate-limits WARN for at-risk shards (huge OpLog delta without {@code .sbpt}).
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -36,9 +38,41 @@ public final class SealedDumpSafetyUtil {
 
     /** Min interval between INFO lines for deferred sealed dumps. */
     private static final long MIN_INFO_INTERVAL_NS = 5_000_000_000L;
+    /** Min interval between WARN lines for at-risk (no {@code .sbpt}, huge delta) shards. */
+    private static final long MIN_AT_RISK_WARN_INTERVAL_NS = 30_000_000_000L;
     private static final AtomicLong LAST_INFO_NS = new AtomicLong();
+    private static final AtomicLong LAST_AT_RISK_WARN_NS = new AtomicLong();
 
 	private SealedDumpSafetyUtil() {
+	}
+
+	/**
+	 * {@code true} when OpLog tip is far ahead of sealed watermark and no index seal exists.
+	 */
+	public static boolean isAtRiskWithoutSbpt(long lastSeq, long sealedWm, boolean hasAnySbpt, long maxDelta) {
+		if (hasAnySbpt || maxDelta <= 0L) {
+			return false;
+		}
+		final long delta = Math.max(0L, lastSeq - Math.max(0L, sealedWm));
+		return delta > maxDelta;
+	}
+
+	/**
+	 * Rate-limited WARN + metric for a shard that must seal before LAZY reopen.
+	 */
+	public static void warnAtRiskWithoutSbpt(String domainType, int shard, long delta, long maxDelta) {
+		ReplicationMetrics.recordSealedDumpAtRisk();
+		final long now = System.nanoTime();
+		final long prev = LAST_AT_RISK_WARN_NS.get();
+		if (now - prev < MIN_AT_RISK_WARN_INTERVAL_NS) {
+			return;
+		}
+		if (!LAST_AT_RISK_WARN_NS.compareAndSet(prev, now)) {
+			return;
+		}
+		log.warn(
+				"Sealed dump at-risk domain={} shard={} opLogDelta={} maxWithoutSbpt={} — dump when OPEN_TX/ENVELOPE clear",
+				domainType, shard, delta, maxDelta);
 	}
 
 	/**

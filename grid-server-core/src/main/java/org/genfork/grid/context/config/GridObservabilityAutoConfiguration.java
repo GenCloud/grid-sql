@@ -47,8 +47,11 @@ public class GridObservabilityAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean(GridMetricsBinder.class)
-	public MeterBinder gridMetricsBinder(ObjectProvider<ReplicationCoordinator> coordinatorProvider) {
-		return new GridMetricsBinder(coordinatorProvider);
+	public MeterBinder gridMetricsBinder(
+			ObjectProvider<ReplicationCoordinator> coordinatorProvider,
+			ObjectProvider<SqlServerRuntime> sqlRuntimeProvider
+	) {
+		return new GridMetricsBinder(coordinatorProvider, sqlRuntimeProvider);
 	}
 
 	@Bean(name = READINESS_BEAN_NAME)

@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.apply;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.codec.duplex.DuplexBlob;
 import org.genfork.grid.codec.duplex.DuplexCodecSupport;
 import org.genfork.grid.diag.VisibilityDiag;
@@ -29,6 +28,7 @@ import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.transport.ApplyAckSender;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -216,7 +216,7 @@ public class ReplicaApplier {
 		if (journalRemote) {
 			journalRemoteConsensusOp(op);
 		}
-		final String lockKey = op.domainType() + "#" + op.shard();
+		final String lockKey = OpLogStreamKeyUtil.format(op.domainType(), op.shard());
 		synchronized (shardLocks.computeIfAbsent(lockKey, _ -> new Object())) {
 			final long applied = nodeState.appliedWatermark(op.domainType(), op.shard());
 			if (op.opSeq() <= applied) {
@@ -496,7 +496,7 @@ public class ReplicaApplier {
 	 * Discard open TX staging for one {@code domain#shard} stream only.
 	 */
 	public void discardOpenTxStaging(String domainType, int shard) {
-		final String lockKey = domainType + "#" + shard;
+		final String lockKey = OpLogStreamKeyUtil.format(domainType, shard);
 		synchronized (shardLocks.computeIfAbsent(lockKey, _ -> new Object())) {
 			final Long txId = openTxIdByStream.remove(lockKey);
 			txStaging.remove(lockKey);
@@ -569,10 +569,9 @@ public class ReplicaApplier {
 		return staging != null;
 	}
 
-	/** Test helper: whether a stream currently buffers an open TX. */
-	@VisibleForTesting
+	/** Whether a stream currently buffers an open TX. */
 	public boolean hasOpenTx(String domainType, int shard) {
-		final String lockKey = domainType + "#" + shard;
+		final String lockKey = OpLogStreamKeyUtil.format(domainType, shard);
 		if (openTxIdByStream.containsKey(lockKey)) {
 			return true;
 		}
@@ -580,24 +579,11 @@ public class ReplicaApplier {
 		return staging != null;
 	}
 
-	/** Test helper: staged mutation count for open TX (local + envelope). */
-	@VisibleForTesting
-	public int openTxStagedCount(String domainType, int shard) {
-		final String lockKey = domainType + "#" + shard;
-		final Long txId = openTxIdByStream.get(lockKey);
-		final TxEnvelopeCoordinator gate = envelopeCoordinator;
-		if (txId != null && gate != null && gate.isMultiApplyOpen(txId)) {
-			return gate.applyStagedCount(txId);
-		}
-		final List<StagedMutation> staging = txStaging.get(lockKey);
-		return staging == null ? 0 : staging.size();
-	}
-
 	public CompletableFuture<Void> awaitApplied(String domainType, int shard, long seq) {
 		if (nodeState.appliedWatermark(domainType, shard) >= seq) {
 			return CompletableFuture.completedFuture(null);
 		}
-		final String key = domainType + "#" + shard + "@" + seq;
+		final String key = OpLogStreamKeyUtil.format(domainType, shard) + "@" + seq;
 		return waiters.computeIfAbsent(key, _ -> new CompletableFuture<>());
 	}
 
@@ -789,7 +775,7 @@ public class ReplicaApplier {
 	private void completeWaiters(String domainType, int shard, long appliedSeq) {
 		waiters.entrySet().removeIf(e -> {
 			final String key = e.getKey();
-			if (!key.startsWith(domainType + "#" + shard + "@")) {
+			if (!key.startsWith(OpLogStreamKeyUtil.format(domainType, shard) + "@")) {
 				return false;
 			}
 			final long needed = Long.parseLong(key.substring(key.lastIndexOf('@') + 1));

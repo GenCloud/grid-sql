@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.query.filters.FilterCondition;
 import org.genfork.grid.query.filters.impl.AndCondition;
@@ -69,7 +68,6 @@ public final class CompositeIndexPrefixRewriteUtil {
 		return buildAndTree(parts, 0, parts.size() - 1);
 	}
 
-	@VisibleForTesting
 	static void appendResidualEq(
 			List<FilterCondition> out,
 			Map<String, LogicalOperatorCondition> fieldToFilterMap,
@@ -93,7 +91,6 @@ public final class CompositeIndexPrefixRewriteUtil {
 		}
 	}
 
-	@VisibleForTesting
 	static FilterCondition buildAndTree(List<FilterCondition> filters, int start, int end) {
 		if (start > end) {
 			return null;

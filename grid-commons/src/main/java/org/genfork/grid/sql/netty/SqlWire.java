@@ -229,18 +229,6 @@ public final class SqlWire {
 	}
 
 	/**
-	 * BATCH_EXEC payload into {@code out} (same LE layout as {@link #batchExec}).
-	 */
-	public static void batchExecInto(ByteBuf out, int sessionId, List<String> sqls) {
-		final List<String> list = sqls == null ? List.of() : sqls;
-		final List<BatchStatement> statements = new ArrayList<>(list.size());
-		for (String sql : list) {
-			statements.add(new BatchStatement(sql, new Object[0]));
-		}
-		batchExecStatementsInto(out, sessionId, statements);
-	}
-
-	/**
 	 * BATCH_EXEC with binds into {@code out}.
 	 */
 	public static void batchExecStatementsInto(ByteBuf out, int sessionId, List<BatchStatement> statements) {

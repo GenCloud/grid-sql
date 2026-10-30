@@ -21,7 +21,6 @@ import java.util.Map;
 import org.genfork.grid.catalog.TableAnalyzeStats;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.metrics.DistributedQueryMetrics;
-import org.genfork.grid.query.adaptive.HeavyQueryAdmission;
 import org.genfork.grid.query.adaptive.QueryHeaviness;
 import org.genfork.grid.query.adaptive.QueryHeavinessEstimator;
 import org.genfork.grid.query.filters.impl.AlwaysTrueCondition;
@@ -30,7 +29,6 @@ import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.store.TableStore;
 import org.genfork.grid.threading.ThreadService;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -65,7 +63,6 @@ public class AqeOnExecuteIT {
 	@BeforeEach
 	void setUp() {
 		ThreadService.ensureRunning();
-		HeavyQueryAdmission.global().resetInflightForTests();
 		engine = new SqlEngine(new TableCatalog(dataDir), null, SHARDS);
 		engine.execute("CREATE TABLE " + TABLE + " (id INT PRIMARY KEY, val INT)");
 		for (int i = 0; i < SEED_ROWS; i++) {
@@ -73,11 +70,6 @@ public class AqeOnExecuteIT {
 		}
 		store = engine.catalog().getStore(TABLE);
 		store.setAnalyzeStats(new TableAnalyzeStats(ANALYZE_ROWS, Map.of()));
-	}
-
-	@AfterEach
-	void tearDown() {
-		HeavyQueryAdmission.global().resetInflightForTests();
 	}
 
 	@Test

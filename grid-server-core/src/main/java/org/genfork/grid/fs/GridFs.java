@@ -29,10 +29,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
-
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.utils.UnsafeMemory;
 
@@ -51,8 +48,6 @@ import org.genfork.grid.utils.UnsafeMemory;
 public final class GridFs {
 	private static final String TMP_SUFFIX = ".tmp";
 	private static final String MSG_ATOMIC_REQUIRED = "Atomic move is required for durable file ";
-	private static final String MSG_INJECTED_ACCESS_DENIED = "injected AccessDenied for GridFs moveAtomic test";
-
 	/** Bounded attempts including the first try (Windows REPLACE sharing violation). */
 	private static final int WINDOWS_REPLACE_MAX_ATTEMPTS = 16;
 
@@ -64,8 +59,6 @@ public final class GridFs {
 
 	/** Backoff growth factor per failed attempt. */
 	private static final int WINDOWS_REPLACE_BACKOFF_FACTOR = 2;
-
-	private static final AtomicInteger INJECT_ACCESS_DENIED_REMAINING = new AtomicInteger(0);
 
 	private GridFs() {
 	}
@@ -160,22 +153,14 @@ public final class GridFs {
 	 * non-atomic fallback). Sync FS boundary only — not Netty EL.
 	 */
 	public static void moveAtomic(Path source, Path target) throws IOException {
-		moveAtomic(source, target, Platform.isWindows());
-	}
-
-	/**
-	 * Same as {@link #moveAtomic(Path, Path)} with an explicit Windows-retry switch (tests).
-	 */
-	@VisibleForTesting
-	public static void moveAtomic(Path source, Path target, boolean windowsRetry) throws IOException {
 		Objects.requireNonNull(source, "source");
 		Objects.requireNonNull(target, "target");
+		final boolean windowsRetry = Platform.isWindows();
 		final int maxAttempts = windowsRetry ? WINDOWS_REPLACE_MAX_ATTEMPTS : 1;
 		long backoffNanos = WINDOWS_REPLACE_BACKOFF_NANOS;
 		IOException lastFailure = null;
 		for (int attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
-				maybeInjectAccessDenied();
 				Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
 				return;
 			} catch (AtomicMoveNotSupportedException unsupported) {
@@ -194,36 +179,6 @@ public final class GridFs {
 			throw lastFailure;
 		}
 		throw new IOException(MSG_ATOMIC_REQUIRED + target);
-	}
-
-	private static void maybeInjectAccessDenied() throws AccessDeniedException {
-		final int remaining = INJECT_ACCESS_DENIED_REMAINING.get();
-		if (remaining <= 0) {
-			return;
-		}
-		if (INJECT_ACCESS_DENIED_REMAINING.getAndDecrement() > 0) {
-			throw new AccessDeniedException(MSG_INJECTED_ACCESS_DENIED);
-		}
-	}
-
-	@VisibleForTesting
-	public static int windowsReplaceMaxAttempts() {
-		return WINDOWS_REPLACE_MAX_ATTEMPTS;
-	}
-
-	@VisibleForTesting
-	public static void injectAccessDeniedRemaining(int remaining) {
-		INJECT_ACCESS_DENIED_REMAINING.set(remaining);
-	}
-
-	@VisibleForTesting
-	public static int injectAccessDeniedRemaining() {
-		return INJECT_ACCESS_DENIED_REMAINING.get();
-	}
-
-	@VisibleForTesting
-	public static void clearInjectAccessDenied() {
-		INJECT_ACCESS_DENIED_REMAINING.set(0);
 	}
 
 	/**

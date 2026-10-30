@@ -15,13 +15,13 @@
  */
 package org.genfork.grid.mem.index;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.apache.commons.lang3.ArrayUtils;
 import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.exceptions.ConditionValidationException;
 import org.genfork.grid.exceptions.NonUniqueValueException;
+import org.genfork.grid.exceptions.PrimaryKeyPortalUnavailableException;
 import org.genfork.grid.mem.ByteArrayContainer;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
 import org.genfork.grid.mem.index.btree.*;
@@ -65,6 +65,7 @@ public class GridCompositeIndex {
 	 * Initial capacity hint for opt-in {@link GridBitmapIndex}.
 	 */
 	private static final int BITMAP_INDEX_INITIAL_CAPACITY = 1 << 20;
+
 	private final Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index = new ConcurrentHashMap<>();
 	private final Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes = new ConcurrentHashMap<>();
 	private final Map<String, Map<ByteArrayContainer, RevertSingle>> revertProperty2Index = new ConcurrentHashMap<>();
@@ -145,6 +146,11 @@ public class GridCompositeIndex {
 	 */
 	public List<String> primaryKeyColumns() {
 		return primaryKeyColumns;
+	}
+
+	/** Catalog schema bound to this index instance (SQL-first). */
+	public TableSchema tableSchema() {
+		return schema;
 	}
 
 	private static List<String> pkColumnNamesOf(TableSchema schema) {
@@ -248,7 +254,17 @@ public class GridCompositeIndex {
 	}
 
 	public boolean hasSingleColumnIndex(String columnName) {
-		return resolveSingleColumnIndex(columnName) != null;
+		return IndexColumnResolveUtil.resolveSingleColumnIndex(property2Index, columnName) != null;
+	}
+
+	/** Live single-column index map (resolve / plan / tests). */
+	public Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> singleColumnIndexMap() {
+		return property2Index;
+	}
+
+	/** Live composite index map (resolve / plan / tests). */
+	public Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexMap() {
+		return compositeIndexes;
 	}
 
 	public boolean hasNamedIndex(String indexName) {
@@ -267,44 +283,6 @@ public class GridCompositeIndex {
 	 * Message when wire EQ columns are not covered by any single/composite index.
 	 */
 	public static final String MSG_EQ_REQUIRES_INDEX = "Indexed EQ requires an index covering the probe columns";
-
-	/**
-	 * Resolve single-column index operation (case-insensitive column name).
-	 */
-	public AbstractIndexOperation<byte[], SingleTreeKey> resolveSingleColumnIndex(String columnName) {
-		if (columnName == null || columnName.isBlank()) {
-			return null;
-		}
-		final AbstractIndexOperation<byte[], SingleTreeKey> exact = property2Index.get(columnName);
-		if (exact != null) {
-			return exact;
-		}
-		for (Entry<String, AbstractIndexOperation<byte[], SingleTreeKey>> entry : property2Index.entrySet()) {
-			if (entry.getKey().equalsIgnoreCase(columnName)) {
-				return entry.getValue();
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Resolve composite index whose columns match {@code columns} order-insensitively by name.
-	 */
-	public AbstractIndexOperation<byte[][], CompositeTreeKey> resolveCompositeIndex(List<String> columns) {
-		if (columns == null || columns.isEmpty()) {
-			return null;
-		}
-		final AbstractIndexOperation<byte[][], CompositeTreeKey> exact = compositeIndexes.get(columns);
-		if (exact != null) {
-			return exact;
-		}
-		for (Entry<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> entry : compositeIndexes.entrySet()) {
-			if (CompositeIndexProbeOps.columnsEqualIgnoreCaseOrdered(entry.getKey(), columns)) {
-				return entry.getValue();
-			}
-		}
-		return null;
-	}
 
 	/**
 	 * Wire EQ probe on indexed columns → row PK byte arrays (no SQL string).
@@ -352,14 +330,16 @@ public class GridCompositeIndex {
 			throw new IllegalArgumentException("columns empty");
 		}
 		if (columns.size() == 1) {
-			final AbstractIndexOperation<byte[], SingleTreeKey> tree = resolveSingleColumnIndex(columns.getFirst());
+			final AbstractIndexOperation<byte[], SingleTreeKey> tree =
+					IndexColumnResolveUtil.resolveSingleColumnIndex(property2Index, columns.getFirst());
 			if (tree == null) {
 				throw new IllegalArgumentException(MSG_EQ_REQUIRES_INDEX + ": " + columns);
 			}
 			final IndexOperationResult found = tree.searchEq(new SingleTreeKey(wireValues[0]));
 			return found == null ? IndexOperationResult.EMPTY : found;
 		}
-		final AbstractIndexOperation<byte[][], CompositeTreeKey> tree = resolveCompositeIndex(columns);
+		final AbstractIndexOperation<byte[][], CompositeTreeKey> tree =
+				IndexColumnResolveUtil.resolveCompositeIndex(compositeIndexes, columns);
 		if (tree == null) {
 			throw new IllegalArgumentException(MSG_EQ_REQUIRES_INDEX + ": " + columns);
 		}
@@ -375,9 +355,9 @@ public class GridCompositeIndex {
 			return false;
 		}
 		if (columns.size() == 1) {
-			return resolveSingleColumnIndex(columns.getFirst()) != null;
+			return IndexColumnResolveUtil.resolveSingleColumnIndex(property2Index, columns.getFirst()) != null;
 		}
-		return resolveCompositeIndex(columns) != null;
+		return IndexColumnResolveUtil.resolveCompositeIndex(compositeIndexes, columns) != null;
 	}
 
 	/**
@@ -396,21 +376,35 @@ public class GridCompositeIndex {
 
 	/**
 	 * Resumable PRIMARY KEY leaf cursor for Portal FETCH pull (AlwaysTrue SELECT *).
+	 * <p>
+	 * Requires a portal-eligible RAM {@link AbstractBPTree} (plain or sealed wrapper with
+	 * no readers yet). Sealed-bound PK ({@link SealedFallbackIndex} with readers) is not
+	 * missing — callers must use AlwaysTrue {@code searchAll} merge instead of portal.
+	 *
+	 * @throws PrimaryKeyPortalUnavailableException when PK exists but is sealed-bound
 	 */
 	public AbstractBPTree.RowKeyCursor<?, ?> openPrimaryKeyRowCursor() {
-		final AbstractBPTree.RowKeyCursor<?, ?> cursor = PkIndexScanUtil.openPrimaryKeyRowCursor(
+		final AbstractIndexOperation<?, ?> tree = PkIndexScanUtil.resolvePrimaryKeyIndex(
 				property2Index, compositeIndexes, primaryKeyColumns);
-		if (cursor == null) {
+		if (tree == null) {
 			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
 		}
-		return cursor;
+		final AbstractBPTree<?, ?> ram = PkIndexScanUtil.portalRamBpTree(tree);
+		if (ram == null) {
+			throw new PrimaryKeyPortalUnavailableException(tableLabel);
+		}
+		return ram.openRowKeyCursor();
 	}
 
 	/**
-	 * True when SELECT is AlwaysTrue (no WHERE) with no ORDER BY — Portal pull-cursor eligible.
+	 * True when PRIMARY KEY resolves to a portal-eligible in-RAM {@link AbstractBPTree}.
+	 * <p>
+	 * {@link SealedFallbackIndex} / {@link SealedFallbackCompositeIndex} with sealed readers
+	 * attached are not portal-eligible (RAM leaf walk would miss cold {@code .sbpt} keys).
 	 */
 	public boolean isRamPrimaryKeyBptree() {
-		return PkIndexScanUtil.hasRamPrimaryKeyBptree(property2Index, compositeIndexes, primaryKeyColumns);
+		return PkIndexScanUtil.hasRamPrimaryKeyBptree(
+				property2Index, compositeIndexes, primaryKeyColumns);
 	}
 
 	public boolean isAlwaysTrueNoOrderSelect(String selectSql) {
@@ -425,19 +419,6 @@ public class GridCompositeIndex {
 			return false;
 		}
 		return optimized.sortOrder() == null || optimized.sortOrder().length == 0;
-	}
-
-	/**
-	 * {@code true} when optimized plan marks ascending PK-leaf order for ORDER BY
-	 * ({@link FilterConditionData#useSameOrderAscendingIndex()}).
-	 */
-	@VisibleForTesting
-	public boolean isUseSameOrderAscendingIndex(String selectSql) {
-		if (selectSql == null || selectSql.isBlank()) {
-			return false;
-		}
-		final QueryData optimized = optimizedPlanCache.computeIfAbsent(selectSql.trim(), this::buildOptimizedQuery);
-		return optimized.filter() != null && optimized.filter().useSameOrderAscendingIndex();
 	}
 
 	/**

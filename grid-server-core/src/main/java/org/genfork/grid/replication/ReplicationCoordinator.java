@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationProps;
 import org.genfork.grid.diag.VisibilityDiag;
@@ -247,12 +246,16 @@ public class ReplicationCoordinator {
 	/**
 	 * Bind SQL catalog DDL apply callback and ensure {@link #CATALOG_DOMAIN} applier/recorder exist.
 	 * Idempotent; call from {@link org.genfork.grid.sql.SqlEngine} construction.
+	 * Re-gates HELLO sealed packs until {@link #markCatalogBootstrapComplete()}.
 	 */
 	public void bindSqlCatalog(ReplicaApplier.CatalogDdlHandler handler) {
 		if (!enabled || handler == null) {
 			return;
 		}
 		this.catalogDdlHandler = handler;
+		if (sealedHydrateService != null) {
+			sealedHydrateService.beginCatalogBootstrap();
+		}
 		if (!appliers.containsKey(CATALOG_DOMAIN)) {
 			registerDomain(CATALOG_DOMAIN, _ -> null, false);
 		}
@@ -468,6 +471,11 @@ public class ReplicationCoordinator {
 			adaptiveDiskFirstController.start();
 		}
 		registerOplogShutdownHook();
+		// Repl-only: no SqlEngine catalog gate — allow HELLO sealed packs immediately.
+		// SQL path re-gates in bindSqlCatalog and opens after recoverPersistedCatalog.
+		if (catalogDdlHandler == null) {
+			markCatalogBootstrapComplete();
+		}
 		log.info("ReplicationCoordinator started durable={} peerTransport={} consensus=ORCHID node={} adaptiveDiskFirst={}", true, peerTransportEnabled, nodeState.getNodeId(), adaptiveDiskFirstController != null);
 	}
 
@@ -698,6 +706,10 @@ public class ReplicationCoordinator {
 		}
 	}
 
+	SealedHydrateService sealedHydrateService() {
+		return sealedHydrateService;
+	}
+
 	public boolean isLazyHydrate() {
 		return sealedHydrateService != null && sealedHydrateService.isLazyHydrate();
 	}
@@ -905,19 +917,13 @@ public class ReplicationCoordinator {
 		return sealedHydrateService == null ? 0 : sealedHydrateService.dumpDomainSnapshot(domainType);
 	}
 
-	/** Effective sealed dump interval after clamp; {@code 0} when durability off. */
-	@VisibleForTesting
-	public long sealedDumpIntervalMsForTest() {
-		return sealedHydrateService == null ? 0L : sealedHydrateService.sealedDumpIntervalMs();
-	}
-
 	/**
 	 * Synced and phase-ranked proposer — may accept writes (requires write-admission + region Active).
 	 */
 	public boolean isWriterEligible() {
 		final boolean eligible = regionClaimService != null && regionClaimService.isWriterEligible();
 		if (VisibilityDiag.enabled()) {
-			final Boolean prev = lastWriterEligibleDiag.getAndSet(Boolean.valueOf(eligible));
+			final Boolean prev = lastWriterEligibleDiag.getAndSet(eligible);
 			if (prev == null || prev.booleanValue() != eligible) {
 				final long localTip = orchidNode == null ? 0L : orchidNode.getLastCommittedSeq();
 				final long peerTip = orchidNode == null ? 0L : orchidNode.maxSeenPeerCommittedSeq();
@@ -925,13 +931,13 @@ public class ReplicationCoordinator {
 				final long maxApplied = nodeState.maxAppliedWatermark();
 				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_WRITER_ELIGIBLE,
 						"eligible=%s localTip=%d peerTip=%d minApplied=%d maxApplied=%d appliedStreams=%d tipAheadOfMinApplied=%d node=%s",
-						Boolean.valueOf(eligible),
-						Long.valueOf(localTip),
-						Long.valueOf(peerTip),
-						Long.valueOf(minApplied),
-						Long.valueOf(maxApplied),
-						Integer.valueOf(nodeState.appliedStreamCount()),
-						Long.valueOf(Math.max(0L, localTip - minApplied)),
+                        eligible,
+                        localTip,
+                        peerTip,
+                        minApplied,
+                        maxApplied,
+                        nodeState.appliedStreamCount(),
+                        Math.max(0L, localTip - minApplied),
 						nodeState.getNodeId());
 			}
 		}
@@ -954,10 +960,10 @@ public class ReplicationCoordinator {
 				VisibilityDiag.debugf(VisibilityDiag.WHERE_ORCHID_APPLY_UNHANDLED,
 						"domain=%s opSeq=%d shard=%d type=%s tip=%d node=%s",
 						op.domainType(),
-						Long.valueOf(op.opSeq()),
-						Integer.valueOf(op.shard()),
+                        op.opSeq(),
+                        op.shard(),
 						op.type(),
-						Long.valueOf(orchidNode.getLastCommittedSeq()),
+                        orchidNode.getLastCommittedSeq(),
 						nodeState.getNodeId());
 			}
 		});
@@ -1005,6 +1011,18 @@ public class ReplicationCoordinator {
 
 	public boolean isApplyLagStale() {
 		return regionClaimService != null && regionClaimService.isApplyLagStale();
+	}
+
+	/**
+	 * How far local {@code _catalog} apply watermark trails OpLog tip (0 = caught up).
+	 */
+	public long catalogApplyLag() {
+		if (opLog == null || nodeState == null) {
+			return 0L;
+		}
+		final long tip = opLog.lastSeq(CATALOG_DOMAIN, CATALOG_SHARD);
+		final long applied = nodeState.appliedWatermark(CATALOG_DOMAIN, CATALOG_SHARD);
+		return Math.max(0L, tip - applied);
 	}
 
 	public boolean isReplicaReadsEnabled() {
@@ -1400,13 +1418,6 @@ public class ReplicationCoordinator {
 
 	public AdaptiveReplicaSwarm getSwarm() {
 		return this.swarm;
-	}
-
-	/**
-	 * Shard placement / drain map (null when durability+replication off).
-	 */
-	public ShardMigrator getShardMigrator() {
-		return this.shardMigrator;
 	}
 
 	/**

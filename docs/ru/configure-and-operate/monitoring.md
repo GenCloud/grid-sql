@@ -46,6 +46,9 @@ curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.d
 | `oplogArchiveEnabled` | boolean, `n/a` | Путь архива OpLog |
 | `maxTxContexts` | integer | Из `grid.sql-server.max-tx-contexts` (по умолчанию **8**) — [SQL-сервер](configuration/sql-server.md) |
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Блокировки и CANCEL |
+| `privilegeUsers` | integer, `n/a` | Число пользователей в локальном privilege catalog |
+| `authOpen` | boolean, `n/a` | Open-auth (пользователей ещё нет) |
+| `catalogApplyLag` | long, `n/a` | tip `_catalog` − applied watermark — смотреть после `CREATE USER` на writer; readiness **не** уходит в DOWN |
 
 Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и те же шкалы согласия/ремонта. Ключа `reason` нет: живой процесс с несинхронизированным кластером жив, но не готов.
 
@@ -68,6 +71,7 @@ Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и т�
 | `grid.replication.ship_backpressure` | Доставка упирается в `flow.max-inflight-ops` |
 | `grid.replication.swarm_hint` | Подсказка размещения (порядковый номер) |
 | `grid.replication.overlay_pinned_keys` | Живые PIN — [overlay PIN](configuration/overlay-pin.md) |
+| `grid.replication.catalog_apply_lag` | tip `_catalog` − applied watermark (catch-up privilege/schema DDL; AUTH не gated через `applyLagStale`) |
 
 Хранение и чтение:
 
@@ -93,6 +97,9 @@ SQL и блокировки:
 | `grid.sql.executions` | Частота операторов |
 | `grid.sql.tx_commits` / `tx_rollbacks` | Исходы транзакций |
 | `grid.sql.session_opens` | Открытие логических сессий |
+| `grid.sql.auth_failures` | Отказы AUTH (неверный пароль или пользователь ещё не на этой ноде) |
+| `grid.sql.privilege_users` | Число пользователей privilege catalog |
+| `grid.sql.auth_open` | `1`, пока catalog пуст (open-auth) |
 | `grid.sql.lock.wait_acquires`, `wait_timeouts`, `wait_cancels`, `wait_nanos` | Конкуренция за блокировки записей |
 | `grid.sql.cancel.requests` / `cancel.active` | Отмены клиента |
 | `grid.sql.distributed.fan_in_calls` / `fan_in_sources` / `fan_in_rows` | Fan-in распределённого чтения |

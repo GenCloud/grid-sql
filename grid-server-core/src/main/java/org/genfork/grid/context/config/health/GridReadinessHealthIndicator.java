@@ -72,6 +72,9 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 	public static final String DETAIL_PROMOTE_HINT = "promoteHint";
 	public static final String DETAIL_REGION_EPOCH = "regionEpoch";
 	public static final String DETAIL_REGION_ROLE = "regionRole";
+	public static final String DETAIL_PRIVILEGE_USERS = "privilegeUsers";
+	public static final String DETAIL_AUTH_OPEN = "authOpen";
+	public static final String DETAIL_CATALOG_APPLY_LAG = "catalogApplyLag";
 
 	private static final String REASON_SQL_TCP_DOWN = "sql_tcp_down";
 	private static final String REASON_ORCHID_NOT_SYNCED = "orchid_not_synced";
@@ -155,8 +158,26 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 				builder.withDetail(DETAIL_MAX_TX_CONTEXTS, maxTx);
 			}
 		}
+		withPrivilegeDetails(builder);
 		withReplicationDetails(builder);
 		return builder;
+	}
+
+	private void withPrivilegeDetails(Health.Builder builder) {
+		final SqlServerRuntime runtime = sqlRuntimeProvider.getIfAvailable();
+		if (runtime == null || runtime.engine() == null || runtime.engine().privileges() == null) {
+			builder.withDetail(DETAIL_PRIVILEGE_USERS, STATUS_N_A);
+			builder.withDetail(DETAIL_AUTH_OPEN, STATUS_N_A);
+		} else {
+			builder.withDetail(DETAIL_PRIVILEGE_USERS, runtime.engine().privileges().userNames().size());
+			builder.withDetail(DETAIL_AUTH_OPEN, runtime.engine().privileges().isOpen());
+		}
+		final ReplicationCoordinator coordinator = coordinatorProvider.getIfAvailable();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			builder.withDetail(DETAIL_CATALOG_APPLY_LAG, STATUS_N_A);
+		} else {
+			builder.withDetail(DETAIL_CATALOG_APPLY_LAG, coordinator.catalogApplyLag());
+		}
 	}
 
 	private void withReplicationDetails(Health.Builder builder) {

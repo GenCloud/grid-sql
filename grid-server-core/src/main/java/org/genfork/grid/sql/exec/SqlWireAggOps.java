@@ -27,6 +27,7 @@ import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.serial.SqlWireUtil;
+import org.genfork.grid.serial.WireCompositeKeys;
 import org.genfork.grid.serial.WireFieldBytes;
 import org.genfork.grid.serial.WireSpan;
 import org.genfork.grid.sql.SqlResult;
@@ -49,7 +50,6 @@ public final class SqlWireAggOps {
 	private static final int DISTINCT_INITIAL_CAPACITY = 16;
 	/** Hint for typical low-cardinality GROUP BY maps (not blobs.size()). */
 	private static final int GROUP_MAP_CAPACITY_HINT = 64;
-	private static final byte FIELD_SEP = 0x1F;
 	/** Murmur-inspired finalizer mix for open-addressed INT group keys. */
 	private static final int INT_HASH_MIX = 0x85ebca6b;
 
@@ -284,20 +284,11 @@ public final class SqlWireAggOps {
 		if (groupOrdinals.length == 1) {
 			return WireFieldBytes.copyOf(cur.indexKeySpan(groupOrdinals[0]));
 		}
-		int total = 0;
 		final byte[][] parts = new byte[groupOrdinals.length][];
 		for (int i = 0; i < groupOrdinals.length; i++) {
 			parts[i] = cur.indexKeySpan(groupOrdinals[i]).toOwnedBytes();
-			total += parts[i].length + 1;
 		}
-		final byte[] composite = new byte[total];
-		int pos = 0;
-		for (byte[] part : parts) {
-			System.arraycopy(part, 0, composite, pos, part.length);
-			pos += part.length;
-			composite[pos++] = FIELD_SEP;
-		}
-		return new WireFieldBytes(composite);
+		return WireCompositeKeys.joinToWireField(parts);
 	}
 
 	/**
@@ -310,20 +301,11 @@ public final class SqlWireAggOps {
 		if (row.length == 1) {
 			return new WireFieldBytes(SqlWireUtil.toGenericArray(row[0]));
 		}
-		int total = 0;
 		final byte[][] parts = new byte[row.length][];
 		for (int i = 0; i < row.length; i++) {
 			parts[i] = SqlWireUtil.toGenericArray(row[i]);
-			total += parts[i].length + 1;
 		}
-		final byte[] composite = new byte[total];
-		int pos = 0;
-		for (byte[] part : parts) {
-			System.arraycopy(part, 0, composite, pos, part.length);
-			pos += part.length;
-			composite[pos++] = FIELD_SEP;
-		}
-		return new WireFieldBytes(composite);
+		return WireCompositeKeys.joinToWireField(parts);
 	}
 
 	public static boolean isCountStarGroupBy(SelectSql s) {

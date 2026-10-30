@@ -16,8 +16,6 @@
 package org.genfork.grid.sql.client.reactive;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 
 import reactor.core.publisher.Flux;
@@ -26,7 +24,7 @@ import reactor.core.publisher.Sinks;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.client.Result;
 import org.genfork.grid.sql.client.ServerMeta;
-import org.genfork.grid.sql.client.transport.BatchStatementSlot;
+import org.genfork.grid.sql.client.transport.BatchExchangeSupport;
 import org.genfork.grid.sql.client.transport.PendingExchange;
 import org.genfork.grid.sql.client.transport.TransportOutcome;
 import org.genfork.grid.sql.netty.SqlWire;
@@ -41,19 +39,8 @@ import org.genfork.grid.sql.netty.SqlWire;
  * @since: 1.0
  */
 public final class ReactiveBatchExchange implements PendingExchange {
-	private static final String ERR_AUTH = "AUTH unexpected on BATCH_EXEC";
-	private static final String ERR_SESSION_OPEN = "SESSION_OPEN unexpected on BATCH_EXEC";
-	private static final String ERR_SESSION_CLOSE = "SESSION_CLOSE unexpected on BATCH_EXEC";
-
-	private final int expectedStatements;
-	private final int fetchWindow;
-	private final IntConsumer fetchSender;
-	private final Runnable cancelSender;
-	private final AtomicInteger completedStatements = new AtomicInteger();
-	private final AtomicBoolean finished = new AtomicBoolean();
-	private final AtomicBoolean cancelled = new AtomicBoolean();
+	private final BatchExchangeSupport.State state;
 	private final Sinks.Many<Result> sink = Sinks.many().unicast().onBackpressureBuffer();
-	private volatile BatchStatementSlot current;
 
 	public ReactiveBatchExchange(int expectedStatements, IntConsumer fetchSender, Runnable cancelSender) {
 		this(expectedStatements, SqlWire.DEFAULT_FETCH_WINDOW, fetchSender, cancelSender);
@@ -65,17 +52,15 @@ public final class ReactiveBatchExchange implements PendingExchange {
 			IntConsumer fetchSender,
 			Runnable cancelSender
 	) {
-		this.expectedStatements = Math.max(0, expectedStatements);
-		this.fetchWindow = Math.max(1, fetchWindow);
-		this.fetchSender = fetchSender;
-		this.cancelSender = cancelSender;
+		this.state = new BatchExchangeSupport.State(
+				expectedStatements, fetchWindow, fetchSender, cancelSender);
 	}
 
 	/**
 	 * Ordered statement results; cancel triggers batch CANCEL.
 	 */
 	public Flux<Result> flux() {
-		if (expectedStatements == 0) {
+		if (state.expectedStatements() == 0) {
 			return Flux.empty();
 		}
 		return sink.asFlux().doOnCancel(this::cancel);
@@ -83,93 +68,44 @@ public final class ReactiveBatchExchange implements PendingExchange {
 
 	/** Best-effort CANCEL for the whole batch. */
 	public void cancel() {
-		if (finished.get()) {
-			return;
-		}
-		if (!cancelled.compareAndSet(false, true)) {
-			return;
-		}
-		if (cancelSender != null) {
-			cancelSender.run();
-		}
+		state.cancel();
 	}
 
 	@Override
 	public void completeAuth(ServerMeta serverMeta) {
-		fail(new IllegalStateException(ERR_AUTH));
+		fail(BatchExchangeSupport.unexpectedAuth());
 	}
 
 	@Override
 	public void completeSessionOpen(int sessionId) {
-		fail(new IllegalStateException(ERR_SESSION_OPEN));
+		fail(BatchExchangeSupport.unexpectedSessionOpen());
 	}
 
 	@Override
 	public void completeSessionClose() {
-		fail(new IllegalStateException(ERR_SESSION_CLOSE));
+		fail(BatchExchangeSupport.unexpectedSessionClose());
 	}
 
 	@Override
 	public void onRowDesc(List<SqlResult.ColumnMeta> columns) {
-		if (finished.get()) {
-			return;
-		}
-		final BatchStatementSlot slot = new BatchStatementSlot(
-				fetchWindow, fetchSender, cancelSender, cancelled);
-		current = slot;
-		emitOutcome(new TransportOutcome.ResultSet(columns, slot.portal()));
+		state.onRowDesc(columns, this::emitOutcome);
 	}
 
 	@Override
 	public void onRowData(Object[] row) {
-		final BatchStatementSlot slot = current;
-		if (slot == null || finished.get()) {
-			return;
-		}
-		slot.portal().offerRow(row);
+		state.onRowData(row);
 	}
 
 	@Override
 	public boolean completeExec(long affected, String tag) {
-		if (finished.get()) {
-			return true;
-		}
-
-		if (TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
-			final BatchStatementSlot slot = current;
-			if (slot != null) {
-				slot.portal().complete();
-			}
-			finishOk();
-			return true;
-		}
-
-		final BatchStatementSlot slot = current;
-		if (slot != null) {
-			slot.portal().complete();
-			current = null;
-		} else {
-			current = null;
-			emitOutcome(new TransportOutcome.Dml(affected, tag));
-		}
-
-		if (completedStatements.incrementAndGet() >= expectedStatements) {
-			finishOk();
-			return true;
-		}
-		return false;
+		return state.completeExec(affected, tag, this::emitOutcome, this::finishOk);
 	}
 
 	@Override
 	public void fail(Throwable t) {
-		if (!finished.compareAndSet(false, true)) {
-			return;
+		if (state.failPortal(t)) {
+			sink.tryEmitError(t);
 		}
-		final BatchStatementSlot slot = current;
-		if (slot != null) {
-			slot.portal().fail(t);
-		}
-		sink.tryEmitError(t);
 	}
 
 	private void emitOutcome(TransportOutcome outcome) {
@@ -177,7 +113,7 @@ public final class ReactiveBatchExchange implements PendingExchange {
 	}
 
 	private void finishOk() {
-		if (!finished.compareAndSet(false, true)) {
+		if (!state.finished().compareAndSet(false, true)) {
 			return;
 		}
 		sink.tryEmitComplete();
