@@ -60,9 +60,11 @@ import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.sql.SqlStatementTag;
 import org.genfork.grid.sql.tx.KeyWrapper;
 import org.genfork.grid.sql.tx.SqlTxBuffer;
+import org.genfork.grid.store.StrictUniqueEqHealUtil;
 import org.genfork.grid.store.TableStore;
 import org.genfork.grid.utils.SerialUtil;
 import org.genfork.grid.diag.VisibilityDiag;
+import org.genfork.grid.serial.SqlWireUtil;
 
 /**
  * INSERT / UPDATE / DELETE / MERGE (+ TX staging) and {@code ANALYZE} for {@link org.genfork.grid.sql.SqlEngine}.
@@ -226,8 +228,14 @@ public final class SqlDmlExecutor {
 				existing = null;
 			}
 			if (existing != null) {
-				return applyConflictHit(session, table, store, conflictKey, existing, probeRow, conflict);
+				try {
+					return applyConflictHit(session, table, store, conflictKey, existing, probeRow, conflict);
+				} catch (NonUniqueValueException ex) {
+					return repairDualLiveConflictHit(
+							session, table, store, conflictKey, probeRow, conflict, ex);
+				}
 			}
+			failClosedGhostUniqueBeforeMissInsert(store, conflict, probeRow);
 			fillIdentityDefaults(session, store.schema(), named);
 			final Object[] insertRow = store.rowFromNamed(named);
 			try {
@@ -899,7 +907,83 @@ public final class SqlDmlExecutor {
 		if (retryExisting == null) {
 			throw cause;
 		}
-		return applyConflictHit(session, table, store, retryKey, retryExisting, row, conflict);
+		try {
+			return applyConflictHit(session, table, store, retryKey, retryExisting, row, conflict);
+		} catch (NonUniqueValueException ex) {
+			return repairDualLiveConflictHit(session, table, store, retryKey, row, conflict, ex);
+		}
+	}
+
+	/**
+	 * Ghost STRICT UNIQUE after heal: refuse ON CONFLICT miss-insert (no second IDENTITY).
+	 */
+	private static void failClosedGhostUniqueBeforeMissInsert(
+			TableStore store,
+			OnConflict conflict,
+			Object[] probeRow
+	) {
+		final TableSchema schema = store.schema();
+		final List<String> targets = conflict.targetColumns() == null
+				? List.of()
+				: conflict.targetColumns();
+		if (SqlMergeMatchOps.targetsPrimaryKey(schema, targets)) {
+			return;
+		}
+		if (!StrictUniqueEqHealUtil.coversStrictUnique(schema, targets)) {
+			return;
+		}
+		final byte[][] want = new byte[targets.size()][];
+		for (int i = 0; i < targets.size(); i++) {
+			want[i] = SqlWireUtil.toGenericArray(
+					probeRow[schema.requireColumn(targets.get(i)).ordinal()]);
+		}
+		StrictUniqueEqHealUtil.failClosedIfGhostUnhealed(store, targets, want);
+	}
+
+	/**
+	 * Dual-live on STRICT UNIQUE under ON CONFLICT arbiter: tombstone other owners, retry HIT.
+	 */
+	private long repairDualLiveConflictHit(
+			SqlSession session,
+			String table,
+			TableStore store,
+			byte[] keepKey,
+			Object[] probeRow,
+			OnConflict conflict,
+			NonUniqueValueException cause
+	) {
+		final TableSchema schema = store.schema();
+		final List<String> targets = conflict.targetColumns() == null
+				? List.of()
+				: conflict.targetColumns();
+		if (SqlMergeMatchOps.targetsPrimaryKey(schema, targets)
+				|| !StrictUniqueEqHealUtil.coversStrictUnique(schema, targets)) {
+			throw cause;
+		}
+		final byte[][] want = new byte[targets.size()][];
+		for (int i = 0; i < targets.size(); i++) {
+			want[i] = SqlWireUtil.toGenericArray(
+					probeRow[schema.requireColumn(targets.get(i)).ordinal()]);
+		}
+		final List<byte[]> live = store.lookupEqKeys(targets, want);
+		boolean tombstoned = false;
+		for (int i = 0, n = live.size(); i < n; i++) {
+			final byte[] pk = live.get(i);
+			if (pk == null || Arrays.equals(pk, keepKey)) {
+				continue;
+			}
+			store.tombstoneStrictUniqueOwner(pk);
+			tombstoned = true;
+		}
+		if (!tombstoned) {
+			throw cause;
+		}
+		SqlDmlLockOps.ensureConflictKeyLocked(session, table, keepKey);
+		final byte[] existing = SqlDmlLockOps.existingBytes(session, table, store, keepKey);
+		if (existing == null) {
+			throw cause;
+		}
+		return applyConflictHit(session, table, store, keepKey, existing, probeRow, conflict);
 	}
 
 	/**

@@ -15,19 +15,26 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.genfork.grid.replication.apply.ReplicaApplier;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.atomic.AtomicLong;
-
 /**
  * Fail-closed gates for sealed dump so mid-TX / mid-envelope merge cannot
  * stamp dirty staging into sealed and truncate OpLog past an open unit.
  * <p>
  * Also rate-limits WARN for at-risk shards (huge OpLog delta without {@code .sbpt}).
+ * <p>
+ * <b>Invariants:</b> mid-TX {@link DeferReason#ENVELOPE} defer is safety — never skip.
+ * Orphan membership after LAZY one-stream hydrate is closed by
+ * {@link org.genfork.grid.replication.util.EnvelopeClosureHydrateUtil}, not by weakening
+ * this gate or raising OpLog-without-{@code .sbpt} ceilings.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -97,7 +104,7 @@ public final class SealedDumpSafetyUtil {
 		}
 
 		final TxEnvelopeCoordinator envelope = applier.envelopeCoordinator();
-		if (envelope != null && envelope.hasOpenApplyStagingForStream(domainType, shard)) {
+		if (envelope != null && envelope.hasOpenApplyMembershipForStream(domainType, shard)) {
 			return DeferReason.ENVELOPE;
 		}
 
@@ -105,18 +112,50 @@ public final class SealedDumpSafetyUtil {
 	}
 
 	/**
-	 * Gate adapter for {@link SealedGridMapService#dumpDomain}.
+	 * Gate adapter for {@link SealedGridMapService#dumpDomain} (no deferred tracking).
 	 */
 	public static SealedGridMapService.DumpDeferGate deferGate(ReplicaApplier applier) {
-		return (domainType, shard) -> {
+		return trackingDeferGate(applier);
+	}
+
+	/**
+	 * Tracking gate: records deferred shards/reasons for {@link DumpDomainResult}.
+	 */
+	public static TrackingDeferGate trackingDeferGate(ReplicaApplier applier) {
+		return new TrackingDeferGate(applier);
+	}
+
+	/**
+	 * {@link SealedGridMapService.DumpDeferGate} that accumulates defer outcomes.
+	 */
+	public static final class TrackingDeferGate implements SealedGridMapService.DumpDeferGate {
+		private final ReplicaApplier applier;
+		private final List<Integer> deferredShards = new ArrayList<>();
+		private final List<DeferReason> deferredReasons = new ArrayList<>();
+
+		TrackingDeferGate(ReplicaApplier applier) {
+			this.applier = applier;
+		}
+
+		@Override
+		public boolean shouldDefer(String domainType, int shard) {
 			final DeferReason reason = deferReason(applier, domainType, shard);
 			if (reason == DeferReason.NONE) {
 				return false;
 			}
-
+			deferredShards.add(Integer.valueOf(shard));
+			deferredReasons.add(reason);
 			onShardDeferred(domainType, shard, reason);
 			return true;
-		};
+		}
+
+		public List<Integer> deferredShards() {
+			return List.copyOf(deferredShards);
+		}
+
+		public List<DeferReason> deferredReasons() {
+			return List.copyOf(deferredReasons);
+		}
 	}
 
     /**
@@ -128,6 +167,9 @@ public final class SealedDumpSafetyUtil {
             SealedDumpSafetyUtil.DeferReason reason
     ) {
         ReplicationMetrics.recordSealedDumpDeferred();
+		if (reason == SealedDumpSafetyUtil.DeferReason.ENVELOPE) {
+			ReplicationMetrics.recordEnvelopeDefer();
+		}
 
         if (reason == null || reason == SealedDumpSafetyUtil.DeferReason.NONE) {
             return;

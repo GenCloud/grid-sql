@@ -119,9 +119,9 @@ public final class SqlJoinOps {
 		final boolean leftOuter = kind == JoinKind.LEFT || kind == JoinKind.FULL;
 		final boolean rightOuter = kind == JoinKind.RIGHT || kind == JoinKind.FULL;
 		if (leftOrds.length == LOOKUP_EQ_WIRE_ARITY && rightOrds.length == LOOKUP_EQ_WIRE_ARITY) {
-			final ColumnDef rightPk = right.schema().pkColumn();
-			final boolean rightOnPk = rightPk != null
-					&& right.schema().columns().get(rightOrds[0]).name().equalsIgnoreCase(rightPk.name());
+			final String rightColName = right.schema().columns().get(rightOrds[0]).name();
+			final boolean rightOnPk = SqlPkLookupUtil.isJoinPkPointProbe(
+					right.schema(), List.of(rightColName));
 			if (rightOnPk && !rightOuter && rightBlobs == null) {
 				return joinProbeRightPkStore(leftRows, leftSideSchemas, right, leftOrds[0], leftOuter);
 			}
@@ -239,11 +239,11 @@ public final class SqlJoinOps {
 			String rightCol
 	) {
 		return joinProbeRightIndexStore(
-				leftRows, leftSideSchemas, right, new int[]{leftOrd}, List.of(rightCol));
+				leftRows, leftSideSchemas, right, new int[]{leftOrd}, List.of(rightCol), false);
 	}
 
 	/**
-	 * Probe right covering EQ index from left wire keys (single or composite column list).
+	 * Probe right covering EQ index from left wire keys (INNER semantics).
 	 */
 	static List<JoinBlobRow> joinProbeRightIndexStore(
 			List<JoinBlobRow> leftRows,
@@ -251,6 +251,22 @@ public final class SqlJoinOps {
 			TableStore right,
 			int[] leftOrds,
 			List<String> rightCols
+	) {
+		return joinProbeRightIndexStore(leftRows, leftSideSchemas, right, leftOrds, rightCols, false);
+	}
+
+	/**
+	 * Probe right covering / left-prefix EQ index from left wire keys.
+	 *
+	 * @param leftOuter when true (LEFT/FULL), left rows with no right match are null-padded
+	 */
+	static List<JoinBlobRow> joinProbeRightIndexStore(
+			List<JoinBlobRow> leftRows,
+			List<TableSchema> leftSideSchemas,
+			TableStore right,
+			int[] leftOrds,
+			List<String> rightCols,
+			boolean leftOuter
 	) {
 		if (leftOrds == null || rightCols == null || leftOrds.length != rightCols.size() || leftOrds.length == 0) {
 			throw new IllegalArgumentException("join index probe column arity mismatch");
@@ -290,6 +306,9 @@ public final class SqlJoinOps {
 		for (JoinBlobRow lr : leftRows) {
 			final List<byte[]> matches = indexMap.get(wireKeyFromJoined(lr, leftSideSchemas, leftOrds));
 			if (matches == null || matches.isEmpty()) {
+				if (leftOuter) {
+					out.add(concatSide(lr, null));
+				}
 				continue;
 			}
 			for (byte[] rr : matches) {

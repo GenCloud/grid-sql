@@ -77,4 +77,32 @@ public final class IndexColumnResolveUtil {
 		}
 		return null;
 	}
+
+	/**
+	 * Resolve a composite index for which {@code prefixColumns} is a strict left-prefix.
+	 * <p>
+	 * Prefers the widest covering index (most columns) when several match.
+	 */
+	public static AbstractIndexOperation<byte[][], CompositeTreeKey> resolveCompositeLeftPrefixIndex(
+			Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
+			List<String> prefixColumns
+	) {
+		if (prefixColumns == null || prefixColumns.isEmpty() || compositeIndexes == null) {
+			return null;
+		}
+		AbstractIndexOperation<byte[][], CompositeTreeKey> best = null;
+		int bestWidth = -1;
+		for (Entry<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> entry
+				: compositeIndexes.entrySet()) {
+			final List<String> full = entry.getKey();
+			if (!CompositeIndexProbeOps.isLeftPrefixIgnoreCaseOrdered(full, prefixColumns)) {
+				continue;
+			}
+			if (full.size() > bestWidth) {
+				bestWidth = full.size();
+				best = entry.getValue();
+			}
+		}
+		return best;
+	}
 }

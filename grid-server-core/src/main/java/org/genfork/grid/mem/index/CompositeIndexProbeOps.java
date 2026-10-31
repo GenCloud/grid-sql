@@ -63,6 +63,25 @@ final class CompositeIndexProbeOps {
 	}
 
 	/**
+	 * True when {@code prefixColumns} is a strict left-prefix of {@code fullColumns}
+	 * (ordered, case-insensitive). Equal-length lists are not a prefix (exact match elsewhere).
+	 */
+	static boolean isLeftPrefixIgnoreCaseOrdered(List<String> fullColumns, List<String> prefixColumns) {
+		if (fullColumns == null || prefixColumns == null || prefixColumns.isEmpty()) {
+			return false;
+		}
+		if (prefixColumns.size() >= fullColumns.size()) {
+			return false;
+		}
+		for (int i = 0; i < prefixColumns.size(); i++) {
+			if (!fullColumns.get(i).equalsIgnoreCase(prefixColumns.get(i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Walk a filter tree for the first {@link CompositeIndexCondition} index op.
 	 */
 	static AbstractIndexOperation<byte[][], CompositeTreeKey> findCompositeIndexInTree(

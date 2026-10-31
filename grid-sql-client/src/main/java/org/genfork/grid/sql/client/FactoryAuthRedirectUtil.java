@@ -19,7 +19,8 @@ package org.genfork.grid.sql.client;
  * Pure AUTH redirect decisions after {@link ServerMeta} is known (PRIMARY / READ_REPLICA).
  * <p>
  * Side effects (destroy, sticky, markStale) stay on {@link RemoteConnectionFactory}.
- * {@code applyLagStale} is fail-closed for both roles — never ACCEPT / pin a lagging peer.
+ * {@code applyLagStale} never ACCEPT / pin a lagging peer (sticky publish stays fail-closed).
+ * PRIMARY exhausts promote/ring budget before {@link Kind#FAIL_STALE}; READ_REPLICA same.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -49,12 +50,28 @@ public final class FactoryAuthRedirectUtil {
 
 	/**
 	 * Decision after a peer reported {@code applyLagStale} (both factory roles).
+	 * Never ACCEPT — rotate / promote until budget then {@link Kind#FAIL_STALE}.
 	 */
 	public static Outcome decideAfterApplyLagStale(int remainingAuthRedirects) {
 		if (remainingAuthRedirects <= 0) {
 			return Outcome.failStale();
 		}
 		return Outcome.retry(remainingAuthRedirects - 1);
+	}
+
+	/**
+	 * PRIMARY path after {@code applyLagStale}: promote/ring budget before FAIL_STALE.
+	 * {@code writerEligible} does not authorize ACCEPT of stale meta (sticky never adopts).
+	 */
+	public static Outcome decideAfterApplyLagStalePrimary(
+			boolean writerEligible,
+			int remainingAuthRedirects
+	) {
+		// writerEligible does not authorize ACCEPT of stale meta; budget path identical.
+		if (writerEligible) {
+			return decideAfterApplyLagStale(remainingAuthRedirects);
+		}
+		return decideAfterApplyLagStale(remainingAuthRedirects);
 	}
 
 	/**

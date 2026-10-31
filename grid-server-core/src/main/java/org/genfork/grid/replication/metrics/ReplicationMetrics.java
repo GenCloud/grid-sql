@@ -55,6 +55,15 @@ public final class ReplicationMetrics {
 	private static final LongAdder SEALED_DUMP_DEFERRED = new LongAdder();
 	/** At-risk sealed dump (huge OpLog delta, no {@code .sbpt}) attempted or deferred. */
 	private static final LongAdder SEALED_DUMP_AT_RISK = new LongAdder();
+	/**
+	 * Multi-stream apply envelope aborted after LAZY one-stream hydrate could not complete
+	 * siblings (orphan membership that would starve sealed dump forever).
+	 */
+	private static final LongAdder ORPHAN_APPLY_ENVELOPE_ABORT = new LongAdder();
+	/** Sealed dump deferred specifically for ENVELOPE membership (mid-TX or orphan). */
+	private static final LongAdder ENVELOPE_DEFER = new LongAdder();
+	/** Fully-committed apply envelope still in {@code applyOpen} cleared before seal dump. */
+	private static final LongAdder STICKY_APPLY_ENVELOPE_CLEAR = new LongAdder();
 
 	private static final long[] ORCHID_WAIT_NS = new long[LATENCY_SAMPLES];
 	private static final AtomicInteger ORCHID_WAIT_IDX = new AtomicInteger();
@@ -189,6 +198,30 @@ public final class ReplicationMetrics {
 
 	public static long sealedDumpAtRisk() {
 		return SEALED_DUMP_AT_RISK.sum();
+	}
+
+	public static void recordOrphanApplyEnvelopeAbort() {
+		ORPHAN_APPLY_ENVELOPE_ABORT.increment();
+	}
+
+	public static long orphanApplyEnvelopeAbort() {
+		return ORPHAN_APPLY_ENVELOPE_ABORT.sum();
+	}
+
+	public static void recordEnvelopeDefer() {
+		ENVELOPE_DEFER.increment();
+	}
+
+	public static long envelopeDefer() {
+		return ENVELOPE_DEFER.sum();
+	}
+
+	public static void recordStickyApplyEnvelopeClear() {
+		STICKY_APPLY_ENVELOPE_CLEAR.increment();
+	}
+
+	public static long stickyApplyEnvelopeClear() {
+		return STICKY_APPLY_ENVELOPE_CLEAR.sum();
 	}
 
 	public static long oplogPushSent() {

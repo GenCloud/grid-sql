@@ -25,8 +25,9 @@ import org.genfork.grid.mem.stage.GridEntriesProcessor;
 /**
  * Single choke-point for sealed index query-path detach before close/replace.
  * <p>
- * Order: {@link #detachQuerySealedIndexes} then {@code releaseShard}/{@code deleteIndex}/{@code closeAll}.
- * Bind/install of new readers happens only after open (caller).
+ * Seal dump must use {@link #releaseShardSealedOnly} — one shared {@link GridCompositeIndex}
+ * holds multi-shard sealed readers; {@link #detachQuerySealedIndexes} would strip every shard.
+ * Domain retire / DROP still uses full detach.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -48,8 +49,23 @@ public final class SealedIndexLifecycleUtil {
 	}
 
 	/**
-	 * Detach query sealed refs for the processor's composite index, then release all
-	 * {@code .sbpt} readers for {@code domain#shard}.
+	 * Unmap {@code .sbpt} for one shard before overwrite — keep other shards' sealed readers
+	 * on the shared composite. Closed readers prune on the next probe; {@code addReader} replaces by shard.
+	 */
+	public static void releaseShardSealedOnly(
+			SealedBPTreeService bptreeService,
+			String domainType,
+			int shard
+	) throws IOException {
+		Objects.requireNonNull(domainType, "domainType");
+		if (bptreeService != null) {
+			bptreeService.releaseShard(domainType, shard);
+		}
+	}
+
+	/**
+	 * Full detach of sealed wrappers then release {@code domain#shard} readers (domain retire / DROP).
+	 * Not for seal dump — use {@link #releaseShardSealedOnly}.
 	 */
 	public static void detachAndReleaseShard(
 			GridEntriesProcessor processor,
@@ -61,9 +77,7 @@ public final class SealedIndexLifecycleUtil {
 		if (processor != null) {
 			detachQuerySealedIndexes(processor.compositeIndex());
 		}
-		if (bptreeService != null) {
-			bptreeService.releaseShard(domainType, shard);
-		}
+		releaseShardSealedOnly(bptreeService, domainType, shard);
 	}
 
 	/**

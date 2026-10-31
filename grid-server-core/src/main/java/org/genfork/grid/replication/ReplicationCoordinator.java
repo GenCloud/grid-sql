@@ -378,7 +378,7 @@ public class ReplicationCoordinator {
 			crossDcPublisher.setSwarm(swarm);
 			swarm.registerSensor("queueDepth", () -> (double) flowControl.inflight());
 			swarm.registerSensor("hitRate", ReplicationMetrics::mapHitRate);
-			swarm.registerSensor("applyLag", () -> (double) nodeState.maxApplyLag(opLog));
+			swarm.registerSensor("applyLag", () -> (double) nodeState.maxApplyLag(opLog, null));
 			swarm.registerSensor("rttMs", () -> (double) nettyTransport.emaRttMs());
 			swarm.registerSensor("openTx", this::openTxPressure);
 			swarm.registerSensor("heapPressure", () -> {
@@ -406,6 +406,13 @@ public class ReplicationCoordinator {
 				sealedGridMapService,
 				homologousRepair,
 				appliers);
+		// AUTH applyLagStale: serving/hydrated streams only — untouched LAZY tip debt is not stale.
+		regionClaimService.setServingStreamKeyPredicate(streamKey -> {
+			if (sealedHydrateService == null || !sealedHydrateService.isLazyHydrate()) {
+				return true;
+			}
+			return sealedHydrateService.isStreamHydrated(streamKey);
+		});
 		publisher.setPeers(peers);
 		crossDcPublisher.setRemotePeers(peers);
 		if (peerTransportEnabled) {
@@ -918,6 +925,18 @@ public class ReplicationCoordinator {
 	}
 
 	/**
+	 * One-shot sealed index heal for STRICT UNIQUE ghost EQ ({@code dumpDomainSealed} choke).
+	 *
+	 * @return {@code true} when dump ran without deferred shards (or durability unbound)
+	 */
+	public boolean tryHealSealedDomainIndexes(String domainType) {
+		if (sealedHydrateService == null) {
+			return true;
+		}
+		return sealedHydrateService.tryHealSealedDomainIndexes(domainType);
+	}
+
+	/**
 	 * Synced and phase-ranked proposer — may accept writes (requires write-admission + region Active).
 	 */
 	public boolean isWriterEligible() {
@@ -1011,6 +1030,18 @@ public class ReplicationCoordinator {
 
 	public boolean isApplyLagStale() {
 		return regionClaimService != null && regionClaimService.isApplyLagStale();
+	}
+
+	/**
+	 * Tip debt on unhydrated LAZY streams (not used for AUTH {@code applyLagStale}).
+	 */
+	public long unhydratedTipDebt() {
+		if (nodeState == null || opLog == null || sealedHydrateService == null
+				|| !sealedHydrateService.isLazyHydrate()) {
+			return 0L;
+		}
+		return nodeState.maxUnhydratedTipDebt(
+				opLog, sealedHydrateService::isStreamHydrated);
 	}
 
 	/**
@@ -1209,7 +1240,7 @@ public class ReplicationCoordinator {
 			}
 			// Fail-closed OpLog cutover: migrateRange ships OpLog range then cutover ownership.
 			final long from = Math.max(1L, nodeState.peerAck(target, action.domainType(), action.shard()) + 1);
-			final int batch = SwarmMigrateBatchSizes.forApplyLag(nodeState.maxApplyLag(opLog));
+			final int batch = SwarmMigrateBatchSizes.forApplyLag(nodeState.maxApplyLag(opLog, null));
 			shardMigrator.migrateRange(target, action.domainType(), action.shard(), from, batch);
 		}
 	}

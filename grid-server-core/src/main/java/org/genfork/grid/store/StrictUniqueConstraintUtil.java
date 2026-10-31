@@ -112,6 +112,8 @@ public final class StrictUniqueConstraintUtil {
 						NonUniqueValueException.formatMessage(
 								schema.catalogKey(), idx.name(), STRICT_PROBE_SUBJECT));
 			}
+			// Ghost-only after heal: refuse INSERT that would invent a second IDENTITY.
+			StrictUniqueEqHealUtil.failClosedIfGhostUnhealed(store, columns, want);
 		}
 	}
 

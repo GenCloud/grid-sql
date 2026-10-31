@@ -905,7 +905,11 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 				advanceStickyPastFailed();
 			}
 			destroy(connection);
-			return FactoryAuthRedirectUtil.decideAfterApplyLagStale(remainingAuthRedirects);
+			if (factoryRole.isReadReplica()) {
+				return FactoryAuthRedirectUtil.decideAfterApplyLagStale(remainingAuthRedirects);
+			}
+			return FactoryAuthRedirectUtil.decideAfterApplyLagStalePrimary(
+					meta.writerEligible(), remainingAuthRedirects);
 		}
 
 		if (factoryRole.isReadReplica()) {

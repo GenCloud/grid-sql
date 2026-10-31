@@ -15,34 +15,27 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
-import org.genfork.grid.mem.index.GridCompositeIndex;
-import org.genfork.grid.mem.stage.GridEntriesProcessor;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
+
+import org.genfork.grid.mem.index.GridCompositeIndex;
 
 /**
- * Sealed {@code .sbpt} accelerator helpers: incomplete detection and dump-path
- * chunked reindex (ephemeral RAM fill only inside seal dump).
+ * Sealed {@code .sbpt} accelerator helpers: incomplete / authoritative file detection.
  * <p>
  * Empty shells ({@code entryCount == 0}) and truncated debris are <em>absent</em>
  * for bind / at-risk — not authoritative fallbacks. Permanent RAM rebuild on LAZY
- * open is intentionally not provided (OOM / working-set risk).
+ * open is intentionally not provided (OOM / working-set risk). Seal dump builds
+ * {@code .sbpt} from the merge map — never by mutating live RAM BPTrees under query.
  *
  * @author: GenCloud
  * @date: 2026/10
  * @since: 1.3
  */
 public final class SealedLazyIndexRebuildUtil {
-	/** Same chunk size as sealed dump / OpLog hydrate index flush. */
-	private static final int INDEX_DELTA_BATCH = 2_048;
 
 	private SealedLazyIndexRebuildUtil() {
 	}
@@ -121,34 +114,6 @@ public final class SealedLazyIndexRebuildUtil {
 			return Files.isRegularFile(idxFile) && Files.size(idxFile) >= SealedBPTreeReader.MIN_FILE_BYTES;
 		} catch (IOException ignored) {
 			return false;
-		}
-	}
-
-	/**
-	 * Shared chunked index flush for seal-dump merge maps (ephemeral; discarded after {@code .sbpt} write).
-	 */
-	public static void reindexFromSource(
-			GridEntriesProcessor processor,
-			Consumer<BiConsumer<byte[], byte[]>> source
-	) {
-		Objects.requireNonNull(processor, "processor");
-		Objects.requireNonNull(source, "source");
-		if (processor.compositeIndex() == null) {
-			return;
-		}
-		final List<GridEntriesProcessor.AddEntry> chunk = new ArrayList<>(INDEX_DELTA_BATCH);
-		source.accept((key, value) -> {
-			if (value == null || key == null) {
-				return;
-			}
-			chunk.add(new GridEntriesProcessor.AddEntry(null, key, value));
-			if (chunk.size() >= INDEX_DELTA_BATCH) {
-				processor.indexDeltaNow(chunk);
-				chunk.clear();
-			}
-		});
-		if (!chunk.isEmpty()) {
-			processor.indexDeltaNow(chunk);
 		}
 	}
 }

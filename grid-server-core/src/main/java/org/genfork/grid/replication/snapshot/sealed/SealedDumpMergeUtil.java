@@ -23,15 +23,18 @@ import java.util.List;
 import java.util.Map;
 
 import org.genfork.grid.catalog.TableSchema;
-import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.replication.codec.ReplicationOp;
-import org.genfork.grid.serial.LogicalFieldCursor;
-import org.genfork.grid.utils.ArrayUtil;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.log.OpLog;
+import org.genfork.grid.serial.LogicalFieldCursor;
+import org.genfork.grid.utils.ArrayUtil;
 
 /**
- * Static helpers for sealed dump merge: OpLog delta replay, RAM reindex, and filename parsing.
+ * Static helpers for sealed dump merge: OpLog delta replay, merge→{@code .sbpt} postings, and filename parsing.
+ * <p>
+ * Seal dump must not mutate live RAM BPTrees — concurrent STRICT EQ / ON CONFLICT probe those trees.
+ * RAM overlay must apply sealed-delete tombstones as {@code remove} (not skip), or STRICT UNIQUE
+ * displace losers from prior sealed reappear after LAZY reopen.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -88,26 +91,6 @@ public final class SealedDumpMergeUtil {
 				break;
 			}
 		}
-	}
-
-	/**
-	 * Fill RAM secondary/PK trees from the dump merge so sealed index dump writes complete {@code .sbpt}.
-	 */
-	public static void reindexMergedForSealDump(
-			GridEntriesProcessor processor,
-			LinkedHashMap<BytesKey, byte[]> merged
-	) {
-		if (processor == null || merged == null || merged.isEmpty()) {
-			return;
-		}
-		SealedLazyIndexRebuildUtil.reindexFromSource(processor, sink -> {
-			for (Map.Entry<BytesKey, byte[]> e : merged.entrySet()) {
-				final byte[] value = e.getValue();
-				if (value != null) {
-					sink.accept(e.getKey().bytes(), value);
-				}
-			}
-		});
 	}
 
 	/**

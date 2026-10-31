@@ -38,6 +38,7 @@ import org.genfork.grid.serial.FieldMetaData;
 import org.genfork.grid.serial.HashField;
 import org.genfork.grid.serial.WireFieldBytes;
 import org.genfork.grid.serial.WireFieldCompare;
+import org.genfork.grid.store.StrictUniqueEqHealUtil;
 import org.genfork.grid.threading.ThreadService;
 import org.springframework.util.CollectionUtils;
 
@@ -104,6 +105,15 @@ public class GridCompositeIndex {
 	 */
 	private Function<byte[], byte[]> rowResolver;
 	/**
+	 * One-shot sealed dump heal when STRICT UNIQUE EQ is ghost-only (SELECT + lookupEqKeys).
+	 */
+	private Runnable strictUniqueSealedHeal;
+	/**
+	 * Re-entrancy guard for {@link #strictUniqueSealedHeal} (dump must not recurse EQ heal).
+	 */
+	private final ThreadLocal<Boolean> strictUniqueHealing =
+			ThreadLocal.withInitial(() -> Boolean.FALSE);
+	/**
 	 * Optional map/sealed size hints for {@link QueryOptimizer} cost model.
 	 */
 	private Supplier<TableRowStats> tableRowStatsSupplier;
@@ -115,6 +125,11 @@ public class GridCompositeIndex {
 	 * Periodic dumpStats task — cancelled on {@link #clear()} / store close so JMH forks can exit.
 	 */
 	private volatile ScheduledFuture<?> dumpStatsFuture;
+	/**
+	 * Serial RAM BPTree probe gate (same queue as {@link org.genfork.grid.mem.stage.GridIndexWorker} mutations).
+	 * Heal/seal dump must not run inside a mailbox task.
+	 */
+	private volatile IndexProbeMailbox probeMailbox;
 
 	public GridCompositeIndex(TableSchema schema) {
 		this.schema = Objects.requireNonNull(schema, "schema");
@@ -283,6 +298,10 @@ public class GridCompositeIndex {
 	 * Message when wire EQ columns are not covered by any single/composite index.
 	 */
 	public static final String MSG_EQ_REQUIRES_INDEX = "Indexed EQ requires an index covering the probe columns";
+	/**
+	 * {@link CompositeTreeKey} partial cmpIndex for left-prefix EQ (leading columns).
+	 */
+	private static final int LEFT_PREFIX_PARTIAL_COLUMN = 0;
 
 	/**
 	 * Wire EQ probe on indexed columns → row PK byte arrays (no SQL string).
@@ -321,6 +340,15 @@ public class GridCompositeIndex {
 	}
 
 	private IndexOperationResult lookupEqResult(List<String> columns, byte[][] wireValues) {
+		final IndexOperationResult found = lookupEqResultRaw(columns, wireValues);
+		return maybeHealGhostStrictEq(columns, found, () -> lookupEqResultRaw(columns, wireValues));
+	}
+
+	private IndexOperationResult lookupEqResultRaw(List<String> columns, byte[][] wireValues) {
+		return onProbeMailbox(() -> lookupEqResultRawUnlocked(columns, wireValues));
+	}
+
+	private IndexOperationResult lookupEqResultRawUnlocked(List<String> columns, byte[][] wireValues) {
 		Objects.requireNonNull(columns, "columns");
 		Objects.requireNonNull(wireValues, "wireValues");
 		if (columns.size() != wireValues.length) {
@@ -330,34 +358,103 @@ public class GridCompositeIndex {
 			throw new IllegalArgumentException("columns empty");
 		}
 		if (columns.size() == 1) {
-			final AbstractIndexOperation<byte[], SingleTreeKey> tree =
+			final AbstractIndexOperation<byte[], SingleTreeKey> single =
 					IndexColumnResolveUtil.resolveSingleColumnIndex(property2Index, columns.getFirst());
-			if (tree == null) {
-				throw new IllegalArgumentException(MSG_EQ_REQUIRES_INDEX + ": " + columns);
+			if (single != null) {
+				final IndexOperationResult found = single.searchEq(new SingleTreeKey(wireValues[0]));
+				return found == null ? IndexOperationResult.EMPTY : found;
 			}
-			final IndexOperationResult found = tree.searchEq(new SingleTreeKey(wireValues[0]));
-			return found == null ? IndexOperationResult.EMPTY : found;
-		}
-		final AbstractIndexOperation<byte[][], CompositeTreeKey> tree =
-				IndexColumnResolveUtil.resolveCompositeIndex(compositeIndexes, columns);
-		if (tree == null) {
+			final AbstractIndexOperation<byte[][], CompositeTreeKey> prefixTree =
+					IndexColumnResolveUtil.resolveCompositeLeftPrefixIndex(compositeIndexes, columns);
+			if (prefixTree != null) {
+				final IndexOperationResult found = prefixTree.searchEq(
+						new CompositeTreeKey(wireValues, LEFT_PREFIX_PARTIAL_COLUMN));
+				return found == null ? IndexOperationResult.EMPTY : found;
+			}
 			throw new IllegalArgumentException(MSG_EQ_REQUIRES_INDEX + ": " + columns);
 		}
-		final IndexOperationResult found = tree.searchEq(new CompositeTreeKey(wireValues));
-		return found == null ? IndexOperationResult.EMPTY : found;
+		final AbstractIndexOperation<byte[][], CompositeTreeKey> exact =
+				IndexColumnResolveUtil.resolveCompositeIndex(compositeIndexes, columns);
+		if (exact != null) {
+			final IndexOperationResult found = exact.searchEq(new CompositeTreeKey(wireValues));
+			return found == null ? IndexOperationResult.EMPTY : found;
+		}
+		final AbstractIndexOperation<byte[][], CompositeTreeKey> prefixTree =
+				IndexColumnResolveUtil.resolveCompositeLeftPrefixIndex(compositeIndexes, columns);
+		if (prefixTree != null) {
+			final IndexOperationResult found = prefixTree.searchEq(
+					new CompositeTreeKey(wireValues, LEFT_PREFIX_PARTIAL_COLUMN));
+			return found == null ? IndexOperationResult.EMPTY : found;
+		}
+		throw new IllegalArgumentException(MSG_EQ_REQUIRES_INDEX + ": " + columns);
+	}
+
+	private IndexOperationResult maybeHealGhostStrictEq(
+			List<String> columns,
+			IndexOperationResult found,
+			Supplier<IndexOperationResult> reprobe
+	) {
+		if (strictUniqueSealedHeal == null
+				|| Boolean.TRUE.equals(strictUniqueHealing.get())
+				|| !StrictUniqueEqHealUtil.coversStrictUnique(schema, columns)
+				|| !isGhostOnlyEqResult(found)) {
+			return found == null ? IndexOperationResult.EMPTY : found;
+		}
+		strictUniqueHealing.set(Boolean.TRUE);
+		try {
+			strictUniqueSealedHeal.run();
+			final IndexOperationResult again = reprobe.get();
+			return again == null ? IndexOperationResult.EMPTY : again;
+		} finally {
+			strictUniqueHealing.set(Boolean.FALSE);
+		}
 	}
 
 	/**
-	 * True when a covering index exists for exact EQ on {@code columns}.
+	 * {@code true} when EQ postings include at least one non-live PK (ghost-only or live+ghost mix).
+	 * Either case needs a seal heal so STRICT UNIQUE EQ stops advertising stale PKs.
+	 */
+	private boolean isGhostOnlyEqResult(IndexOperationResult found) {
+		if (found == null || rowResolver == null) {
+			return false;
+		}
+		found.expandBitmapPointers();
+		final Set<IndexPointerRef> pointers = found.getPointers();
+		if (pointers == null || pointers.isEmpty()) {
+			return false;
+		}
+		boolean anyGhost = false;
+		for (IndexPointerRef ptr : pointers) {
+			if (ptr == null) {
+				continue;
+			}
+			final byte[] key = ptr.resolveKey();
+			if (key == null) {
+				continue;
+			}
+			if (rowResolver.apply(key) == null) {
+				anyGhost = true;
+				break;
+			}
+		}
+		return anyGhost;
+	}
+
+	/**
+	 * True when a covering index exists for exact EQ or composite left-prefix EQ on {@code columns}.
 	 */
 	public boolean hasEqIndex(List<String> columns) {
 		if (columns == null || columns.isEmpty()) {
 			return false;
 		}
-		if (columns.size() == 1) {
-			return IndexColumnResolveUtil.resolveSingleColumnIndex(property2Index, columns.getFirst()) != null;
+		if (columns.size() == 1
+				&& IndexColumnResolveUtil.resolveSingleColumnIndex(property2Index, columns.getFirst()) != null) {
+			return true;
 		}
-		return IndexColumnResolveUtil.resolveCompositeIndex(compositeIndexes, columns) != null;
+		if (IndexColumnResolveUtil.resolveCompositeIndex(compositeIndexes, columns) != null) {
+			return true;
+		}
+		return IndexColumnResolveUtil.resolveCompositeLeftPrefixIndex(compositeIndexes, columns) != null;
 	}
 
 	/**
@@ -367,11 +464,14 @@ public class GridCompositeIndex {
 	 */
 	public void forEachPrimaryKey(Consumer<byte[]> consumer) {
 		Objects.requireNonNull(consumer, "consumer");
-		final boolean found = PkIndexScanUtil.forEachPrimaryKeyRow(
-				property2Index, compositeIndexes, primaryKeyColumns, consumer);
-		if (!found) {
-			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
-		}
+		onProbeMailbox(() -> {
+			final boolean found = PkIndexScanUtil.forEachPrimaryKeyRow(
+					property2Index, compositeIndexes, primaryKeyColumns, consumer);
+			if (!found) {
+				throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
+			}
+			return null;
+		});
 	}
 
 	/**
@@ -384,16 +484,18 @@ public class GridCompositeIndex {
 	 * @throws PrimaryKeyPortalUnavailableException when PK exists but is sealed-bound
 	 */
 	public AbstractBPTree.RowKeyCursor<?, ?> openPrimaryKeyRowCursor() {
-		final AbstractIndexOperation<?, ?> tree = PkIndexScanUtil.resolvePrimaryKeyIndex(
-				property2Index, compositeIndexes, primaryKeyColumns);
-		if (tree == null) {
-			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
-		}
-		final AbstractBPTree<?, ?> ram = PkIndexScanUtil.portalRamBpTree(tree);
-		if (ram == null) {
-			throw new PrimaryKeyPortalUnavailableException(tableLabel);
-		}
-		return ram.openRowKeyCursor();
+		return onProbeMailbox(() -> {
+			final AbstractIndexOperation<?, ?> tree = PkIndexScanUtil.resolvePrimaryKeyIndex(
+					property2Index, compositeIndexes, primaryKeyColumns);
+			if (tree == null) {
+				throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
+			}
+			final AbstractBPTree<?, ?> ram = PkIndexScanUtil.portalRamBpTree(tree);
+			if (ram == null) {
+				throw new PrimaryKeyPortalUnavailableException(tableLabel);
+			}
+			return ram.openRowKeyCursor(probeMailbox);
+		});
 	}
 
 	/**
@@ -549,7 +651,7 @@ public class GridCompositeIndex {
 		final int limit = paging != null && paging.limit() > 0 ? paging.limit() : UNBOUNDED_KEY_PAGE;
 		final int[] skipped = {0};
 		final int[] emitted = {0};
-		final boolean found = PkIndexScanUtil.forEachPrimaryKeyRowUntil(
+		final boolean found = onProbeMailbox(() -> PkIndexScanUtil.forEachPrimaryKeyRowUntil(
 				property2Index,
 				compositeIndexes,
 				primaryKeyColumns,
@@ -566,7 +668,7 @@ public class GridCompositeIndex {
 					}
 					emitted[0]++;
 					return true;
-				});
+				}));
 		if (!found) {
 			throw new IllegalStateException("PRIMARY KEY index missing for " + tableLabel);
 		}
@@ -1176,11 +1278,51 @@ public class GridCompositeIndex {
 	 * uses {@link CompositeIndexCondition#executeLimited} directly (no ScopedValue).
 	 */
 	private IndexOperationResult executeFilterWithPaging(FilterCondition conditionTree, PagingData filterPaging, ExplainQuery.QueryPlan queryPlan) {
-		if (conditionTree instanceof CompositeIndexCondition composite && filterPaging != null && filterPaging.hasBoundedLimit()) {
-			final int maxPointers = Math.max(0, filterPaging.offset()) + filterPaging.limit();
-			return composite.executeLimited(queryPlan, maxPointers);
+		final IndexOperationResult first = executeFilterWithPagingRaw(conditionTree, filterPaging, queryPlan);
+		if (strictUniqueSealedHeal == null
+				|| Boolean.TRUE.equals(strictUniqueHealing.get())
+				|| !schemaHasStrictUnique()
+				|| !isGhostOnlyEqResult(first)) {
+			return first;
 		}
-		return QueryPagingContext.callWithPaging(filterPaging, () -> conditionTree.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan));
+		strictUniqueHealing.set(Boolean.TRUE);
+		try {
+			strictUniqueSealedHeal.run();
+			return executeFilterWithPagingRaw(conditionTree, filterPaging, queryPlan);
+		} finally {
+			strictUniqueHealing.set(Boolean.FALSE);
+		}
+	}
+
+	private IndexOperationResult executeFilterWithPagingRaw(
+			FilterCondition conditionTree,
+			PagingData filterPaging,
+			ExplainQuery.QueryPlan queryPlan
+	) {
+		return onProbeMailbox(() -> {
+			if (conditionTree instanceof CompositeIndexCondition composite
+					&& filterPaging != null
+					&& filterPaging.hasBoundedLimit()) {
+				final int maxPointers = Math.max(0, filterPaging.offset()) + filterPaging.limit();
+				return composite.executeLimited(queryPlan, maxPointers);
+			}
+			return QueryPagingContext.callWithPaging(
+					filterPaging,
+					() -> conditionTree.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan));
+		});
+	}
+
+	private boolean schemaHasStrictUnique() {
+		if (schema == null) {
+			return false;
+		}
+		final List<IndexDef> indexes = schema.indexes();
+		for (int i = 0, n = indexes.size(); i < n; i++) {
+			if (indexes.get(i).kind() == IndexType.STRICT) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private QueryOptimizer.ScanChoice recordScanCost(ExplainQuery.QueryPlan queryPlan, QueryData optimizedQuery, IndexOperationResult operationResult) {
@@ -1542,9 +1684,32 @@ public class GridCompositeIndex {
 	}
 
 	/**
+	 * STRICT UNIQUE ghost EQ → one-shot sealed dump heal (SELECT + {@link #lookupEqKeys}).
+	 */
+	public void setStrictUniqueSealedHeal(Runnable heal) {
+		this.strictUniqueSealedHeal = heal;
+	}
+
+	/**
+	 * Serial RAM probe gate (same mailbox as index mutations). Null = unlocked probes (tests only).
+	 */
+	public void setProbeMailbox(IndexProbeMailbox mailbox) {
+		this.probeMailbox = mailbox;
+	}
+
+	/**
 	 * Optional map/sealed size hints for {@link QueryOptimizer} cost model.
 	 */
 	public void setTableRowStatsSupplier(final Supplier<TableRowStats> tableRowStatsSupplier) {
 		this.tableRowStatsSupplier = tableRowStatsSupplier;
+	}
+
+	private <T> T onProbeMailbox(Supplier<T> probe) {
+		Objects.requireNonNull(probe, "probe");
+		final IndexProbeMailbox mailbox = probeMailbox;
+		if (mailbox == null) {
+			return probe.get();
+		}
+		return mailbox.call(probe);
 	}
 }

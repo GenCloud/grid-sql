@@ -101,4 +101,20 @@ public class StrictUniqueUpsertReplaceBenchmark extends AbstractLatencyBenchmark
 						+ "ON CONFLICT (event_name, scheduler_name) DO UPDATE SET id = " + ghostId);
 		bh.consume(result.rows().size());
 	}
+
+	/**
+	 * Happy-path STRICT replace after apply×index defer (map under shardLocks, index after unlock).
+	 */
+	@Benchmark
+	public void ownerReplaceThenSelect(Blackhole bh) {
+		final int ghostId = nextGhostPk.getAndIncrement();
+		engine.execute(
+				"INSERT INTO " + TABLE + " (id, event_name, scheduler_name) VALUES ("
+						+ ghostId + ", '" + EVENT + "', '" + SCHEDULER + "') "
+						+ "ON CONFLICT (event_name, scheduler_name) DO UPDATE SET id = " + ghostId);
+		final SqlResult rows = engine.execute(
+				"SELECT id FROM " + TABLE
+						+ " WHERE event_name = '" + EVENT + "' AND scheduler_name = '" + SCHEDULER + "'");
+		bh.consume(rows.rows().size());
+	}
 }

@@ -18,7 +18,9 @@ package org.genfork.grid.replication;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Predicate;
 
+import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
@@ -155,13 +157,20 @@ public class ReplicationNodeState {
 		appliedWatermark.put(OpLogStreamKeyUtil.format(domainType, shard), new AtomicLong(0));
 	}
 
-	/** Max (lastSeq - applied) across known streams; used by swarm applyLag sensor. */
-	public long maxApplyLag(org.genfork.grid.replication.log.OpLog opLog) {
+	/**
+	 * Max (lastSeq - applied) over streams accepted by {@code streamKeyIncluded}.
+	 * {@code null} predicate = all streams (swarm sensor). Empty acceptance → {@code 0}
+	 * (no AUTH stale from unhydrated LAZY tips when predicate is serving-only).
+	 */
+	public long maxApplyLag(OpLog opLog, Predicate<String> streamKeyIncluded) {
 		if (opLog == null) {
 			return 0L;
 		}
 		long max = 0L;
 		for (String streamKey : opLog.streamKeys()) {
+			if (streamKeyIncluded != null && !streamKeyIncluded.test(streamKey)) {
+				continue;
+			}
 			final int hash = streamKey.lastIndexOf('#');
 			if (hash <= 0) {
 				continue;
@@ -174,7 +183,31 @@ public class ReplicationNodeState {
 		return max;
 	}
 
-	public void seedAllFromOpLog(org.genfork.grid.replication.log.OpLog opLog) {
+	/**
+	 * Tip debt on streams <em>not</em> accepted by {@code servingStreamKeys} (unhydrated LAZY).
+	 */
+	public long maxUnhydratedTipDebt(OpLog opLog, Predicate<String> servingStreamKeys) {
+		if (opLog == null || servingStreamKeys == null) {
+			return 0L;
+		}
+		long max = 0L;
+		for (String streamKey : opLog.streamKeys()) {
+			if (servingStreamKeys.test(streamKey)) {
+				continue;
+			}
+			final int hash = streamKey.lastIndexOf('#');
+			if (hash <= 0) {
+				continue;
+			}
+			final String domain = streamKey.substring(0, hash);
+			final int shard = Integer.parseInt(streamKey.substring(hash + 1));
+			final long lag = Math.max(0L, opLog.lastSeq(domain, shard) - appliedWatermark(domain, shard));
+			max = Math.max(max, lag);
+		}
+		return max;
+	}
+
+	public void seedAllFromOpLog(OpLog opLog) {
 		if (opLog == null) {
 			return;
 		}

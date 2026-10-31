@@ -6,13 +6,13 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-10-30-jepsen-edge-matrix-1dc-join-shards |
-| date | 2026-10-30T00:50:14.5889217+03:00 |
-| git | 2557415 |
+| stamp | 2026-10-29-sealed-lifecycle-regress-jepsen |
+| date | 2026-10-31T13:00:27.3422526+03:00 |
+| git | 97917fd |
 | host | local |
-| mode | `1dc-join-shards-chaos` |
-| outcome | `PASS` |
-| notes | join-shards=PASS |
+| mode | `smoke` |
+| outcome | `HARNESS_READY` |
+| notes | compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows) |
 
 ## History
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
@@ -955,3 +955,33 @@ Details + p50/p95/p99: [multidc/RESULTS.md](multidc/RESULTS.md).
 - full-jepsen: PASS
 - command: run-jepsen-join.ps1 join (time-limit=45)
 - notes: join-shards=PASS
+
+### 2026-10-29-sealed-lifecycle-regress-jepsen
+- mode: smoke
+- outcome: HARNESS_READY
+- git: 97917fd
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-10-29-sealed-lifecycle-regress-jepsen
+- mode: smoke
+- outcome: HARNESS_READY
+- git: 97917fd
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-10-29-sealed-lifecycle-regress-jepsen
+- mode: smoke
+- outcome: HARNESS_READY
+- git: 97917fd
+- compose: validated
+- chaos-it: pass
+- full-jepsen: not-run
+- command: run-jepsen-smoke.ps1
+- notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)

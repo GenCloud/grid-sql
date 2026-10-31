@@ -42,9 +42,12 @@ import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.snapshot.IndexCheckpointService;
 import org.genfork.grid.replication.snapshot.SnapshotService;
+import org.genfork.grid.replication.snapshot.sealed.DumpDomainResult;
 import org.genfork.grid.replication.snapshot.sealed.SealedDumpSafetyUtil;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapReader;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
+import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
+import org.genfork.grid.replication.util.EnvelopeClosureHydrateUtil;
 import org.genfork.grid.replication.util.LazyShardHydrateFlightUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.replication.util.OrchidTipCatchUpUtil;
@@ -259,8 +262,13 @@ public final class SealedHydrateService {
 						domainType, shard, wm, nodeState.getNodeId());
 			}
 		}
+		// Orphan multi-stream membership can block dump forever; close before the huge-delta fence
+		// so at-risk seal can create .sbpt (mid-TX ENVELOPE defer unchanged).
+		closeOrphanApplyEnvelopesAfterStreamHydrate(domainType, shard, applier);
+		maybeDumpAtRiskShardBeforeHugeDeltaReject(domainType, shard, wm);
 		rejectHugeOpLogDeltaWithoutSbpt(domainType, shard, wm);
 		final int n = snapshotService.hydrateOpLogFrom(domainType, shard, wm, applier, homologousRepair);
+		closeOrphanApplyEnvelopesAfterStreamHydrate(domainType, shard, applier);
 		if (n > 0 || wm > 0) {
 			log.debug("Lazy-hydrated domain={} shard={} ops={} sealedWm={}", domainType, shard, n, wm);
 		}
@@ -282,6 +290,13 @@ public final class SealedHydrateService {
 			return true;
 		}
 		return adaptiveDiskFirstController != null && adaptiveDiskFirstController.forceLazySemantics();
+	}
+
+	/**
+	 * {@code true} when {@code domain#shard} completed LAZY/FULL hydrate memo (serving stream).
+	 */
+	public boolean isStreamHydrated(String streamKey) {
+		return streamKey != null && hydratedShards.contains(streamKey);
 	}
 
 	/** Configured hydrate mode string ({@code FULL} or {@code LAZY}). */
@@ -366,6 +381,20 @@ public final class SealedHydrateService {
 	}
 
 	/**
+	 * STRICT UNIQUE ghost EQ heal: one sealed dump; {@code false} when any shard deferred.
+	 * <p>
+	 * Does not truncate OpLog (checkpoint dump retains that); EQ heal must not race concurrent
+	 * seal truncate under load.
+	 */
+	boolean tryHealSealedDomainIndexes(String domainType) {
+		if (sealedGridMapService == null || domainType == null) {
+			return true;
+		}
+		final DumpDomainResult result = dumpDomainSealedResult(domainType, false);
+		return !result.anyDeferred();
+	}
+
+	/**
 	 * Effective periodic sealed-dump interval after clamp.
 	 */
 	long sealedDumpIntervalMs() {
@@ -397,6 +426,85 @@ public final class SealedHydrateService {
 				key -> key.startsWith(prefix));
 	}
 
+	/**
+	 * Complete multi-stream apply envelopes left open after per-stream OpLog hydrate, or
+	 * fail-closed abort so ENVELOPE cannot starve sealed dump. Mid-TX dump defer unchanged.
+	 * <p>
+	 * Sibling replay is {@link SnapshotService#hydrateOpLogFrom} only — never
+	 * {@link #runLazyShardHydrate} / this method — so closure cannot re-enter.
+	 */
+	private void closeOrphanApplyEnvelopesAfterStreamHydrate(
+			String domainType,
+			int shard,
+			ReplicaApplier applier
+	) {
+		if (applier == null) {
+			return;
+		}
+		final TxEnvelopeCoordinator gate = applier.envelopeCoordinator();
+		if (gate == null) {
+			return;
+		}
+		EnvelopeClosureHydrateUtil.completeOrAbortAfterStreamHydrate(
+				gate,
+				appliers,
+				domainType,
+				shard,
+				this::hydrateSiblingOpLogForEnvelopeClosure);
+	}
+
+	/**
+	 * OpLog-tail replay for a sibling stream during envelope closure (no LAZY reject / memo).
+	 */
+	private void hydrateSiblingOpLogForEnvelopeClosure(
+			String siblingDomain,
+			int siblingShard,
+			ReplicaApplier siblingApplier
+	) {
+		final long siblingWm = nodeState == null
+				? 0L
+				: nodeState.appliedWatermark(siblingDomain, siblingShard);
+		snapshotService.hydrateOpLogFrom(
+				siblingDomain, siblingShard, siblingWm, siblingApplier, homologousRepair);
+	}
+
+	/**
+	 * When OpLog tip already exceeds the without-{@code .sbpt} ceiling, attempt one gated dump
+	 * (prepareSeal inside {@link #dumpDomainSealed}) so LAZY reopen is not permanently fail-closed.
+	 * Mid-TX / live ENVELOPE defer still blocks dump; ceiling is never raised.
+	 */
+	private void maybeDumpAtRiskShardBeforeHugeDeltaReject(String domainType, int shard, long sealedWm) {
+		if (opLog == null || sealedGridMapService == null || domainType == null) {
+			return;
+		}
+		if (sealedGridMapService.hasUsableSealedIndex(domainType, shard)) {
+			return;
+		}
+		final long last = opLog.lastSeq(domainType, shard);
+		final long delta = Math.max(0L, last - Math.max(0L, sealedWm));
+		if (delta <= MAX_OPLOG_DELTA_WITHOUT_SBPT) {
+			return;
+		}
+		DumpDomainResult result = DumpDomainResult.empty();
+		try {
+			result = dumpDomainSealedResult(domainType, true);
+		} catch (RuntimeException ex) {
+			log.warn("At-risk dump before huge-delta reject failed domain={} shard={} tip={} wm={}: {}",
+					domainType, shard, last, sealedWm, ex.toString());
+		}
+		if (!sealedGridMapService.hasUsableSealedIndex(domainType, shard)) {
+			final long tipAfter = opLog.lastSeq(domainType, shard);
+			final long deltaAfter = Math.max(0L, tipAfter - Math.max(0L, sealedWm));
+			final ReplicaApplier applier = appliers.get(domainType);
+			final SealedDumpSafetyUtil.DeferReason defer =
+					SealedDumpSafetyUtil.deferReason(applier, domainType, shard);
+			log.warn(
+					"At-risk dump left no usable .sbpt domain={} shard={} tipBefore={} tipAfter={} wm={} deltaAfter={} rows={} deferred={} reasons={} deferNow={}",
+					domainType, shard, last, tipAfter, sealedWm, deltaAfter, result.rows(),
+					result.deferredShards(), result.deferReasons(), defer);
+		}
+	}
+
 	private void rejectHugeOpLogDeltaWithoutSbpt(String domainType, int shard, long sealedWm) {
 		if (opLog == null || sealedGridMapService == null) {
 			return;
@@ -411,10 +519,14 @@ public final class SealedHydrateService {
 			return;
 		}
 		hydratedShards.remove(OpLogStreamKeyUtil.format(domainType, shard));
+		final ReplicaApplier applier = appliers.get(domainType);
+		final SealedDumpSafetyUtil.DeferReason defer =
+				SealedDumpSafetyUtil.deferReason(applier, domainType, shard);
 		throw new IllegalStateException(
 				"OpLog delta " + delta + " after wm=" + sealedWm
 						+ " exceeds " + MAX_OPLOG_DELTA_WITHOUT_SBPT
 						+ " without sealed .sbpt for " + OpLogStreamKeyUtil.format(domainType, shard)
+						+ " defer=" + defer
 						+ " — force seal dump before reopen");
 	}
 
@@ -439,9 +551,15 @@ public final class SealedHydrateService {
 			return;
 		}
 		try {
-			final int sealedRows = dumpDomainSealed(domainType, true);
-			log.debug("Healed incomplete .sbpt via sealed dump domain={} shard={} rows={}",
-					domainType, shard, sealedRows);
+			final DumpDomainResult result = dumpDomainSealedResult(domainType, true);
+			if (sealedGridMapService.hasUsableSealedIndex(domainType, shard)) {
+				log.debug("Healed incomplete .sbpt via sealed dump domain={} shard={} rows={}",
+						domainType, shard, result.rows());
+			} else {
+				log.warn(
+						"Incomplete .sbpt heal dump did not produce usable index domain={} shard={} rows={} deferred={} reasons={}",
+						domainType, shard, result.rows(), result.deferredShards(), result.deferReasons());
+			}
 		} catch (RuntimeException ex) {
 			log.warn("Incomplete .sbpt heal dump failed domain={} shard={}: {}",
 					domainType, shard, ex.toString());
@@ -580,37 +698,68 @@ public final class SealedHydrateService {
 	}
 
 	private int dumpDomainSealed(String domain) {
-		return dumpDomainSealed(domain, true);
+		return dumpDomainSealedResult(domain, true).rows();
 	}
 
 	private int dumpDomainSealed(String domain, boolean truncateOpLog) {
+		return dumpDomainSealedResult(domain, truncateOpLog).rows();
+	}
+
+	/**
+	 * Single choke for gated sealed dump: {@code prepareSealForDomain} then dump with tracking gate.
+	 */
+	private DumpDomainResult dumpDomainSealedResult(String domain, boolean truncateOpLog) {
 		if (sealedGridMapService == null || domain == null) {
-			return 0;
+			return DumpDomainResult.empty();
 		}
 		final ReplicaApplier applier = appliers.get(domain);
-		final SealedGridMapService.DumpDeferGate gate =
-				applier == null ? null : SealedDumpSafetyUtil.deferGate(applier);
-		final int sealedRows = sealedGridMapService.dumpDomain(
+		prepareSealForDomainDump(domain, applier);
+		final SealedDumpSafetyUtil.TrackingDeferGate gate = applier == null
+				? null
+				: SealedDumpSafetyUtil.trackingDeferGate(applier);
+		final DumpDomainResult result = sealedGridMapService.dumpDomainResult(
 				domain, opLog, nodeState, gate, truncateOpLog);
-		long maxWm = 0L;
-		for (String streamKey : opLog.streamKeys()) {
-			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domain)) {
-				continue;
+		if (result.rows() > 0) {
+			long maxWm = 0L;
+			if (opLog != null) {
+				for (String streamKey : opLog.streamKeys()) {
+					if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domain)) {
+						continue;
+					}
+					final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+					if (parsed == null) {
+						continue;
+					}
+					final int shard = parsed.shard();
+					maxWm = Math.max(maxWm, nodeState.appliedWatermark(domain, shard));
+					maxWm = Math.max(maxWm, opLog.lastSeq(domain, shard));
+				}
 			}
-			final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
-			if (parsed == null) {
-				continue;
-			}
-			final int shard = parsed.shard();
-			maxWm = Math.max(maxWm, nodeState.appliedWatermark(domain, shard));
-			maxWm = Math.max(maxWm, opLog.lastSeq(domain, shard));
+			writeIndexKeyCatalog(domain, maxWm);
+			log.debug("Sealed GridMap domain={} rows={} truncateOpLog={} deferred={}",
+					domain, result.rows(), truncateOpLog, result.deferredShards());
+		} else if (result.anyDeferred() && domainHasAtRiskShardWithoutSbpt(domain)) {
+			log.warn(
+					"Sealed dump fully/partially deferred for at-risk domain={} rows={} deferred={} reasons={}",
+					domain, result.rows(), result.deferredShards(), result.deferReasons());
 		}
-		writeIndexKeyCatalog(domain, maxWm);
-		if (sealedRows > 0) {
-			log.debug("Sealed GridMap domain={} rows={} truncateOpLog={}",
-					domain, sealedRows, truncateOpLog);
+		return result;
+	}
+
+	private void prepareSealForDomainDump(String domain, ReplicaApplier applier) {
+		if (applier == null || sealedGridMapService == null) {
+			return;
 		}
-		return sealedRows;
+		final TxEnvelopeCoordinator gate = applier.envelopeCoordinator();
+		if (gate == null) {
+			return;
+		}
+		EnvelopeClosureHydrateUtil.prepareSealForDomain(
+				gate,
+				appliers,
+				domain,
+				sealedGridMapService.collectDumpShards(domain, opLog),
+				this::hydrateSiblingOpLogForEnvelopeClosure);
 	}
 
 	public void restoreOrMarkIndexCheckpoint(String domainType, long maxSeq) {
@@ -755,6 +904,7 @@ public final class SealedHydrateService {
 			}
 			if (applier != null) {
 				snapshotService.hydrateOpLogFrom(domainType, shard, wm, applier, homologousRepair);
+				closeOrphanApplyEnvelopesAfterStreamHydrate(domainType, shard, applier);
 			}
 			final String key = OpLogStreamKeyUtil.format(domainType, shard);
 			hydratedShards.add(key);

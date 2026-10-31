@@ -41,17 +41,17 @@ class StrictUniqueSelfOwnerTest {
 
 	@Test
 	void selfOwnerUpdateAllowedNewPkRejected() {
-		final TableSchema schema = TableSchema.builder("event_schedulers")
+		final TableSchema schema = TableSchema.builder("uniq_pair_t")
 				.primaryKey("id", SqlType.INT)
-				.column("event_name", SqlType.VARCHAR)
-				.column("scheduler_name", SqlType.VARCHAR)
+				.column("k1", SqlType.VARCHAR)
+				.column("k2", SqlType.VARCHAR)
 				.index(IndexDef.of(
-						"event_schedulers_event_scheduler_uindex",
+						"uniq_pair_t_k1_k2_u",
 						IndexType.STRICT,
-						"event_name", "scheduler_name"))
+						"k1", "k2"))
 				.build();
 		final TableStore store = new TableStore(schema, SHARDS, null);
-		final Object[] row = new Object[]{1, "Castle", "sched-1"};
+		final Object[] row = new Object[]{1, "alpha", "beta"};
 		store.upsert(row, false);
 
 		final byte[] key = PrimaryKeyCodec.encodeRow(schema, row);
@@ -59,7 +59,7 @@ class StrictUniqueSelfOwnerTest {
 		assertDoesNotThrow(() ->
 				StrictUniqueConstraintUtil.validateSecondaryStrict(store, schema, value, key));
 
-		final Object[] ghost = new Object[]{99, "Castle", "sched-1"};
+		final Object[] ghost = new Object[]{99, "alpha", "beta"};
 		final byte[] ghostKey = PrimaryKeyCodec.encodeRow(schema, ghost);
 		final byte[] ghostValue = RowEncoder.encode(schema, ghost);
 		assertThrows(NonUniqueValueException.class, () ->

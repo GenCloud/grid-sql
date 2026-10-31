@@ -107,6 +107,7 @@ import org.genfork.grid.sql.udf.SqlUdfBinder;
 import org.genfork.grid.sql.udf.SqlUdfCallContext;
 import org.genfork.grid.sql.udf.SqlUdfLookup;
 import org.genfork.grid.sql.udf.SqlUdfMutatingOps;
+import org.genfork.grid.sql.util.CatalogDdlApplyLaneUtil;
 import org.genfork.grid.store.TableStore;
 
 /**
@@ -127,6 +128,7 @@ public final class SqlEngine {
 	private final ReplicationCoordinator replication;
 	private final SqlRecordLockManager lockManager = new SqlRecordLockManager();
 	private final AtomicBoolean applyingReplicatedDdl = new AtomicBoolean(false);
+	private final CatalogDdlApplyLaneUtil catalogDdlLane = new CatalogDdlApplyLaneUtil();
 	private final SqlDdlExecutor ddl;
 	private final SqlDmlExecutor dml;
 	private final SqlQueryExecutor query;
@@ -813,12 +815,37 @@ public final class SqlEngine {
 
 	/**
 	 * Peer / proposer self-apply path for {@link org.genfork.grid.replication.codec.ReplicationOpType#DDL}.
+	 * Serial with {@link #recoverPersistedCatalog()}; duplicate epoch is idempotent ACK (no-op).
 	 */
 	public void applyReplicatedDdl(String ddlSql, long schemaEpoch) {
+		catalogDdlLane.runSerial(() -> applyReplicatedDdlOnLane(ddlSql, schemaEpoch));
+	}
+
+	/**
+	 * Replay catalog snapshot after process restart:
+	 * {@code schemas.list} → {@code ddl.sql} → missing tables from {@code *.meta}.
+	 * Skips re-append / OpLog publish. Row data durability is outside this catalog path
+	 * (in-memory / replication OpLog); meta+DDL keep schema aligned with disk.
+	 * Serial with {@link #applyReplicatedDdl}.
+	 */
+	public void recoverPersistedCatalog() {
+		catalogDdlLane.runSerial(this::recoverPersistedCatalogOnLane);
+	}
+
+	private void applyReplicatedDdlOnLane(String ddlSql, long schemaEpoch) {
 		if (ddlSql == null || ddlSql.isBlank()) {
 			throw new IllegalArgumentException("replicated DDL is empty");
 		}
-		catalog.rejectIfStaleDdlEpoch(schemaEpoch);
+		if (schemaEpoch > 0L) {
+			final long applied = catalog.maxAppliedDdlEpoch();
+			if (schemaEpoch < applied) {
+				catalog.rejectIfStaleDdlEpoch(schemaEpoch);
+			}
+			if (schemaEpoch <= applied) {
+				// Idempotent ACK: already applied this epoch (duplicate ship / boot overlap).
+				return;
+			}
+		}
 		if (!applyingReplicatedDdl.compareAndSet(false, true)) {
 			throw new IllegalStateException("nested replicated DDL apply");
 		}
@@ -833,13 +860,7 @@ public final class SqlEngine {
 		}
 	}
 
-	/**
-	 * Replay catalog snapshot after process restart:
-	 * {@code schemas.list} → {@code ddl.sql} → missing tables from {@code *.meta}.
-	 * Skips re-append / OpLog publish. Row data durability is outside this catalog path
-	 * (in-memory / replication OpLog); meta+DDL keep schema aligned with disk.
-	 */
-	public void recoverPersistedCatalog() {
+	private void recoverPersistedCatalogOnLane() {
 		final List<String> named = catalog.loadPersistedNamedSchemas();
 		final List<String> lines = catalog.loadPersistedDdl();
 		final List<TableSchema> metas = catalog.loadPersistedMetaSchemas();

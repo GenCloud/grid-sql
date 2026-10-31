@@ -108,6 +108,7 @@ public final class TableStore {
 
 		this.index = new GridCompositeIndex(schema);
 		this.indexWorker = new GridIndexWorker(index, schema);
+		this.index.setProbeMailbox(indexWorker.probeMailbox());
 		this.indexWorker.start();
 
 		this.processors = new GridEntriesProcessor[this.shards];
@@ -121,15 +122,24 @@ public final class TableStore {
 			worker.start();
 		}
 
+		// Index mailbox / STRICT displace must not call ensureShardHydrated (shardLocks re-entry).
 		indexWorker.setDisplacedStrictOwnerTombstone(pk -> {
-			final GridEntriesProcessor processor = getProcessor(pk);
+			final GridEntriesProcessor processor = processorForKeyNoHydrate(pk);
 			if (processor != null) {
 				processor.tombstoneDisplacedStrictOwner(pk);
 			}
 		});
 
-		index.setRowResolver(key -> getProcessor(key).get(key));
+		index.setRowResolver(key -> {
+			final GridEntriesProcessor processor = processorForKeyNoHydrate(key);
+			return processor == null ? null : processor.get(key);
+		});
 		index.setTableRowStatsSupplier(this::approxRowStats);
+		index.setStrictUniqueSealedHeal(() -> {
+			if (replicationCoordinator != null) {
+				replicationCoordinator.tryHealSealedDomainIndexes(schema.catalogKey());
+			}
+		});
 
 		if (replicationCoordinator != null && replicationCoordinator.isEnabled()) {
 			final MutationRecorder recorder = replicationCoordinator.registerDomain(
@@ -502,20 +512,45 @@ public final class TableStore {
 
 	/**
 	 * Wire EQ on covering index → row PK keys (no SQL string).
+	 * <p>
+	 * STRICT UNIQUE: ghost-only sealed postings trigger one-shot seal heal + re-probe
+	 * ({@link StrictUniqueEqHealUtil}); live hits never dump.
 	 *
 	 * @throws IllegalArgumentException when no covering index exists
 	 */
 	public List<byte[]> lookupEqKeys(List<String> columns, byte[][] wireValues) {
 		ensureAllShardsHydrated();
-		return index.lookupEqKeys(columns, wireValues);
+		return StrictUniqueEqHealUtil.liveEqKeys(this, columns, wireValues);
 	}
 
 	/**
-	 * Stream wire EQ hits (no SQL string).
+	 * Stream wire EQ hits (no SQL string). STRICT UNIQUE ghost-heal as {@link #lookupEqKeys}.
 	 */
 	public void forEachEqKey(List<String> columns, byte[][] wireValues, Consumer<byte[]> consumer) {
 		ensureAllShardsHydrated();
-		index.forEachEqKey(columns, wireValues, consumer);
+		StrictUniqueEqHealUtil.forEachLiveEqKey(this, columns, wireValues, consumer);
+	}
+
+	/**
+	 * Raw index EQ without ghost-heal (STRICT UNIQUE choke uses this internally).
+	 */
+	List<byte[]> rawIndexEqKeys(List<String> columns, byte[][] wireValues) {
+		return index.lookupEqKeys(columns, wireValues);
+	}
+
+	/** Nullable replication coordinator (solo / no durability). */
+	ReplicationCoordinator replicationCoordinatorOrNull() {
+		return replicationCoordinator;
+	}
+
+	/**
+	 * Tombstone a PK displaced from a STRICT UNIQUE slot (ON CONFLICT dual-live repair).
+	 */
+	public void tombstoneStrictUniqueOwner(byte[] keyBytes) {
+		if (keyBytes == null) {
+			return;
+		}
+		getProcessor(keyBytes).tombstoneDisplacedStrictOwner(keyBytes);
 	}
 
 	/**
@@ -841,6 +876,19 @@ public final class TableStore {
 			replicationCoordinator.ensureShardHydrated(schema.catalogKey(), shard);
 		}
 		return processors[shard];
+	}
+
+	/**
+	 * Processor for index-mailbox callbacks (STRICT displace tombstone / rowResolver).
+	 * <p>
+	 * Must not call {@code ensureShardHydrated}: that takes {@code ReplicaApplier.shardLocks}
+	 * while apply may hold another shard lock awaiting {@code indexNow} (AB-BA deadlock).
+	 */
+	private GridEntriesProcessor processorForKeyNoHydrate(byte[] key) {
+		if (key == null) {
+			return null;
+		}
+		return processors[getShard(key)];
 	}
 
 	private void ensureAllShardsHydrated() {

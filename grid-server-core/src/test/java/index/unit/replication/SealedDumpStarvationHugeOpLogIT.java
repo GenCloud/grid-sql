@@ -29,12 +29,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Huge OpLog without {@code .sbpt} fail-closes LAZY hydrate; successful sealed dump (gates NONE)
- * clears the fence without raising {@code MAX_OPLOG_DELTA_WITHOUT_SBPT}.
+ * Huge OpLog without {@code .sbpt}: LAZY open at-risk-dumps when dump gates are NONE,
+ * then hydrates — without raising {@code MAX_OPLOG_DELTA_WITHOUT_SBPT}.
+ * ENVELOPE mid-TX still blocks dump and keeps the huge-delta reject fail-closed.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -52,7 +51,7 @@ class SealedDumpStarvationHugeOpLogIT {
 	Path tmp;
 
 	@Test
-	void dumpThenHydrateClearsFenceWithoutWeakeningLimit() {
+	void atRiskDumpOnLazyOpenClearsFenceWithoutWeakeningLimit() {
 		final GridConfigurationProperties props = new GridConfigurationProperties();
 		props.getDurability().setEnabled(true);
 		props.getDurability().setHydrateMode("LAZY");
@@ -73,18 +72,8 @@ class SealedDumpStarvationHugeOpLogIT {
 					DOMAIN, 0, PAD_SEQ, ReplicationOpType.UPSERT, KEY, VAL, 1L, 0L));
 			coord.getOpLog().append(pad);
 
-			final IllegalStateException gate = assertThrows(IllegalStateException.class,
-					() -> coord.ensureShardHydrated(DOMAIN, 0));
-			assertTrue(gate.getMessage().contains("without sealed .sbpt"), gate.getMessage());
-			assertTrue(gate.getMessage().contains(String.valueOf(PAD_SEQ))
-							|| gate.getMessage().contains("exceeds"),
-					gate.getMessage());
-
-			final int sealedRows = coord.dumpDomainSnapshot(DOMAIN);
-			assertTrue(sealedRows > 0, "dump with gates NONE must produce sealed rows");
-
 			assertDoesNotThrow(() -> coord.ensureShardHydrated(DOMAIN, 0),
-					"after sealed dump, LAZY hydrate must pass without raising OpLog ceiling");
+					"gates NONE → at-risk dump then LAZY hydrate without raising OpLog ceiling");
 		} finally {
 			coord.stop();
 		}
