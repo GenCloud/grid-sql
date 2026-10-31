@@ -28,8 +28,8 @@ import org.genfork.grid.serial.WireLikeMatcher;
  * <p>
  * EQ/range merge sealed seeks. {@link #searchLike} merges a sealed leaf-walk using
  * {@link WireLikeMatcher} (same {@code %}/{@code _} semantics as RAM). Trailing-percent
- * patterns use a starts-with fast path inside the matcher; length-first sealed key order
- * prevents a contiguous range seek for {@code LIKE 'foo%'}.
+ * patterns use a starts-with fast path inside the matcher; LIKE still leaf-walks
+ * (no contiguous range seek for {@code LIKE 'foo%'}).
  * {@link #searchAll} / {@link #searchNotEq} merge RAM with sealed leaf walk (no FULL
  * {@code .sbpt} hydrate into RAM BPTree).
  * Closed readers are pruned and skipped (no ISE on the query path).

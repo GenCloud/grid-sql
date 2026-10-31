@@ -73,10 +73,19 @@ public class GridPointerBPTreeStringValueTest extends AbstractGridPointerBPTreeT
 
 	@Test
 	public void _03_expect_range() {
-		final byte[] lo = SqlWireUtil.toGenericArray(VALUES[2]);
-		final byte[] hi = SqlWireUtil.toGenericArray(VALUES[6]);
+		// Inclusive range uses UTF-8 payload-lex (== String.compareTo), not length-first wire size.
+		final String loStr = VALUES[2];
+		final String hiStr = VALUES[6];
+		int expected = 0;
+		for (String value : VALUES) {
+			if (value.compareTo(loStr) >= 0 && value.compareTo(hiStr) <= 0) {
+				expected++;
+			}
+		}
+		final byte[] lo = SqlWireUtil.toGenericArray(loStr);
+		final byte[] hi = SqlWireUtil.toGenericArray(hiStr);
 		final IndexOperationResult result = laxTree.searchRange(new SingleTreeKey(lo), new SingleTreeKey(hi));
-		Assertions.assertEquals(5, result.getPointers().size());
+		Assertions.assertEquals(expected, result.getPointers().size());
 		Assertions.assertArrayEquals(getFirstPointerValue(result.getPointers()), lo);
 		Assertions.assertArrayEquals(getLastPointerValue(result.getPointers()), hi);
 	}

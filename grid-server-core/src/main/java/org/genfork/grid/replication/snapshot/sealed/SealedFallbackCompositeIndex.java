@@ -27,7 +27,7 @@ import org.genfork.grid.mem.index.btree.IndexOperationResult;
  * <p>
  * Full-key EQ/range encode via {@link SealedCompositeIndexKey}. Partial / left-prefix EQ
  * and composite LIKE / open or partial ranges merge sealed {@code .sbpt} via leaf-walk
- * (length-first order is not a contiguous prefix range). Ordered full-key EQ/BETWEEN seeks
+ * (prefix partial EQ is not a contiguous range seek). Ordered full-key EQ/BETWEEN seeks
  * stay on {@link SealedBPTreeReader#searchEq}/{@link SealedBPTreeReader#searchRange}.
  * {@link #searchAll} / {@link #searchNotEq} merge RAM with sealed leaf walk (no FULL
  * {@code .sbpt} hydrate into RAM BPTree).

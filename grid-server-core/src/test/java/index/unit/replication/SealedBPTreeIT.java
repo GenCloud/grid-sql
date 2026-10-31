@@ -27,7 +27,11 @@ import org.genfork.grid.replication.snapshot.sealed.SealedMetrics;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -35,6 +39,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -75,6 +80,27 @@ class SealedBPTreeIT {
 			assertTrue(SealedMetrics.SEALED_INDEX_HIT.get() >= 2);
 			assertTrue(SealedMetrics.SEALED_INDEX_PAGE_FAULT.get() >= 0);
 		}
+	}
+
+	@Test
+	void rejectsLegacyVersion2LengthFirstFiles() throws Exception {
+		final Path file = temporary.resolve("legacy-v2.sbpt");
+		Files.createDirectories(file.getParent());
+		final ByteBuffer header = ByteBuffer.allocate(SealedBPTreeReader.MIN_FILE_BYTES).order(ByteOrder.BIG_ENDIAN);
+		header.putInt(SealedBPTreeWriter.MAGIC);
+		header.putInt(SealedBPTreeWriter.VERSION_LEGACY_SIGNED_LENGTH_FIRST);
+		header.putInt(SealedBPTreeWriter.PAGE_SIZE);
+		header.putInt(1);
+		header.putInt(0);
+		header.putInt(0);
+		header.putInt(0);
+		header.putShort((short) 0);
+		header.putShort((short) 0);
+		header.putLong(0L);
+		header.putInt(1);
+		Files.write(file, header.array());
+		final IOException thrown = assertThrows(IOException.class, () -> SealedBPTreeReader.open(file));
+		assertTrue(thrown.getMessage().contains("VERSION=2"), thrown.getMessage());
 	}
 
 	@Test
