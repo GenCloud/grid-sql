@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import org.genfork.grid.catalog.ColumnListEqualUtil;
 import org.genfork.grid.mem.index.btree.CompositeTreeKey;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
 
@@ -71,7 +72,7 @@ public final class IndexColumnResolveUtil {
 		}
 		for (Entry<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> entry
 				: compositeIndexes.entrySet()) {
-			if (CompositeIndexProbeOps.columnsEqualIgnoreCaseOrdered(entry.getKey(), columns)) {
+			if (ColumnListEqualUtil.columnsEqualIgnoreCaseOrdered(entry.getKey(), columns)) {
 				return entry.getValue();
 			}
 		}

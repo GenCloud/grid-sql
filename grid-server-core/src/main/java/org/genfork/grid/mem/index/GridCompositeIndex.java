@@ -17,6 +17,7 @@ package org.genfork.grid.mem.index;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.genfork.grid.catalog.ColumnDef;
+import org.genfork.grid.catalog.ColumnListEqualUtil;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.exceptions.ConditionValidationException;
@@ -258,7 +259,7 @@ public class GridCompositeIndex {
 		}
 		for (Entry<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> entry
 				: compositeIndexes.entrySet()) {
-			if (CompositeIndexProbeOps.columnsEqualIgnoreCaseOrdered(entry.getKey(), columns)) {
+			if (ColumnListEqualUtil.columnsEqualIgnoreCaseOrdered(entry.getKey(), columns)) {
 				compositeIndexes.remove(entry.getKey());
 				revertCompositeProperty2Index.remove(entry.getKey());
 				return;
@@ -971,9 +972,16 @@ public class GridCompositeIndex {
 
 	/**
 	 * Index row fields; returns STRICT unique owners displaced by this upsert (empty when none).
+	 * <p>
+	 * Same-PK upsert with unchanged secondary keys keeps live postings (no {@code free}→reinsert gap
+	 * that empties STRICT EQ outside {@link IndexProbeMailbox}).
 	 */
 	public List<byte[]> putIndexKeyValues(long keyNativePointer, byte[] keyArray, Map<String, byte[]> fieldValues) {
 		final IndexPointerRef keyPointerRef = new IndexPointerRef(keyNativePointer, keyArray);
+		if (retainUnchangedSecondaryPostings(keyArray, fieldValues)) {
+			freeUnusedPointer(keyPointerRef);
+			return List.of();
+		}
 		List<byte[]> displaced = null;
 		removeIndexPointersForKey(keyArray);
 		displaced = putSingleColumnIndexValues(keyPointerRef, keyArray, fieldValues, displaced);
@@ -981,6 +989,58 @@ public class GridCompositeIndex {
 			displaced = putCompositeIndexValues(keyPointerRef, keyArray, indexFields, fieldValues, null, displaced);
 		}
 		return displaced == null ? List.of() : displaced;
+	}
+
+	/**
+	 * {@code true} when this PK already owns every secondary posting and wire keys are unchanged.
+	 */
+	private boolean retainUnchangedSecondaryPostings(byte[] keyArray, Map<String, byte[]> fieldValues) {
+		if (keyArray == null || fieldValues == null) {
+			return false;
+		}
+		final ByteArrayContainer keyContainer = new ByteArrayContainer(keyArray);
+		boolean sawPrior = false;
+		for (String fieldName : property2Index.keySet()) {
+			final Map<ByteArrayContainer, RevertSingle> revert = revertProperty2Index.get(fieldName);
+			final RevertSingle prior = revert == null ? null : revert.get(keyContainer);
+			final byte[] newVal = fieldValues.get(fieldName);
+			if (prior == null) {
+				if (newVal != null) {
+					return false;
+				}
+				continue;
+			}
+			sawPrior = true;
+			if (newVal == null || !Arrays.equals(prior.treeKey().getKey(), newVal)) {
+				return false;
+			}
+		}
+		for (List<String> indexFields : compositeIndexes.keySet()) {
+			final Map<ByteArrayContainer, RevertComposite> revert =
+					revertCompositeProperty2Index.get(indexFields);
+			final RevertComposite prior = revert == null ? null : revert.get(keyContainer);
+			if (prior == null) {
+				return false;
+			}
+			sawPrior = true;
+			final byte[][] priorKeys = prior.treeKey().getKey();
+			if (priorKeys == null || priorKeys.length != indexFields.size()) {
+				return false;
+			}
+			for (int i = 0; i < indexFields.size(); i++) {
+				final byte[] newVal = fieldValues.getOrDefault(indexFields.get(i), ArrayUtils.EMPTY_BYTE_ARRAY);
+				if (!Arrays.equals(priorKeys[i], newVal)) {
+					return false;
+				}
+			}
+		}
+		return sawPrior;
+	}
+
+	private static void freeUnusedPointer(IndexPointerRef pointer) {
+		if (pointer != null && pointer.getPointer() != 0L && !pointer.isFree()) {
+			pointer.free();
+		}
 	}
 
 	/**
@@ -1009,7 +1069,6 @@ public class GridCompositeIndex {
 			return displaced == null ? List.of() : displaced;
 		}
 		final List<String> combination = IndexColumnKeyUtil.compositeKey(def.columns());
-		removePriorComposite(combination, keyArray);
 		final List<byte[]> displaced =
 				putCompositeIndexValues(keyPointerRef, keyArray, combination, fieldValues, def.name(), null);
 		return displaced == null ? List.of() : displaced;

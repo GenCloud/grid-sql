@@ -24,7 +24,6 @@ import java.nio.ByteOrder;
 import jodd.util.Bits;
 import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
 import org.genfork.grid.mem.index.btree.comparator.WireUtf8KeyOrderUtil;
-import org.genfork.grid.replication.snapshot.sealed.SealedIndexKeyOrder;
 import org.genfork.grid.serial.SqlWireUtil;
 import org.genfork.grid.serial.WireFieldCompare;
 import org.genfork.grid.utils.SerialUtil;
@@ -47,7 +46,6 @@ class ArraysComparatorUtf8OrderTest {
 		final int expected = "Name-9".compareTo("Name-10");
 		assertEquals(Integer.signum(expected), Integer.signum(COMPARATOR.compare(name9, name10)));
 		assertEquals(Integer.signum(expected), Integer.signum(WireFieldCompare.compare(name9, name10)));
-		assertEquals(Integer.signum(expected), Integer.signum(SealedIndexKeyOrder.compare(name9, name10)));
 		assertTrue(name9.length != name10.length, "wires must differ in total length (lab bug shape)");
 	}
 

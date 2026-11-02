@@ -25,8 +25,10 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import org.genfork.grid.catalog.TableSchema;
@@ -309,21 +311,35 @@ public final class SealedGridMapService {
 		try {
 			return lifecycleGate.callExclusive(domainType, shard, () -> {
 				try {
-					// Canonical dump order (G-00001 + query-ref lifecycle):
-					// 1) detach query/index sealed refs (+ plan cache)
-					// 2) close .gmap + .sbpt readers (overwrite-safe)
-					// 3) write .gmap
-					// 4) dumpIndexes: .sbpt from sealed∪OpLog∪RAM merge map (never mutate live RAM trees)
-					releaseReadersBeforeOverwriteUnlocked(domainType, shard);
-					SealedGridMapWriter.writeNodeBuckets(sealedRoot, domainType, shard, watermark, nodeBuckets);
+					// Publish-next-then-drop (G-00001 + no null-generation EQ gap):
+					// 1) write .gmap to unpublished siblings (prior may stay mapped)
+					// 2) dumpIndexes: write .sbpt staging → install next → close prior → publish
+					// 3) open+install next .gmap (swapReader closes prior)
+					// 4) orphan delete + publish staging→canonical + remount + truncate
+					final Path[] staging = SealedGridMapWriter.writeNodeBucketsUnpublished(
+							sealedRoot, domainType, shard, watermark, nodeBuckets);
 					dumpIndexes(domainType, shard, shardCount, processor, rowCount, merged);
-					final List<SealedGridMapWriter.Kv> flatForOrphans = SealedDumpMergeUtil.flattenNodeBuckets(nodeBuckets);
-					deleteOrphanNodes(domainType, shard, flatForOrphans);
-					final SealedGridMapReader opened = SealedGridMapReader.openShard(sealedRoot, domainType, shard);
-					if (opened == null) {
-						throw new IOException("node seal produced no files for " + OpLogStreamKeyUtil.format(domainType, shard));
+					final SealedGridMapReader openedStaging = SealedGridMapReader.openShardFromNodePaths(
+							sealedRoot, domainType, shard, staging);
+					if (openedStaging == null) {
+						SealedGridMapWriter.deleteStagingQuietly(staging);
+						throw new IOException("node seal produced no files for "
+								+ OpLogStreamKeyUtil.format(domainType, shard));
 					}
-					swapReader(domainType, shard, processor, opened);
+					swapReader(domainType, shard, processor, openedStaging);
+					final List<SealedGridMapWriter.Kv> flatForOrphans =
+							SealedDumpMergeUtil.flattenNodeBuckets(nodeBuckets);
+					deleteOrphanNodes(domainType, shard, flatForOrphans);
+					SealedGridMapWriter.publishNodeBuckets(sealedRoot, domainType, shard, staging);
+					final SealedGridMapReader openedCanonical =
+							SealedGridMapReader.openShard(sealedRoot, domainType, shard);
+					if (openedCanonical == null) {
+						SealedGridMapWriter.deleteStagingQuietly(staging);
+						throw new IOException("canonical seal open failed for "
+								+ OpLogStreamKeyUtil.format(domainType, shard));
+					}
+					swapReader(domainType, shard, processor, openedCanonical);
+					SealedGridMapWriter.deleteStagingQuietly(staging);
 					if (truncateOpLog && opLog != null && watermark > 0L) {
 						// Archive sync on seal thread (already off Netty EL); fail-closed before truncate.
 						OpLogArchiveUtil.archiveBeforeTruncate(
@@ -640,8 +656,7 @@ public final class SealedGridMapService {
 			return;
 		}
 		final TableSchema schema = processor.compositeIndex().tableSchema();
-		// Unmap this shard's .sbpt only — keep other shards' sealed readers on the shared composite.
-		SealedIndexLifecycleUtil.releaseShardSealedOnly(sealedBPTreeService, domainType, shard);
+		// No early releaseShardSealedOnly — dumpIndex install-before-drop keeps prior∨next open.
 		try {
 			if (sealedBPTreeService != null) {
 				processor.compositeIndex().forEachSingleColumnBPTree((property, tree) -> {
@@ -650,12 +665,8 @@ public final class SealedGridMapService {
 									merged, schema, property, shard, shardCount);
 					try {
 						dumpBpTreeIndexOrPreserve(
-								domainType, shard, property, indexEntries, mergeRowCount);
-						if (SealedLazyIndexRebuildUtil.isAuthoritativeSealedIndexFile(
-								sealedBPTreeService.indexFile(domainType, shard, property))) {
-							processor.compositeIndex().installSealedFallback(property,
-									sealedBPTreeService.open(domainType, shard, property));
-						}
+								domainType, shard, property, indexEntries, mergeRowCount,
+								reader -> processor.compositeIndex().installSealedFallback(property, reader));
 					} catch (IOException failure) {
 						throw new SealedIndexDumpException(failure);
 					}
@@ -667,12 +678,9 @@ public final class SealedGridMapService {
 									merged, schema, columns, shard, shardCount);
 					try {
 						dumpBpTreeIndexOrPreserve(
-								domainType, shard, sealedName, indexEntries, mergeRowCount);
-						if (SealedLazyIndexRebuildUtil.isAuthoritativeSealedIndexFile(
-								sealedBPTreeService.indexFile(domainType, shard, sealedName))) {
-							processor.compositeIndex().installSealedCompositeFallback(columns,
-									sealedBPTreeService.open(domainType, shard, sealedName));
-						}
+								domainType, shard, sealedName, indexEntries, mergeRowCount,
+								reader -> processor.compositeIndex()
+										.installSealedCompositeFallback(columns, reader));
 					} catch (IOException failure) {
 						throw new SealedIndexDumpException(failure);
 					}
@@ -713,7 +721,8 @@ public final class SealedGridMapService {
 			int shard,
 			String indexName,
 			List<SealedBPTreeWriter.Entry> indexEntries,
-			int mergeRowCount
+			int mergeRowCount,
+			Consumer<SealedBPTreeReader> install
 	) throws IOException {
 		final Path idxFile = sealedBPTreeService.indexFile(domainType, shard, indexName);
 		final boolean priorAuthoritative =
@@ -731,7 +740,7 @@ public final class SealedGridMapService {
 			}
 			// Empty merge / empty table: empty shell OK (DDL shape).
 		}
-		sealedBPTreeService.dumpIndex(domainType, shard, indexName, indexEntries);
+		sealedBPTreeService.dumpIndex(domainType, shard, indexName, indexEntries, install);
 	}
 
 	private void bindSealedIndexes(String domainType, int shard, GridEntriesProcessor processor) throws IOException {

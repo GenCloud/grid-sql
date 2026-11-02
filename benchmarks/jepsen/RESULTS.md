@@ -6,13 +6,13 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-10-29-sealed-lifecycle-regress-jepsen |
-| date | 2026-10-31T13:00:27.3422526+03:00 |
-| git | 97917fd |
+| stamp | 2026-11-01-2203-empty-eq-qg-nochao |
+| date | 2026-11-01T22:07:50.7133147+03:00 |
+| git | 05a7bfc |
 | host | local |
-| mode | `smoke` |
-| outcome | `HARNESS_READY` |
-| notes | compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows) |
+| mode | `nochao` |
+| outcome | `PASS` |
+| notes | register=PASS; append=PASS; no-nemesis |
 
 ## History
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
@@ -985,3 +985,13 @@ Details + p50/p95/p99: [multidc/RESULTS.md](multidc/RESULTS.md).
 - full-jepsen: not-run
 - command: run-jepsen-smoke.ps1
 - notes: compose config ok; chaos ITs pass; full Jepsen not run (lein absent on Windows)
+
+### 2026-11-01-2203-empty-eq-qg-nochao
+- mode: nochao
+- outcome: PASS
+- git: 05a7bfc
+- compose: up
+- chaos-it: no-nemesis
+- full-jepsen: PASS
+- command: run-jepsen-nochao.ps1 register+append (time-limit=60)
+- notes: register=PASS; append=PASS; no-nemesis

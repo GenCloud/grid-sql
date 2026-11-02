@@ -408,7 +408,7 @@ public class ReplicationCoordinator {
 				appliers);
 		// AUTH applyLagStale: serving/hydrated streams only — untouched LAZY tip debt is not stale.
 		regionClaimService.setServingStreamKeyPredicate(streamKey -> {
-			if (sealedHydrateService == null || !sealedHydrateService.isLazyHydrate()) {
+			if (!sealedHydrateService.isLazyHydrate()) {
 				return true;
 			}
 			return sealedHydrateService.isStreamHydrated(streamKey);
@@ -943,7 +943,7 @@ public class ReplicationCoordinator {
 		final boolean eligible = regionClaimService != null && regionClaimService.isWriterEligible();
 		if (VisibilityDiag.enabled()) {
 			final Boolean prev = lastWriterEligibleDiag.getAndSet(eligible);
-			if (prev == null || prev.booleanValue() != eligible) {
+			if (prev == null || prev != eligible) {
 				final long localTip = orchidNode == null ? 0L : orchidNode.getLastCommittedSeq();
 				final long peerTip = orchidNode == null ? 0L : orchidNode.maxSeenPeerCommittedSeq();
 				final long minApplied = nodeState.minAppliedWatermark();
@@ -971,7 +971,7 @@ public class ReplicationCoordinator {
 		if (orchidNode == null || !applyUnhandledDiagBound.compareAndSet(false, true)) {
 			return;
 		}
-		orchidNode.addApplyListener((op, journalRemote) -> {
+		orchidNode.addApplyListener((op, _) -> {
 			if (op == null || appliers.containsKey(op.domainType())) {
 				return;
 			}
@@ -1363,14 +1363,6 @@ public class ReplicationCoordinator {
 			}
 		}
 		return n;
-	}
-
-	/**
-	 * Remote sync voters for {@link CrossDcMode#SYNC_VOTERS_ACROSS_DC}: explicit {@code voters}
-	 * list, else all remote-DC peers except {@code learners}.
-	 */
-	public static Set<String> resolveRemoteVoters(CrossDcMode mode, GridConfigurationProperties.CrossDcProps crossDc, List<ReplicationPeer> peers, String localDc) {
-		return CrossDcVoterUtil.resolveRemoteVoters(mode, crossDc, peers, localDc);
 	}
 
 	public ReplicationNodeState getNodeState() {

@@ -16,12 +16,9 @@
 package org.genfork.grid.threading;
 
 import org.genfork.grid.common.GridProcessFence;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ForkJoinPool;
@@ -32,34 +29,43 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * CommonPoolGuard must trip {@link GridProcessFence} without killing the sampler daemon.
+ * <p>
+ * Single method — fence is process-global (no {@code resetForTests}).
  *
  * @author: GenCloud
  * @date: 2026/10
  * @since: 1.3
  */
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@ResourceLock(value = "grid-process-fence", mode = ResourceAccessMode.READ_WRITE)
 class CommonPoolGuardFenceIT {
 
 	private static final long WAIT_MS = 15_000L;
 
-	@BeforeEach
-	void setUp() {
-		ThreadService.ensureRunning();
-		GridProcessFence.resetForTests();
-		CommonPoolGuard.install();
-	}
-
-	@AfterEach
-	void tearDown() {
-		GridProcessFence.resetForTests();
-	}
-
 	@Test
-	@Order(2)
-	void assertNotOnCommonPoolTripsFenceAndThrows() throws Exception {
+	void samplerThenAssertTripFenceWithoutKillingSampler() throws Exception {
+		assumeFalse(GridProcessFence.isTripped(), "fence already tripped in this JVM");
+		ThreadService.ensureRunning();
+		CommonPoolGuard.install();
+		assertTrue(samplerThreadAlive(), "sampler daemon must be running before occupy");
+		final CountDownLatch entered = new CountDownLatch(1);
+		final CountDownLatch release = new CountDownLatch(1);
+		ForkJoinPool.commonPool().execute(() -> {
+			entered.countDown();
+			parkOnCommonPoolWithGridFrameUntil(release);
+		});
+		assertTrue(entered.await(WAIT_MS, TimeUnit.MILLISECONDS));
+		final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WAIT_MS);
+		while (!GridProcessFence.isTripped() && System.nanoTime() < deadline) {
+			Thread.sleep(200L);
+		}
+		release.countDown();
+		assertTrue(GridProcessFence.isTripped(), "sampler should trip fence while grid frame is on commonPool");
+		assertTrue(samplerThreadAlive(), "sampler daemon must survive hit");
+
 		final CountDownLatch done = new CountDownLatch(1);
 		final AtomicReference<Throwable> err = new AtomicReference<>();
 		ForkJoinPool.commonPool().execute(() -> {
@@ -77,28 +83,7 @@ class CommonPoolGuardFenceIT {
 		assertTrue(done.await(WAIT_MS, TimeUnit.MILLISECONDS));
 		assertNotNull(err.get());
 		assertInstanceOf(IllegalStateException.class, err.get());
-		assertTrue(GridProcessFence.isTripped());
 		assertTrue(samplerThreadAlive());
-	}
-
-	@Test
-	@Order(1)
-	void samplerHitTripsFenceWithoutKillingSampler() throws Exception {
-		assertTrue(samplerThreadAlive(), "sampler daemon must be running before occupy");
-		final CountDownLatch entered = new CountDownLatch(1);
-		final CountDownLatch release = new CountDownLatch(1);
-		ForkJoinPool.commonPool().execute(() -> {
-			entered.countDown();
-			CommonPoolGuardFenceIT.parkOnCommonPoolWithGridFrameUntil(release);
-		});
-		assertTrue(entered.await(WAIT_MS, TimeUnit.MILLISECONDS));
-		final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WAIT_MS);
-		while (!GridProcessFence.isTripped() && System.nanoTime() < deadline) {
-			Thread.sleep(200L);
-		}
-		release.countDown();
-		assertTrue(GridProcessFence.isTripped(), "sampler should trip fence while grid frame is on commonPool");
-		assertTrue(samplerThreadAlive(), "sampler daemon must survive hit");
 	}
 
 	/**

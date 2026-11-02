@@ -115,18 +115,60 @@ public final class GridFs {
 	public static void writeAtomic(Path target, AtomicWriter writer) throws IOException {
 		Objects.requireNonNull(target, "target");
 		Objects.requireNonNull(writer, "writer");
-		createParentDirs(target);
-		// Per-writer temp name — concurrent publishers must not share one sibling .tmp.
-		final Path temporary = target.resolveSibling(
-				target.getFileName() + TMP_SUFFIX + "." + Thread.currentThread().threadId()
-						+ "." + System.nanoTime());
+		final Path temporary = writeUnpublished(target, writer);
 		try {
-			writer.write(temporary);
 			moveAtomic(temporary, target);
 		} catch (IOException | RuntimeException e) {
 			deleteQuietly(temporary);
 			throw e;
 		}
+	}
+
+	/**
+	 * Write via {@code writer} into a unique unpublished sibling of {@code target} (no publish).
+	 * <p>
+	 * Used by sealed dump publish-next-then-drop: open/install from the sibling while the
+	 * prior generation still maps {@code target}, then {@link #publishFromMapped} after unmap.
+	 *
+	 * @return durable sibling path the caller must publish or delete
+	 */
+	public static Path writeUnpublished(Path target, AtomicWriter writer) throws IOException {
+		Objects.requireNonNull(target, "target");
+		Objects.requireNonNull(writer, "writer");
+		createParentDirs(target);
+		final Path temporary = uniqueSiblingTmp(target);
+		try {
+			writer.write(temporary);
+			return temporary;
+		} catch (IOException | RuntimeException e) {
+			deleteQuietly(temporary);
+			throw e;
+		}
+	}
+
+	/**
+	 * Publish bytes from a (possibly still-mapped) {@code source} onto unmapped {@code target}.
+	 * <p>
+	 * Reads {@code source} into a fresh unpublished sibling of {@code target}, then
+	 * {@link #moveAtomic} — safe when {@code source} remains mmap'd and {@code target} is not.
+	 */
+	public static void publishFromMapped(Path source, Path target) throws IOException {
+		Objects.requireNonNull(source, "source");
+		Objects.requireNonNull(target, "target");
+		writeAtomic(target, temporary -> Files.copy(
+				source,
+				temporary,
+				StandardCopyOption.REPLACE_EXISTING));
+	}
+
+	/**
+	 * Per-writer unique sibling temp path ({@code file.tmp.<tid>.<nano>}).
+	 */
+	public static Path uniqueSiblingTmp(Path target) {
+		Objects.requireNonNull(target, "target");
+		return target.resolveSibling(
+				target.getFileName() + TMP_SUFFIX + "." + Thread.currentThread().threadId()
+						+ "." + System.nanoTime());
 	}
 
 	/**

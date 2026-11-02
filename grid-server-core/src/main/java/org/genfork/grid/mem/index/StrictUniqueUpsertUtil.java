@@ -41,7 +41,8 @@ public final class StrictUniqueUpsertUtil {
 	}
 
 	/**
-	 * Insert {@code treeKey} → {@code newPointer}. On STRICT collision, clear the slot and re-insert.
+	 * Insert {@code treeKey} → {@code newPointer}. On STRICT collision, displace foreign owner
+	 * or keep same-PK owner in place (no {@code free}→reinsert for the live UNIQUE posting).
 	 *
 	 * @return prior foreign row PK that owned the slot, or {@code null} when none (happy / same-PK)
 	 */
@@ -55,6 +56,13 @@ public final class StrictUniqueUpsertUtil {
 			return null;
 		} catch (NonUniqueValueException ignored) {
 			final byte[] foreignPk = firstForeignOwner(tree, treeKey, newPointer.resolveKey());
+			if (foreignPk == null) {
+				// Same PK already owns the STRICT slot — leave the live posting; drop unused ref.
+				if (newPointer != null && newPointer.getPointer() != 0L && !newPointer.isFree()) {
+					newPointer.free();
+				}
+				return null;
+			}
 			tree.delete(treeKey);
 			tree.insert(treeKey, newPointer);
 			return foreignPk;

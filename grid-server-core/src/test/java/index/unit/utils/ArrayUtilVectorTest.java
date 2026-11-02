@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.Random;
 
 import org.genfork.grid.utils.ArrayUtil;
+import org.genfork.grid.utils.ArrayVectors;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -52,15 +53,15 @@ public class ArrayUtilVectorTest {
 				final byte[] left = new byte[length];
 				random.nextBytes(left);
 				final byte[] equal = left.clone();
-				assertTrue(ArrayUtil.bytesEqual(left, equal));
-				assertEquals(0, ArrayUtil.compareUnsigned(left, equal));
+				assertTrue(ArrayVectors.bytesEqual(left, equal));
+				assertEquals(0, ArrayVectors.compareUnsigned(left, equal));
 				assertEquals(Arrays.hashCode(left), ArrayUtil.fastHash(left));
 				if (length > 0) {
 					final byte[] changed = left.clone();
 					changed[iteration % length] ^= 1;
-					assertFalse(ArrayUtil.bytesEqual(left, changed));
+					assertFalse(ArrayVectors.bytesEqual(left, changed));
 					assertEquals(Integer.signum(Arrays.compareUnsigned(left, changed)),
-							Integer.signum(ArrayUtil.compareUnsigned(left, changed)));
+							Integer.signum(ArrayVectors.compareUnsigned(left, changed)));
 				}
 			}
 		}
@@ -68,9 +69,9 @@ public class ArrayUtilVectorTest {
 
 	@Test
 	void equalityHandlesNullAndLengthMismatch() {
-		assertTrue(ArrayUtil.bytesEqual(null, null));
-		assertFalse(ArrayUtil.bytesEqual(null, new byte[0]));
-		assertFalse(ArrayUtil.bytesEqual(new byte[]{1}, new byte[]{1, 0}));
-		assertTrue(ArrayUtil.compareUnsigned(new byte[]{-1}, new byte[]{0}) > 0);
+		assertTrue(ArrayVectors.bytesEqual(null, null));
+		assertFalse(ArrayVectors.bytesEqual(null, new byte[0]));
+		assertFalse(ArrayVectors.bytesEqual(new byte[]{1}, new byte[]{1, 0}));
+		assertTrue(ArrayVectors.compareUnsigned(new byte[]{-1}, new byte[]{0}) > 0);
 	}
 }

@@ -118,6 +118,21 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 		}
 	}
 
+	/**
+	 * Owned posting snapshot for exact EQ — never escape a live {@link FastOrderedSet}
+	 * past {@link IndexProbeMailbox} (CME / freed-pointer races on concurrent mutate).
+	 */
+	private static Set<IndexPointerRef> ownedPostings(Set<IndexPointerRef> live) {
+		if (live == null || live.isEmpty()) {
+			return Collections.emptySet();
+		}
+		if (live.size() == 1) {
+			final Iterator<IndexPointerRef> it = live.iterator();
+			return Collections.singleton(it.next());
+		}
+		return Set.copyOf(live);
+	}
+
 	private final String indexName;
 	private final IndexStat indexStat;
 	private Node<K, T> root;
@@ -521,7 +536,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			joiner.add("=========================Leaf stats=========================");
 			collectTree(joiner);
 			Files.write(path, joiner.toString().getBytes(), CREATE, TRUNCATE_EXISTING);
-		} catch (Exception e) {
+		} catch (Exception _) {
 		}
 		//
 	}
@@ -1115,7 +1130,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			}
 			final Set<IndexPointerRef> currentPointers = values.get(idx);
 			operationResult.addSize(currentPointers.size());
-			operationResult.setPointers(currentPointers);
+			operationResult.setPointers(ownedPostings(currentPointers));
 			return operationResult;
 		}
 
@@ -1136,7 +1151,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 				final IndexOperationResult operationResult = new IndexOperationResult();
 				if (currentPointers.size() <= maxResults) {
 					operationResult.addSize(currentPointers.size());
-					operationResult.setPointers(currentPointers);
+					operationResult.setPointers(ownedPostings(currentPointers));
 					operationResult.incProcessed();
 					return operationResult;
 				}
@@ -1724,9 +1739,5 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 
 	public String getIndexName() {
 		return this.indexName;
-	}
-
-	public IndexStat getIndexStat() {
-		return this.indexStat;
 	}
 }

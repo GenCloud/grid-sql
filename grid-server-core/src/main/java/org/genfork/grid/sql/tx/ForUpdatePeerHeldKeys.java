@@ -91,10 +91,6 @@ public final class ForUpdatePeerHeldKeys {
 		this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
 	}
 
-	void sweepExpiredForTest() {
-		sweepExpired();
-	}
-
 	public void remember(long txId, String table, byte[] key) {
 		Objects.requireNonNull(table, "table");
 		Objects.requireNonNull(key, "key");
@@ -102,7 +98,7 @@ public final class ForUpdatePeerHeldKeys {
 		final long expireAt = nanoClock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(leaseTtlMs.get());
 		byTx.computeIfAbsent(txId, ignored -> new ConcurrentHashMap<>())
 				.computeIfAbsent(table, ignored -> new ConcurrentHashMap<>())
-				.put(new KeyWrapper(key), Long.valueOf(expireAt));
+				.put(new KeyWrapper(key), expireAt);
 	}
 
 	public void forget(long txId, String table, byte[] key) {
@@ -187,7 +183,8 @@ public final class ForUpdatePeerHeldKeys {
 		byTx.clear();
 	}
 
-	private void sweepExpired() {
+	/** Package-private for same-package product tests (lease TTL). */
+	void sweepExpired() {
 		final long now = nanoClock.getAsLong();
 		final SqlRecordLockManager lockManager = locks;
 		final ArrayList<Long> expiredTx = new ArrayList<>();
@@ -199,7 +196,7 @@ public final class ForUpdatePeerHeldKeys {
 				final ConcurrentHashMap<KeyWrapper, Long> keys = te.getValue();
 				for (Map.Entry<KeyWrapper, Long> ke : keys.entrySet()) {
 					final Long expireAt = ke.getValue();
-					if (expireAt != null && expireAt.longValue() <= now) {
+					if (expireAt != null && expireAt <= now) {
 						keys.remove(ke.getKey(), expireAt);
 						if (lockManager != null) {
 							try {

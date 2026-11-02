@@ -58,12 +58,6 @@ public final class GridProcessFence {
 		return r == null ? "" : r;
 	}
 
-	/** Test hook only. */
-	public static void resetForTests() {
-		REASON.set(null);
-		TRIPPED.set(false);
-	}
-
 	public static void checkAdmit(String where) {
 		if (!TRIPPED.get()) {
 			return;

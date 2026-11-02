@@ -49,19 +49,6 @@ final class CompositeIndexProbeOps {
 	private CompositeIndexProbeOps() {
 	}
 
-	/** Ordered case-insensitive column-name equality. */
-	static boolean columnsEqualIgnoreCaseOrdered(List<String> left, List<String> right) {
-		if (left.size() != right.size()) {
-			return false;
-		}
-		for (int i = 0; i < left.size(); i++) {
-			if (!left.get(i).equalsIgnoreCase(right.get(i))) {
-				return false;
-			}
-		}
-		return true;
-	}
-
 	/**
 	 * True when {@code prefixColumns} is a strict left-prefix of {@code fullColumns}
 	 * (ordered, case-insensitive). Equal-length lists are not a prefix (exact match elsewhere).

@@ -57,7 +57,7 @@ import org.genfork.grid.mem.index.IndexPointerRef;
 import org.genfork.grid.mem.index.btree.GridPointerBPTree;
 import org.genfork.grid.mem.index.btree.IndexOperationResult;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
-import org.genfork.grid.replication.snapshot.sealed.SealedIndexKeyOrder;
+import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
 import org.genfork.grid.serial.WireLikeMatcher;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -86,6 +86,7 @@ public class SealedQueryPathBenchmark extends AbstractLatencyBenchmark {
 	private static final int FAST_SEALED_WARMUP_ITERATIONS = 1;
 	private static final int FAST_SEALED_MEASUREMENT_ITERATIONS = 2;
 	private static final int SEALED_ITERATION_SECONDS = 1;
+	private static final ArraysComparator KEY_ORDER = new ArraysComparator();
 
 	@Param({"1000", "100000", "1000000"})
 	public int rows;
@@ -307,7 +308,7 @@ public class SealedQueryPathBenchmark extends AbstractLatencyBenchmark {
 			return pointersToKeys(memoryIndex.searchGreaterThan(new SingleTreeKey(boundKey)));
 		}
 		return sealedIndex.searchMatching(
-				indexKey -> SealedIndexKeyOrder.compare(indexKey, boundKey) > 0);
+				indexKey -> KEY_ORDER.compare(indexKey, boundKey) > 0);
 	}
 
 	/** Wire LIKE pattern {@code <4-byte-prefix>%} matching one secondary bucket's BE int key. */

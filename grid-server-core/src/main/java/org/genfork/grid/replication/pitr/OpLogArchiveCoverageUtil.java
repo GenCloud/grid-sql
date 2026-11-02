@@ -44,7 +44,6 @@ public final class OpLogArchiveCoverageUtil {
 	 *
 	 * @param minSeq inclusive first seq (0 when empty)
 	 * @param maxSeq inclusive last seq (0 when empty)
-	 * @param empty  true when no ops are present
 	 */
 	public record Coverage(long minSeq, long maxSeq, boolean absent) {
 		public static Coverage none() {
@@ -56,22 +55,6 @@ public final class OpLogArchiveCoverageUtil {
 				return none();
 			}
 			return new Coverage(minSeq, maxSeq, false);
-		}
-	}
-
-	/**
-	 * Coverage from local segment manifest when present; otherwise empty (fail-closed).
-	 * Missing/corrupt manifest does not silently re-scan the whole archive.
-	 */
-	public static Coverage segmentCoverage(Path archiveRoot, String domain, int shard) {
-		Objects.requireNonNull(archiveRoot, "archiveRoot");
-		Objects.requireNonNull(domain, "domain");
-		try {
-			final OpLogArchiveUtil.ArchiveManifest manifest =
-					OpLogArchiveUtil.readManifest(archiveRoot, domain, shard);
-			return Coverage.of(manifest.fromSeq(), manifest.toSeq());
-		} catch (RuntimeException ex) {
-			return Coverage.none();
 		}
 	}
 
@@ -91,22 +74,6 @@ public final class OpLogArchiveCoverageUtil {
 	}
 
 	/**
-	 * Union of segment and stream coverage (min of mins, max of maxes). Envelope only —
-	 * does not prove contiguous seqs; restore uses {@link #mergeOpsForRestore}.
-	 */
-	public static Coverage mergedCoverage(Coverage segment, Coverage stream) {
-		if (segment == null || segment.absent()) {
-			return stream == null ? Coverage.none() : stream;
-		}
-		if (stream == null || stream.absent()) {
-			return segment;
-		}
-		return Coverage.of(
-				Math.min(segment.minSeq(), stream.minSeq()),
-				Math.max(segment.maxSeq(), stream.maxSeq()));
-	}
-
-	/**
 	 * Envelope check: {@code [watermark+1 .. untilSeq]} lies inside min/max of coverage.
 	 * Does <strong>not</strong> prove contiguous seqs — use {@link #mergeOpsForRestore} for restore.
 	 */
@@ -119,14 +86,6 @@ public final class OpLogArchiveCoverageUtil {
 		}
 		final long needFrom = watermark + 1L;
 		return coverage.minSeq() <= needFrom && coverage.maxSeq() >= untilSeq;
-	}
-
-	/**
-	 * @deprecated use {@link #coversEnvelope}; name historically implied fail-closed continuity.
-	 */
-	@Deprecated
-	public static boolean covers(long watermark, long untilSeq, Coverage coverage) {
-		return coversEnvelope(watermark, untilSeq, coverage);
 	}
 
 	/**

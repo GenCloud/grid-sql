@@ -82,7 +82,7 @@ class ForUpdatePeerHeldKeysTest {
 		held.remember(TX_ID, TABLE, KEY_A);
 		final long before = SqlLockMetrics.peerLeaseExpired();
 		clockNs.addAndGet(TimeUnit.MILLISECONDS.toNanos(PAST_MS));
-		held.sweepExpiredForTest();
+		held.sweepExpired();
 		assertFalse(held.hasAny(TX_ID));
 		assertTrue(locks.tryLock(TABLE, KEY_A));
 		locks.unlock(TABLE, KEY_A);

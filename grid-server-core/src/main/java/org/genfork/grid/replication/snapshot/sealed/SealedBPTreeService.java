@@ -25,6 +25,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
  * Lifecycle and path service for sealed per-shard B+ tree indexes.
@@ -51,18 +52,45 @@ public final class SealedBPTreeService implements AutoCloseable {
 				+ SealedIndexPathUtil.safeIndexFileName(indexName) + ".sbpt");
 	}
 
+	/**
+	 * Write {@code .sbpt} via unpublished sibling, install next for query, then publish canonical.
+	 * <p>
+	 * Order: write staging → open next → put in service map → {@code install} (addReader
+	 * install-before-drop) → close prior → {@link GridFs#publishFromMapped} → remount canonical.
+	 */
 	public void dumpIndex(String domain, int shard, String indexName,
 	                      List<SealedBPTreeWriter.Entry> entries) throws IOException {
+		dumpIndex(domain, shard, indexName, entries, null);
+	}
+
+	/**
+	 * Same as {@link #dumpIndex(String, int, String, List)} with an install hook before prior close.
+	 */
+	public void dumpIndex(String domain, int shard, String indexName,
+	                      List<SealedBPTreeWriter.Entry> entries,
+	                      Consumer<SealedBPTreeReader> install) throws IOException {
 		final List<SealedBPTreeWriter.Entry> ordered = new ArrayList<>(entries == null ? List.of() : entries);
 		ordered.sort(ENTRY_ORDER);
 		final Path file = indexFile(domain, shard, indexName);
 		final ReaderKey key = new ReaderKey(domain, shard, indexName);
-		// Unmap live reader before REPLACE — Windows AccessDenied on mmap'd *.sbpt (G-00001 class).
-		final SealedBPTreeReader previous = readers.remove(key);
+		final Path staging = GridFs.writeUnpublished(file, temporary ->
+				SealedBPTreeWriter.write(temporary, domain, shard, indexName, ordered));
+		final SealedBPTreeReader next = SealedBPTreeReader.open(staging);
+		final SealedBPTreeReader previous = readers.put(key, next);
+		if (install != null) {
+			install.accept(next);
+		}
 		closeForOverwriteOrThrow(previous);
-		SealedBPTreeWriter.write(file, domain, shard, indexName, ordered);
-		final SealedBPTreeReader replacement = SealedBPTreeReader.open(file);
-		readers.put(key, replacement);
+		GridFs.publishFromMapped(staging, file);
+		final SealedBPTreeReader canonical = SealedBPTreeReader.open(file);
+		final SealedBPTreeReader staged = readers.put(key, canonical);
+		if (install != null) {
+			install.accept(canonical);
+		}
+		if (staged != null && staged != canonical) {
+			closeForOverwriteOrThrow(staged);
+		}
+		GridFs.deleteQuietly(staging);
 	}
 
 	/**

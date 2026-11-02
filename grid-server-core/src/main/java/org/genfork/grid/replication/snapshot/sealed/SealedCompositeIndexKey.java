@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 
+import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
 import org.genfork.grid.serial.WireLikeMatcher;
 
 /**
@@ -39,7 +40,9 @@ public final class SealedCompositeIndexKey {
 	private static final int MAX_COMPONENT_BYTES = 0xffff;
 	private static final int MAX_ENCODED_BYTES = 0xffff;
 
-	private SealedCompositeIndexKey() {
+    private static final ArraysComparator KEY_ORDER = new ArraysComparator();
+
+    private SealedCompositeIndexKey() {
 	}
 
 	/**
@@ -208,14 +211,11 @@ public final class SealedCompositeIndexKey {
 		if (lowInclusiveOrNull != null && compare(actual, lowInclusiveOrNull) < 0) {
 			return false;
 		}
-		if (highInclusiveOrNull != null && compare(actual, highInclusiveOrNull) > 0) {
-			return false;
-		}
-		return true;
-	}
+        return highInclusiveOrNull == null || compare(actual, highInclusiveOrNull) <= 0;
+    }
 
 	static int compare(byte[] left, byte[] right) {
-		return SealedIndexKeyOrder.compare(left, right);
+		return KEY_ORDER.compare(left, right);
 	}
 
 	static boolean startsWithEncoded(byte[] encoded, byte[] encodedPrefix) {

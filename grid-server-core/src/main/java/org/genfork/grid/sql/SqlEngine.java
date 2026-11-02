@@ -107,7 +107,9 @@ import org.genfork.grid.sql.udf.SqlUdfBinder;
 import org.genfork.grid.sql.udf.SqlUdfCallContext;
 import org.genfork.grid.sql.udf.SqlUdfLookup;
 import org.genfork.grid.sql.udf.SqlUdfMutatingOps;
+import org.genfork.grid.replication.util.CatalogOpLogEpochUtil;
 import org.genfork.grid.sql.util.CatalogDdlApplyLaneUtil;
+import org.genfork.grid.sql.util.CatalogDdlEpochUtil;
 import org.genfork.grid.store.TableStore;
 
 /**
@@ -806,11 +808,16 @@ public final class SqlEngine {
 		if (applyingReplicatedDdl.get()) {
 			return;
 		}
-		final long epoch = catalog.nextEpoch();
-		catalog.noteAppliedDdlEpoch(epoch);
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, false);
+		final long applied = catalog.maxAppliedDdlEpoch();
+		if (epoch > 0L && epoch < applied) {
+			throw new IllegalStateException(
+					"stale schema epoch localApplied=" + applied + " remote=" + epoch);
+		}
 		if (replication != null && replication.isEnabled()) {
 			replication.recordDdl(sql, epoch);
 		}
+		catalog.noteAppliedDdlEpoch(epoch);
 	}
 
 	/**
@@ -832,6 +839,32 @@ public final class SqlEngine {
 		catalogDdlLane.runSerial(this::recoverPersistedCatalogOnLane);
 	}
 
+	/**
+	 * Raise proposer {@code epochSequence} from durable floor, meta epochs, and
+	 * {@code _catalog} OpLog DDL max — {@code ensureEpochAtLeast} only (never
+	 * {@code noteApplied} of OpLog max before/instead of hydrate).
+	 */
+	public void seedCatalogDdlEpochFloor() {
+		long floor = catalog.loadDurableEpochFloor();
+		final List<TableSchema> metas = catalog.loadPersistedMetaSchemas();
+		for (int i = 0, n = metas.size(); i < n; i++) {
+			final TableSchema meta = metas.get(i);
+			if (meta != null && meta.schemaEpoch() > floor) {
+				floor = meta.schemaEpoch();
+			}
+		}
+		if (replication != null && replication.isEnabled() && replication.getOpLog() != null) {
+			final long opLogMax = CatalogOpLogEpochUtil.maxDdlSchemaEpoch(
+					replication.getOpLog(),
+					ReplicationCoordinator.CATALOG_DOMAIN,
+					ReplicationCoordinator.CATALOG_SHARD);
+			if (opLogMax > floor) {
+				floor = opLogMax;
+			}
+		}
+		catalog.seedProposerEpochFloor(floor);
+	}
+
 	private void applyReplicatedDdlOnLane(String ddlSql, long schemaEpoch) {
 		if (ddlSql == null || ddlSql.isBlank()) {
 			throw new IllegalArgumentException("replicated DDL is empty");
@@ -849,6 +882,7 @@ public final class SqlEngine {
 		if (!applyingReplicatedDdl.compareAndSet(false, true)) {
 			throw new IllegalStateException("nested replicated DDL apply");
 		}
+		CatalogDdlEpochUtil.enterReplicated(schemaEpoch);
 		try {
 			execute(ddlSql);
 			if (schemaEpoch > 0L) {
@@ -856,6 +890,7 @@ public final class SqlEngine {
 				catalog.ensureEpochAtLeast(schemaEpoch);
 			}
 		} finally {
+			CatalogDdlEpochUtil.exitReplicated();
 			applyingReplicatedDdl.set(false);
 		}
 	}

@@ -90,6 +90,8 @@ class ForeignKeyIT {
 		engine.execute("INSERT INTO parent (id) VALUES (1)");
 		engine.execute("INSERT INTO child (id, parent_id) VALUES (10, 1)");
 		engine.execute("DELETE FROM parent WHERE id = 1");
+		assertEquals(1, engine.execute("SELECT id FROM child").rows().size(),
+				"AlwaysTrue SELECT must see child after SET NULL");
 		final SqlResult r = engine.execute("SELECT parent_id FROM child WHERE id = 10");
 		assertEquals(1, r.rows().size());
 		assertEquals(null, r.rows().getFirst()[0]);

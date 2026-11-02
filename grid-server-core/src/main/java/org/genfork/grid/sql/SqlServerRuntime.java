@@ -285,6 +285,7 @@ public final class SqlServerRuntime implements AutoCloseable {
 			}
 			engine.setOverlay(overlayStore, autoPinTtlMs);
 			engine.recoverPersistedCatalog();
+			engine.seedCatalogDdlEpochFloor();
 			if (effective != null) {
 				// HELLO sealed packs deferred until catalog bind + recover (boot race vs nested FULL hydrate).
 				effective.markCatalogBootstrapComplete();

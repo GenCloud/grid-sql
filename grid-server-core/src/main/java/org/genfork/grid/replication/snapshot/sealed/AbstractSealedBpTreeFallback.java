@@ -23,6 +23,7 @@ import java.util.function.Function;
 
 import org.genfork.grid.mem.index.AbstractIndexOperation;
 import org.genfork.grid.mem.index.btree.TreeKey;
+import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
 
 /**
  * Sealed {@code .sbpt} reader list + addReader for single/composite BPTree fallbacks.
@@ -43,8 +44,9 @@ public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 
 	public void addReader(SealedBPTreeReader reader) {
 		Objects.requireNonNull(reader, "reader");
-		readers.removeIf(existing -> existing.shard() == reader.shard());
+		// Install next before dropping prior so concurrent probes never see a null-generation gap.
 		readers.add(reader);
+		readers.removeIf(existing -> existing != reader && existing.shard() == reader.shard());
 	}
 
 	/**
@@ -135,8 +137,10 @@ public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 		GT, GE, LT, LE
 	}
 
+	private static final ArraysComparator KEY_ORDER = new ArraysComparator();
+
 	protected static boolean openCmp(byte[] indexKey, byte[] bound, OpenBound mode) {
-		final int cmp = SealedIndexKeyOrder.compare(indexKey, bound);
+		final int cmp = KEY_ORDER.compare(indexKey, bound);
 		return switch (mode) {
 			case GT -> cmp > 0;
 			case GE -> cmp >= 0;

@@ -169,11 +169,6 @@ public final class DistributedQueryExecutor {
 		return trimmed + LIMIT_CLAUSE_PREFIX + limit;
 	}
 
-	/** Delegates to {@link QueryChunkMerge#merge(List, int)} (shared with SQL UNION). */
-	public static List<byte[]> merge(List<List<byte[]>> chunks, int limit) {
-		return QueryChunkMerge.merge(chunks, limit);
-	}
-
 	private static List<List<byte[]>> mapStagesSerial(List<Supplier<List<byte[]>>> stages) {
 		final List<List<byte[]>> chunks = new ArrayList<>(stages.size());
 		for (Supplier<List<byte[]>> stage : stages) {
@@ -209,13 +204,13 @@ public final class DistributedQueryExecutor {
 	}
 
 	private static List<byte[]> finishFanIn(List<List<byte[]>> chunks, int limit) {
-		final List<byte[]> merged = merge(chunks, limit);
+		final List<byte[]> merged = QueryChunkMerge.merge(chunks, limit);
 		DistributedQueryMetrics.recordFanIn(chunks.size(), merged.size());
 		return merged;
 	}
 
 	private static List<byte[]> finishMapReduce(List<List<byte[]>> chunks, int limit) {
-		final List<byte[]> merged = merge(chunks, limit);
+		final List<byte[]> merged = QueryChunkMerge.merge(chunks, limit);
 		final int stageCount = chunks.size();
 		DistributedQueryMetrics.recordMapReduce(stageCount, merged.size());
 		DistributedQueryMetrics.recordFanIn(stageCount, merged.size());

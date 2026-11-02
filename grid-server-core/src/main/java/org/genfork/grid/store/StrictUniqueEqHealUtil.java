@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.genfork.grid.catalog.ColumnListEqualUtil;
 import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.IndexType;
@@ -118,7 +119,7 @@ public final class StrictUniqueEqHealUtil {
 			if (idx.kind() != IndexType.STRICT) {
 				continue;
 			}
-			if (columnsEqualIgnoreCaseOrdered(idx.columns(), columns)) {
+			if (ColumnListEqualUtil.columnsEqualIgnoreCaseOrdered(idx.columns(), columns)) {
 				return true;
 			}
 		}
@@ -183,15 +184,4 @@ public final class StrictUniqueEqHealUtil {
 		return coord.tryHealSealedDomainIndexes(store.schema().catalogKey());
 	}
 
-	static boolean columnsEqualIgnoreCaseOrdered(List<String> left, List<String> right) {
-		if (left.size() != right.size()) {
-			return false;
-		}
-		for (int i = 0; i < left.size(); i++) {
-			if (!left.get(i).equalsIgnoreCase(right.get(i))) {
-				return false;
-			}
-		}
-		return true;
-	}
 }
