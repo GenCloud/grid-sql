@@ -319,6 +319,7 @@
                         <exclude>**/index/benchmarks/**</exclude>
                         <exclude>**/*Benchmark.java</exclude>
                         <exclude>**/*BenchmarkTest.java</exclude>
+                        <exclude>**/CommonPoolGuardFenceIT.java</exclude>
                     </excludes>
                     <forkedProcessTimeoutInSeconds>${surefire.forkedProcessTimeoutInSeconds}</forkedProcessTimeoutInSeconds>
                     <systemPropertyVariables>
@@ -344,11 +345,35 @@
                         --add-modules=jdk.incubator.vector
                     </argLine>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>common-pool-fence-isolated</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <includes combine.self="override">
+                                <include>**/CommonPoolGuardFenceIT.java</include>
+                            </includes>
+                            <excludes combine.self="override">
+                                <exclude>**/index/benchmarks/**</exclude>
+                                <exclude>**/*Benchmark.java</exclude>
+                                <exclude>**/*BenchmarkTest.java</exclude>
+                            </excludes>
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <!-- -Dtest=… on other classes must not fail this execution. -->
+                            <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                        </configuration>
+                    </execution>
+                </executions>
                 <dependencies>
                     <dependency>
                         <groupId>org.apache.maven.surefire</groupId>
                         <artifactId>surefire-junit-platform</artifactId>
-                        <version>3.2.5</version>
+                        <!-- Must match Boot-managed maven-surefire-plugin (3.5.5); 3.2.x CNFE on 2nd execution. -->
+                        <version>3.5.5</version>
                     </dependency>
                     <dependency>
                         <groupId>org.ow2.asm</groupId>
@@ -403,7 +428,9 @@
                         <artifactId>maven-surefire-plugin</artifactId>
                         <configuration>
                             <forkedProcessTimeoutInSeconds>${surefire.forkedProcessTimeoutInSeconds}</forkedProcessTimeoutInSeconds>
-                            <excludes combine.self="override"/>
+                            <excludes combine.self="override">
+                                <exclude>**/CommonPoolGuardFenceIT.java</exclude>
+                            </excludes>
                             <includes>
                                 <include>**/Test*.java</include>
                                 <include>**/*Test.java</include>

@@ -16,7 +16,7 @@ Inside a shard, a row is a packed binary record with an offset table at the end.
 |----------|------|
 | OpLog | The mutation journal. A commit counts as done only after the journal write; after sealing, the journal is truncated through a watermark |
 | `{domain}_{shard}_n{node}.gmap` | An immutable node file: directory (buckets), key → offset mapping and the payloads themselves |
-| `*.sbpt` | A sealed secondary B+ tree with a fixed page size. New files are **VERSION 2** (signed INT/LONG compare); **VERSION 1** is rejected on read — reseal / `dumpDomain` required |
+| `*.sbpt` | A sealed secondary B+ tree with a fixed page size. New files are **VERSION 3** (signed INT/LONG + UTF-8 payload-lex varlen); **VERSION 1** and **VERSION 2** are rejected on read — reseal / `dumpDomain` required |
 | `*.sbm` | A sealed bitmap index |
 | `index-ckpt/*.bytes` | A key watermark plus CRC. This is **not** a full dump of the in-memory index: after sealing, secondary indexes live in `.sbpt` |
 | `orchid/state.bin` | The global sequence number of the last confirmed commit |

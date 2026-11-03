@@ -30,7 +30,7 @@ The `gridReadiness` component reports the following keys. Values marked `n/a` me
 | `sqlTcp` | `listening`, `disabled`, `down` | SQL listener state |
 | `durableOrSynced` | `up`, `n/a` | Local durability or consensus sync is sufficient for UP |
 | `orchidSynced` | `true`, `false`, `n/a` | Consensus phase sync reached |
-| `reason` | `sql_tcp_down`, `orchid_not_synced` | Present only when the component is DOWN |
+| `reason` | `sql_tcp_down`, `orchid_not_synced`, `catalog_lag_stuck` | Present only when the component is DOWN |
 | `writerEligible` | boolean, `n/a` | This node may accept writes |
 | `applyLagStale` | boolean, `n/a` | Apply lag exceeds `grid.replication.ha.max-stale-lag` |
 | `orchidR` | double, `n/a` | Order parameter `R` (phase sync share) |
@@ -49,7 +49,10 @@ The `gridReadiness` component reports the following keys. Values marked `n/a` me
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Record-lock and cancellation counters |
 | `privilegeUsers` | integer, `n/a` | Local privilege catalog user count |
 | `authOpen` | boolean, `n/a` | Open-auth (no users yet) |
-| `catalogApplyLag` | long, `n/a` | `_catalog` OpLog tip minus applied watermark — watch after `CREATE USER` on writer; does **not** flip readiness DOWN |
+| `catalogApplyLag` | long, `n/a` | `_catalog` OpLog tip minus applied watermark — watch after `CREATE USER` / DDL on writer |
+| `catalogLagStuck` | boolean, `n/a` | Stuck `_catalog` apply lag — readiness **DOWN** with `reason=catalog_lag_stuck` (transient lag>0 stays UP) |
+| `catalogIncomplete` | boolean, `n/a` | Local catalog fingerprint stale vs peers (object-set hole) |
+| `catalogFingerprint` | long, `n/a` | Local catalog object-set fingerprint (also on wire `ServerMeta` / HELLO) |
 
 Liveness (`gridLiveness`) reports `logicExecutor`, `uptimeMs`, `pid`, and the same consensus and repair gauges. It has no `reason` key: a live process with an unsynced cluster is alive but not ready.
 
@@ -72,7 +75,7 @@ Consensus and replication:
 | `grid.replication.ship_backpressure` | Shipping throttled against `flow.max-inflight-ops` |
 | `grid.replication.swarm_hint` | Latest placement hint, as an ordinal |
 | `grid.replication.overlay_pinned_keys` | Live placement pins — [overlay PIN](configuration/overlay-pin.md) |
-| `grid.replication.catalog_apply_lag` | `_catalog` tip − applied watermark (privilege / schema DDL catch-up; AUTH is not gated by `applyLagStale`) |
+| `grid.replication.catalog_apply_lag` | `_catalog` tip − applied watermark (privilege / schema DDL catch-up; AUTH is not gated by serving-stream `applyLagStale` alone) |
 
 Storage and reads:
 

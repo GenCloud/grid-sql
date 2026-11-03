@@ -28,7 +28,7 @@ There is no fixed-point type (`DECIMAL`, `NUMERIC`). For money, use `BIGINT` in 
 
 ## Strings and JSON
 
-`VARCHAR` has no length limit: length is neither declared nor validated. `STRING` and `TEXT` are synonyms.
+`VARCHAR` has no length limit: length is neither declared nor validated. `STRING` and `TEXT` are synonyms. Index / ORDER BY / sealed `.sbpt` compare `VARCHAR` as **UTF-8 payload-lexicographic** byte order (same as `WireRangeOps` / sealed VERSION 3) — not Java `String.compareTo` UTF-16 code-unit order.
 
 `JSON` also collapses to `VARCHAR` and is stored as opaque UTF-8 text. Grid does not parse JSON, does not validate it and cannot search by paths inside a document. If you need to filter on a field, lift that field into its own column.
 

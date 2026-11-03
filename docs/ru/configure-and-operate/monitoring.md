@@ -29,7 +29,7 @@ curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.d
 | `sqlTcp` | `listening`, `disabled`, `down` | Состояние SQL-слушателя |
 | `durableOrSynced` | `up`, `n/a` | Локальная durability или sync согласия достаточны для UP |
 | `orchidSynced` | `true`, `false`, `n/a` | Фазовая синхронизация ORCHID достигнута |
-| `reason` | `sql_tcp_down`, `orchid_not_synced` | Только при DOWN |
+| `reason` | `sql_tcp_down`, `orchid_not_synced`, `catalog_lag_stuck` | Только при DOWN |
 | `writerEligible` | boolean, `n/a` | Узел может принимать запись |
 | `applyLagStale` | boolean, `n/a` | Отставание apply выше `grid.replication.ha.max-stale-lag` |
 | `orchidR` | double, `n/a` | Параметр порядка фазы `R` (насколько фазы узлов близки) |
@@ -48,7 +48,10 @@ curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.d
 | `lockWaitTimeouts`, `lockCancels`, `sqlCancelInflight` | long | Блокировки и CANCEL |
 | `privilegeUsers` | integer, `n/a` | Число пользователей в локальном privilege catalog |
 | `authOpen` | boolean, `n/a` | Open-auth (пользователей ещё нет) |
-| `catalogApplyLag` | long, `n/a` | tip `_catalog` − applied watermark — смотреть после `CREATE USER` на writer; readiness **не** уходит в DOWN |
+| `catalogApplyLag` | long, `n/a` | tip `_catalog` − applied watermark — смотреть после `CREATE USER` / DDL на writer |
+| `catalogLagStuck` | boolean, `n/a` | Застрявший lag apply `_catalog` — readiness **DOWN** с `reason=catalog_lag_stuck` (краткий lag>0 остаётся UP) |
+| `catalogIncomplete` | boolean, `n/a` | Локальный fingerprint каталога устарел относительно пиров (дыра object-set) |
+| `catalogFingerprint` | long, `n/a` | Fingerprint object-set локального каталога (также в wire `ServerMeta` / HELLO) |
 
 Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и те же шкалы согласия/ремонта. Ключа `reason` нет: живой процесс с несинхронизированным кластером жив, но не готов.
 
@@ -71,7 +74,7 @@ Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и т�
 | `grid.replication.ship_backpressure` | Доставка упирается в `flow.max-inflight-ops` |
 | `grid.replication.swarm_hint` | Подсказка размещения (порядковый номер) |
 | `grid.replication.overlay_pinned_keys` | Живые PIN — [overlay PIN](configuration/overlay-pin.md) |
-| `grid.replication.catalog_apply_lag` | tip `_catalog` − applied watermark (catch-up privilege/schema DDL; AUTH не gated через `applyLagStale`) |
+| `grid.replication.catalog_apply_lag` | tip `_catalog` − applied watermark (catch-up privilege/schema DDL; AUTH не gated одним serving-stream `applyLagStale`) |
 
 Хранение и чтение:
 

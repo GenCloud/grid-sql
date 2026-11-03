@@ -34,7 +34,9 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 /**
  * CommonPoolGuard must trip {@link GridProcessFence} without killing the sampler daemon.
  * <p>
- * Single method — fence is process-global (no {@code resetForTests}).
+ * Single method — fence is process-global (no product reset). Surefire runs this class in a
+ * dedicated JVM ({@code common-pool-fence-isolated}) so a tripped fence cannot poison
+ * {@code SqlEngine} / store ITs that share the default fork.
  *
  * @author: GenCloud
  * @date: 2026/10

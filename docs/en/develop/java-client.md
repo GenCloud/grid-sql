@@ -86,7 +86,7 @@ After failover, do **not** rotate the next host in the URL by hand.
 | `PROMOTE_NOTIFY` / updated `ServerMeta` on the live channel | Prefer the promote hint; the factory may call `rediscoverWriter()` for you |
 | Writes still fail / stick to a dead host | Call `rediscoverWriter()` on `RemoteConnectionFactory` (returns a fresh `Connection`); check `lastServerMeta()` / `connection.serverMeta()` for `writerEligible`, `promoteHint`, `regionEpoch` |
 
-Connect retries (`retryMode`) are not a substitute for `rediscoverWriter()` after role change. AUTH redirect budget: writer path — **one** hop via `promoteHint`; `READ_REPLICA` — up to `ring−1` around the endpoint ring; after the budget is spent — fail-closed (including `applyLagStale`). Sync/JDBC: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` (no `Mono.block` on the hot path). Procedure: [promote](../configure-and-operate/operations/ha-promote.md).
+Connect retries (`retryMode`) are not a substitute for `rediscoverWriter()` after role change. AUTH redirect budget: writer path — **one** hop via `promoteHint`; `READ_REPLICA` — up to `ring−1` around the endpoint ring; after the budget is spent — fail-closed (including `applyLagStale`). Sync/JDBC: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` (no `Mono.block` on the hot path). On orchid / region / apply-lag **writer fence**, Sync and JDBC run **one** transparent retry via `WriterFenceRetryUtil.callWithOneRediscover` (rediscover once, then re-run the statement); a second fence still surfaces to the app. Procedure: [promote](../configure-and-operate/operations/ha-promote.md).
 
 ## Autocommit
 
@@ -209,7 +209,7 @@ If the URL specifies `readEndpoints`, `ConnectionFactory.fromUrl` returns a rout
 grid://grid:grid@primary:15432/public?readEndpoints=replica-1:15433,replica-2:15434&readPreference=REPLICA&maxReadConnections=2
 ```
 
-Read-your-writes through a replica without a round trip to the writer is not guaranteed. When the allowed lag is exceeded the replica answers `REPLICA_READ_STALE` and the client switches endpoint. Full coverage of policies, failures and risks — [replica reads](../configure-and-operate/operations/replica-reads.md).
+Read-your-writes through a replica without a round trip to the writer is not guaranteed. When the replica is stale or **data-incomplete** (`applyLagStale`, unhydrated LAZY tip debt, or `catalogFingerprint` mismatch), AUTH rotate walks the read ring; if every replica still signals incomplete (`ReplicaReadFallbackUtil`), auto-route **falls back to the writer** instead of a silent empty SELECT. Full coverage — [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 ### Force writer for tooling (`SqlClientRouteContext`)
 

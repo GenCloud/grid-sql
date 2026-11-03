@@ -109,15 +109,21 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 
 `SESSION_OPEN` carries role (`SessionRoleWire` v2). `PROMOTE_NOTIFY` does **not** change session role.
 
-## Stale / lag policy
+## Stale / lag / completeness policy
+
+Serving-stream `applyLagStale` alone is **not** the full read gate. Replica SQL admission also fails closed when local data is **incomplete**:
 
 | Condition | Behavior |
 |-----------|----------|
-| `applyLagStale` | Reject `REPLICA_READ_STALE`; rotate on next `obtain()` / statement boundary |
+| `applyLagStale` (serving streams) | Reject `REPLICA_READ_STALE`; AUTH rotate on the read ring |
+| Unhydrated LAZY tip debt / incomplete apply | Same client-visible incomplete signal — not a silent empty SELECT |
+| `catalogFingerprint` mismatch vs peers | Deny replica read: catalog object-set incomplete (VIEW/TABLE hole) — message includes fingerprint mismatch |
 | `replicaReadsEnabled=false` | `REPLICA_READ_DISABLED` |
 | Catch-up-only / learner | Always deny client SQL |
 | Witness region | Deny replica reads |
 | DML / BEGIN on `READ_REPLICA` | `READ_REPLICA_DML_DENIED` (after ANTLR tag) |
+
+**Auto-route writer fallback:** when the URL uses `readPreference=REPLICA` and the read ring is exhausted with an incomplete/stale signal (`ReplicaReadFallbackUtil`), `RoutingConnection` / Sync read paths **resume on the writer** instead of returning a silent empty result. Explicit `forcePrimary` / tooling still pins the writer. Wire `ServerMeta` may carry `catalogFingerprint` for HELLO/AUTH.
 
 No `ALLOW_STALE` in v1. No read-your-writes via replica without a writer round-trip.
 
@@ -140,7 +146,7 @@ No `ALLOW_STALE` in v1. No read-your-writes via replica without a writer round-t
 | `createReadStatement` / `executeRead` | **closed** (explicit, still supported) |
 | `RemoteConnectionFactory.createReadFactory` | **closed** (read pool) |
 | `staleReadPolicy` | v1 reject-on-stale only (no `ALLOW_STALE`) |
-| N `readEndpoints` + `ReadEndpointSelector` rotate on `applyLagStale` | ready (`ReplicaReadEndpointsRotateIT`) |
+| N `readEndpoints` + rotate on incomplete/stale + writer fallback | ready (product `RoutingConnection` / `ReplicaReadFallbackUtil`) |
 
 Next: [failures](failures.md), [HA promote](ha-promote.md), [replication network](../../understand/replication-network.md).
 

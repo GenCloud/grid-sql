@@ -94,6 +94,7 @@ The rules that protect against divergence during a partition:
 - The writer is phase-ranked: `min(nodeId)` among self and seen peers.
 - A peer is promoted back to voter once its `APPLY_ACK` has caught up; a HELLO with the same `clusterId` adds it back via `addPeer`.
 - `writerEligible` requires sync, phase admission, **and** a tip that is not behind reachable peers. Tip-behind (unclean revive / tip fence) keeps `writerEligible=false` until local `lastCommittedSeq` catches `maxSeenPeerCommittedSeq` — independent of role/epoch.
+- Wire `ServerMeta` / HELLO may carry **`catalogFingerprint`** (local catalog object-set). Replica SQL admission fail-closes on fingerprint mismatch or unhydrated LAZY tip debt — not only serving-stream `applyLagStale`. Client auto-route may fall back to the writer: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 ## Repair and placement readiness
 
