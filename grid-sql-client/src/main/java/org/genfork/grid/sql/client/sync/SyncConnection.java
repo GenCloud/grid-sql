@@ -33,6 +33,7 @@ import org.genfork.grid.sql.client.Connection;
 import org.genfork.grid.sql.client.DefaultRowMetadata;
 import org.genfork.grid.sql.client.RemoteConnection;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
+import org.genfork.grid.sql.client.ReplicaReadFallbackUtil;
 import org.genfork.grid.sql.client.Row;
 import org.genfork.grid.sql.client.ServerMeta;
 import org.genfork.grid.sql.client.SqlClientRouteContext;
@@ -46,7 +47,8 @@ import org.genfork.grid.sql.netty.SqlWire;
  * Blocking facade over {@link TransportConnection} (CompletionStage / RowPortal only).
  * <p>
  * Optional READ_REPLICA pool: autocommit SELECT/EXPLAIN route via {@link SqlClientRouteUtil}
- * (product parity with reactive {@code RoutingConnection}).
+ * (product parity with reactive {@code RoutingConnection}). Incomplete / apply-lag ring →
+ * fall back to the writer transport ({@link ReplicaReadFallbackUtil}).
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -143,7 +145,7 @@ public final class SyncConnection implements AutoCloseable {
 		if (readFactory != null
 				&& !SqlClientRouteContext.suppressReplicaReads()
 				&& SqlClientRouteUtil.routeFor(prepareRouteCache, sql) == SqlRouteClassifier.Route.READ) {
-			return SyncStatement.autocommitRead(readFactory, sql, effective, syncExecutor);
+			return SyncStatement.autocommitRead(readFactory, transport, sql, effective, syncExecutor);
 		}
 		return new SyncStatement(transport, sql, effective, syncExecutor);
 	}
@@ -159,17 +161,23 @@ public final class SyncConnection implements AutoCloseable {
 		if (readFactory != null
 				&& !SqlClientRouteContext.suppressReplicaReads()
 				&& SqlClientRouteUtil.allRead(prepareRouteCache, sqls)) {
-			final Connection borrowed =
-					SyncAwait.await(readFactory.obtainStage(), effective, null, syncExecutor);
-			if (!(borrowed instanceof RemoteConnection readRemote)) {
-				throw new IllegalStateException("read obtainStage must return RemoteConnection");
-			}
 			try {
-				final List<TransportOutcome> outcomes = SyncAwait.await(
-						readRemote.transport().batchAutocommit(sqls), effective, null, syncExecutor);
-				return wrapOutcomes(outcomes, effective, syncExecutor);
-			} finally {
-				SyncAwait.awaitVoid(readRemote.transport().parkStage(), effective, syncExecutor);
+				final Connection borrowed =
+						SyncAwait.await(readFactory.obtainStage(), effective, null, syncExecutor);
+				if (!(borrowed instanceof RemoteConnection readRemote)) {
+					throw new IllegalStateException("read obtainStage must return RemoteConnection");
+				}
+				try {
+					final List<TransportOutcome> outcomes = SyncAwait.await(
+							readRemote.transport().batchAutocommit(sqls), effective, null, syncExecutor);
+					return wrapOutcomes(outcomes, effective, syncExecutor);
+				} finally {
+					SyncAwait.awaitVoid(readRemote.transport().parkStage(), effective, syncExecutor);
+				}
+			} catch (RuntimeException ex) {
+				if (!ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
+					throw ex;
+				}
 			}
 		}
 		final List<TransportOutcome> outcomes =
@@ -188,20 +196,26 @@ public final class SyncConnection implements AutoCloseable {
 		if (readFactory != null
 				&& !SqlClientRouteContext.suppressReplicaReads()
 				&& SqlClientRouteUtil.allRead(prepareRouteCache, sqlsFromStatements(statements))) {
-			final Connection borrowed =
-					SyncAwait.await(readFactory.obtainStage(), effective, null, syncExecutor);
-			if (!(borrowed instanceof RemoteConnection readRemote)) {
-				throw new IllegalStateException("read obtainStage must return RemoteConnection");
-			}
 			try {
-				final List<TransportOutcome> outcomes = SyncAwait.await(
-						readRemote.transport().batchAutocommitStatements(statements),
-						effective,
-						null,
-						syncExecutor);
-				return wrapOutcomes(outcomes, effective, syncExecutor);
-			} finally {
-				SyncAwait.awaitVoid(readRemote.transport().parkStage(), effective, syncExecutor);
+				final Connection borrowed =
+						SyncAwait.await(readFactory.obtainStage(), effective, null, syncExecutor);
+				if (!(borrowed instanceof RemoteConnection readRemote)) {
+					throw new IllegalStateException("read obtainStage must return RemoteConnection");
+				}
+				try {
+					final List<TransportOutcome> outcomes = SyncAwait.await(
+							readRemote.transport().batchAutocommitStatements(statements),
+							effective,
+							null,
+							syncExecutor);
+					return wrapOutcomes(outcomes, effective, syncExecutor);
+				} finally {
+					SyncAwait.awaitVoid(readRemote.transport().parkStage(), effective, syncExecutor);
+				}
+			} catch (RuntimeException ex) {
+				if (!ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
+					throw ex;
+				}
 			}
 		}
 		final List<TransportOutcome> outcomes =

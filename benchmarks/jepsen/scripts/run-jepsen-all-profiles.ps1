@@ -1,4 +1,4 @@
-param(
+﻿param(
   [int]$TimeLimit = 45,
   [switch]$SkipRebuild,
   [switch]$Fast,
@@ -45,6 +45,9 @@ function Clear-JepsenProfileEnv {
       "JEPSEN_SWARM",
       "JEPSEN_UNCLEAN_REVIVE",
       "JEPSEN_UNCLEAN_DOWN_SEC",
+      "JEPSEN_CATALOG_HONESTY",
+      "JEPSEN_SEALED_MISS",
+      "JEPSEN_SPARSE_CATALOG",
       "JEPSEN_MULTIDC",
       "MULTIDC_WORKLOADS",
       "MULTIDC_NEMESIS",
@@ -89,6 +92,36 @@ Run-Profile "1dc-nochao" "run-jepsen-nochao.ps1"
 Run-Profile "1dc-unclean-revive" "run-jepsen-unclean-revive.ps1"
 Run-Profile "1dc-swarm-chaos" "run-jepsen-swarm.ps1"
 Run-Profile "1dc-join-shards" "run-jepsen-join.ps1"
+# Cells N/O/P (dirty self-heal) — bash entrypoints via Git Bash when available.
+$bash = Find-GitBash
+if ($bash) {
+  Write-Host "`n======== PROFILE 1dc-unclean-ddl (N) ========`n"
+  Clear-JepsenProfileEnv
+  $env:STAMP = "$StampPrefix-1dc-unclean-ddl"
+  & $bash (Join-Path $PSScriptRoot "run-jepsen-unclean-ddl.sh")
+  $code = if ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  Clear-JepsenProfileEnv
+  [void]$rows.Add([pscustomobject]@{ profile = "1dc-unclean-ddl"; outcome = $(if ($code -eq 0) { "PASS" } else { "FAIL" }); exitCode = $code; seconds = 0 })
+  if ($code -ne 0) { [void]$failures.Add("1dc-unclean-ddl") }
+
+  Write-Host "`n======== PROFILE 1dc-sealed-miss (O) ========`n"
+  Clear-JepsenProfileEnv
+  $env:STAMP = "$StampPrefix-1dc-sealed-miss"
+  & $bash (Join-Path $PSScriptRoot "run-jepsen-sealed-miss.sh")
+  $code = if ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  Clear-JepsenProfileEnv
+  [void]$rows.Add([pscustomobject]@{ profile = "1dc-sealed-miss"; outcome = $(if ($code -eq 0) { "PASS" } else { "FAIL" }); exitCode = $code; seconds = 0 })
+  if ($code -ne 0) { [void]$failures.Add("1dc-sealed-miss") }
+
+  Write-Host "`n======== PROFILE 1dc-sparse-catalog (P) ========`n"
+  Clear-JepsenProfileEnv
+  $env:STAMP = "$StampPrefix-1dc-sparse-catalog"
+  & $bash (Join-Path $PSScriptRoot "run-jepsen-sparse-catalog.sh")
+  $code = if ($null -eq $LASTEXITCODE) { 1 } else { [int]$LASTEXITCODE }
+  Clear-JepsenProfileEnv
+  [void]$rows.Add([pscustomobject]@{ profile = "1dc-sparse-catalog"; outcome = $(if ($code -eq 0) { "PASS" } else { "FAIL" }); exitCode = $code; seconds = 0 })
+  if ($code -ne 0) { [void]$failures.Add("1dc-sparse-catalog") }
+}
 
 if (-not $SkipMultidc) {
   $mdc = Join-Path $JEPSEN_DIR "multidc\scripts"

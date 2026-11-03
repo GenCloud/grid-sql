@@ -105,9 +105,10 @@ public final class SqlDdlExecutor {
 		final String table = tables.resolveTable(session, s.table());
 		if (catalog.exists(table)) {
 			if (s.ifNotExists() || applyingReplicatedDdl.get()) {
-				if (catalog.getStore(table) == null) {
-					final TableSchema existing = catalog.getSchema(table);
-					if (existing != null) {
+				final TableSchema existing = catalog.getSchema(table);
+				if (existing != null) {
+					catalog.ensureIdentitySequences(existing);
+					if (catalog.getStore(table) == null) {
 						tables.ensureStore(existing);
 					}
 				}
@@ -688,6 +689,13 @@ public final class SqlDdlExecutor {
 			return;
 		}
 		ReplicaAccessGate.ensureWrite(repl);
+		if (repl.shouldDenyCatalogDdlMint()) {
+			throw new IllegalStateException(
+					"catalog apply lag or peer catalog ahead; catch-up before DDL mint lag="
+							+ repl.catalogApplyLag()
+							+ " peerApplied=" + repl.maxPeerCatalogAppliedEpoch()
+							+ " localApplied=" + repl.catalogAppliedEpoch());
+		}
 	}
 
 	public SqlResult createTrigger(SqlSession session, CreateTriggerSql s) {

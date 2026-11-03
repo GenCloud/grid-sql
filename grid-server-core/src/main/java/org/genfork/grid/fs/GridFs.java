@@ -27,9 +27,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.locks.LockSupport;
+import java.util.stream.Stream;
 
 import org.genfork.grid.utils.UnsafeMemory;
 
@@ -47,6 +49,8 @@ import org.genfork.grid.utils.UnsafeMemory;
  */
 public final class GridFs {
 	private static final String TMP_SUFFIX = ".tmp";
+	/** Legacy unpublished sibling suffix (pre-{@code *.tmp.*}). */
+	private static final String LEGACY_PART_SUFFIX = ".part";
 	private static final String MSG_ATOMIC_REQUIRED = "Atomic move is required for durable file ";
 	/** Bounded attempts including the first try (Windows REPLACE sharing violation). */
 	private static final int WINDOWS_REPLACE_MAX_ATTEMPTS = 16;
@@ -296,6 +300,63 @@ public final class GridFs {
 		} catch (IOException ignored) {
 			// best-effort cleanup
 		}
+	}
+
+	/**
+	 * Boot-only: delete orphan publish staging under {@code root} ({@code *.tmp.*}, legacy {@code *.part}).
+	 * <p>
+	 * Call <strong>before</strong> sealed/open/publish. Never promote staging. Lock/IO failures are
+	 * skipped (Windows REPLACE races). Not for mid-runtime GC.
+	 *
+	 * @return number of files deleted
+	 */
+	public static int purgeOrphanStagingAtBoot(Path root) {
+		if (root == null || !Files.isDirectory(root)) {
+			return 0;
+		}
+		int deleted = 0;
+		try (Stream<Path> walk = Files.walk(root)) {
+			final List<Path> orphans = new ArrayList<>();
+			walk.filter(Files::isRegularFile)
+					.filter(GridFs::isOrphanStagingName)
+					.forEach(orphans::add);
+			for (Path orphan : orphans) {
+				try {
+					if (Files.deleteIfExists(orphan)) {
+						deleted++;
+					}
+				} catch (IOException ignored) {
+					// Windows lock / in-use — skip
+				}
+			}
+		} catch (IOException ignored) {
+			return deleted;
+		}
+		return deleted;
+	}
+
+	/**
+	 * {@code file.tmp.<tid>.<nano>}, plain {@code file.tmp}, or legacy {@code *.part}.
+	 */
+	public static boolean isOrphanStagingName(Path path) {
+		if (path == null) {
+			return false;
+		}
+		final Path namePath = path.getFileName();
+		if (namePath == null) {
+			return false;
+		}
+		final String name = namePath.toString();
+		if (name.endsWith(LEGACY_PART_SUFFIX)) {
+			return true;
+		}
+		final int tmpIdx = name.indexOf(TMP_SUFFIX);
+		if (tmpIdx < 0) {
+			return false;
+		}
+		// "*.tmp" or "*.tmp.*"
+		final int after = tmpIdx + TMP_SUFFIX.length();
+		return after == name.length() || name.charAt(after) == '.';
 	}
 
 	public static boolean exists(Path path) {

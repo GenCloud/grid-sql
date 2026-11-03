@@ -379,12 +379,16 @@ public final class TableCatalog {
 		return Set.copyOf(views.keySet());
 	}
 
+	/** Snapshot of registered UDF names (lower keys as stored). */
+	public Set<String> functionNames() {
+		return Set.copyOf(functions.keySet());
+	}
 
 	/**
-     * @param emptyFirstForReplay when {@code true} (DDL journal replay only), drop contained
-     *                            objects first so append-only {@code DROP SCHEMA} after
-     *                            {@code CREATE TABLE} remains recoverable
-     */
+	 * @param emptyFirstForReplay when {@code true} (DDL journal replay only), drop contained
+	 *                            objects first so append-only {@code DROP SCHEMA} after
+	 *                            {@code CREATE TABLE} remains recoverable
+	 */
 	public void dropSchema(String schemaName, boolean ifExists, boolean emptyFirstForReplay) {
 		Objects.requireNonNull(schemaName, "schemaName");
 		final String k = key(schemaName);
@@ -639,6 +643,33 @@ public final class TableCatalog {
 			throw new IllegalStateException("Sequence already exists: " + def.name());
 		}
 		return true;
+	}
+
+	/**
+	 * Register missing IDENTITY backing sequences for a live table (meta hydrate / IF NOT EXISTS).
+	 * Compact journal omits owned sequences — peers must still allocate nextVal after recover.
+	 */
+	public void ensureIdentitySequences(TableSchema schema) {
+		if (schema == null) {
+			return;
+		}
+		final String table = schema.catalogKey();
+		for (ColumnDef col : schema.columns()) {
+			if (col == null || !col.identity()) {
+				continue;
+			}
+			final String seqName = col.identitySequence() == null || col.identitySequence().isBlank()
+					? SequenceDef.identityName(table, col.name())
+					: col.identitySequence();
+			createSequence(
+					SequenceDef.of(
+									seqName,
+									SequenceDef.DEFAULT_START,
+									SequenceDef.DEFAULT_INCREMENT,
+									false)
+							.withOwner(table, col.name()),
+					true);
+		}
 	}
 
 	public boolean dropSequence(String name, boolean ifExists) {

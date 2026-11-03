@@ -74,11 +74,17 @@ class ApplyLagServingStreamsIT {
 			assertTrue(coord.unhydratedTipDebt() > props.getReplication().getHa().getMaxStaleLag(),
 					"unhydrated tip debt must be visible for ops/metrics");
 			assertFalse(coord.isApplyLagStale(),
-					"untouched LAZY tip must not set AUTH applyLagStale");
+					"untouched LAZY tip must not set write-path applyLagStale");
+			assertTrue(coord.isReplicaDataIncomplete(),
+					"unhydrated tip must mark replica data incomplete for client SELECT");
+			assertTrue(coord.isClientApplyLagStale(),
+					"client AUTH / replica-read meta must fence incomplete LAZY tip");
 
 			coord.ensureShardHydrated(DOMAIN, 0);
 			// After hydrate, applied catches tip (or dump truncates); lag should clear.
 			assertFalse(coord.isApplyLagStale());
+			assertFalse(coord.isReplicaDataIncomplete());
+			assertFalse(coord.isClientApplyLagStale());
 		} finally {
 			coord.stop();
 		}

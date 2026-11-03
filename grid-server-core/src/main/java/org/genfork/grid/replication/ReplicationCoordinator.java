@@ -49,14 +49,30 @@ import org.genfork.grid.replication.snapshot.SnapshotService;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.swarm.*;
 import org.genfork.grid.replication.transport.ApplyAckSender;
+import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationPeer;
 import org.genfork.grid.replication.transport.ReplicationPublisher;
 import org.genfork.grid.replication.tx.StreamCommitSerializer;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
+import org.genfork.grid.fs.GridFs;
+import org.genfork.grid.replication.netty.ReplicationRpcCodec.ApplyNack;
+import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
+import org.genfork.grid.replication.util.ApplyNackHealUtil;
+import org.genfork.grid.replication.util.ApplyNackHealUtil.CoalesceState;
+import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec;
+import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec.CatalogDdlSnapshot;
+import org.genfork.grid.replication.util.CatalogLagFenceUtil;
+import org.genfork.grid.replication.util.CatalogLagFenceUtil.ProgressTracker;
+import org.genfork.grid.replication.util.CatalogTruncateGateUtil;
 import org.genfork.grid.replication.util.CrossDcVoterUtil;
+import org.genfork.grid.replication.util.HelloSealedCatchUpUtil;
 import org.genfork.grid.replication.util.OpLogArchiveUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+import org.genfork.grid.replication.util.SealedIntegritySensorUtil;
+import org.genfork.grid.replication.util.SealedIntegritySensorUtil.PackDebounce;
+import org.genfork.grid.replication.util.SealedIntegritySensorUtil.Probe;
+import org.genfork.grid.threading.ThreadService;
 import org.genfork.grid.sql.tx.DistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.NettyDistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
@@ -74,7 +90,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -161,6 +179,31 @@ public class ReplicationCoordinator {
 	 */
 	private static final long REPAIR_SOFT_LAG_OPS = 10000L;
 	private final AtomicLong repairTickCount = new AtomicLong();
+	/** Stuck-lag progress for {@code _catalog} readiness fence. */
+	private final ProgressTracker catalogLagProgress = new ProgressTracker();
+	/** Peer HELLO {@code catalogAppliedEpoch} by node id. */
+	private final ConcurrentHashMap<String, Long> peerCatalogApplied = new ConcurrentHashMap<>();
+	/** Peer HELLO {@code catalogFingerprint} by node id. */
+	private final ConcurrentHashMap<String, Long> peerCatalogFingerprint = new ConcurrentHashMap<>();
+	/**
+	 * Writer fingerprint last shipped as journal snapshot per peer.
+	 * Prevents HELLO↔apply storms when peer object-set cannot converge from CREATE* diff alone.
+	 */
+	private final ConcurrentHashMap<String, Long> catalogSnapshotShippedLocalFp = new ConcurrentHashMap<>();
+	/** Local catalog object-set fingerprint (SqlEngine bind). */
+	private volatile Supplier<Long> catalogFingerprintSupplier = () -> 0L;
+	/** Writer compact ddl lines for journal reconcile ship. */
+	private volatile Supplier<List<String>> catalogCompactLinesSupplier = List::of;
+	/** Local maxApplied DDL epoch for reconcile base. */
+	private volatile Supplier<Long> catalogMaxAppliedSupplier = () -> 0L;
+	/** Peer catalog journal snapshot apply (SqlEngine). */
+	private volatile Consumer<CatalogDdlSnapshot> catalogSnapshotApplyHandler;
+	/** APPLY_NACK heal coalesce (cluster-wide; fan-out safe). */
+	private final CoalesceState applyNackHealState = new CoalesceState();
+	/** Sealed header sensor pack-request debounce. */
+	private final PackDebounce sealedIntegrityDebounce = new PackDebounce();
+	/** Durable data root ({@code dataDir/cluster/node}) for boot staging GC. */
+	private final Path durableDataDir;
 	/**
 	 * Fallback shard count for PIN migrate gate when OpLog has no {@code domain#shard} streams yet.
 	 */
@@ -249,10 +292,27 @@ public class ReplicationCoordinator {
 	 * Re-gates HELLO sealed packs until {@link #markCatalogBootstrapComplete()}.
 	 */
 	public void bindSqlCatalog(ReplicaApplier.CatalogDdlHandler handler) {
+		bindSqlCatalog(handler, () -> 0L, List::of, () -> 0L, null);
+	}
+
+	/**
+	 * Full catalog bind: DDL apply + fingerprint / compact journal for peer reconcile.
+	 */
+	public void bindSqlCatalog(
+			ReplicaApplier.CatalogDdlHandler handler,
+			Supplier<Long> fingerprintSupplier,
+			Supplier<List<String>> compactLinesSupplier,
+			Supplier<Long> maxAppliedSupplier,
+			Consumer<CatalogDdlSnapshot> snapshotApplyHandler
+	) {
 		if (!enabled || handler == null) {
 			return;
 		}
 		this.catalogDdlHandler = handler;
+		this.catalogFingerprintSupplier = fingerprintSupplier == null ? () -> 0L : fingerprintSupplier;
+		this.catalogCompactLinesSupplier = compactLinesSupplier == null ? List::of : compactLinesSupplier;
+		this.catalogMaxAppliedSupplier = maxAppliedSupplier == null ? () -> 0L : maxAppliedSupplier;
+		this.catalogSnapshotApplyHandler = snapshotApplyHandler;
 		if (sealedHydrateService != null) {
 			sealedHydrateService.beginCatalogBootstrap();
 		}
@@ -263,14 +323,22 @@ public class ReplicationCoordinator {
 		if (catalogApplier != null) {
 			catalogApplier.setCatalogDdlHandler(handler);
 		}
+		if (nettyTransport != null) {
+			nettyTransport.setCatalogDdlSnapshotHandler(this::onCatalogDdlSnapshotBody);
+		}
 	}
 
 	/**
 	 * After SqlEngine catalog bind + {@code recoverPersistedCatalog}: allow HELLO sealed packs.
+	 * Re-advertises HELLO with live catalog fingerprint so peers can reconcile object-set holes
+	 * (channelActive HELLO often races before {@link #bindSqlCatalog}).
 	 */
 	public void markCatalogBootstrapComplete() {
 		if (sealedHydrateService != null) {
 			sealedHydrateService.markCatalogBootstrapComplete();
+		}
+		if (nettyTransport != null && peerTransportEnabled) {
+			nettyTransport.broadcastHello();
 		}
 	}
 
@@ -320,6 +388,7 @@ public class ReplicationCoordinator {
 			this.sealedHydrateService = null;
 			this.indexCheckpointService = null;
 			this.peerMembershipService = null;
+			this.durableDataDir = null;
 			return;
 		}
 		this.adaptiveDiskFirstController = adaptiveDiskFirst ? new AdaptiveDiskFirstController(workingSetMaxEntries, "LAZY".equals(hydrateMode)) : null;
@@ -327,6 +396,9 @@ public class ReplicationCoordinator {
 		this.flowControl = new ReplicationFlowControl(cfg.getFlow().getMaxInflightOps(), cfg.getFlow().getDomains());
 		final boolean fsync = cfg.getOpLog().isFsync();
 		final Path dataDir = Path.of(cfg.getOpLog().getDataDir(), cfg.getClusterId(), cfg.getNodeId());
+		this.durableDataDir = dataDir;
+		// Boot-only orphan staging GC before sealed/open/publish (never mid-runtime).
+		GridFs.purgeOrphanStagingAtBoot(dataDir);
 		this.opLog = new OpLog(dataDir, fsync);
 		this.streamOpLogAppender = new StreamOpLogAppender(opLog);
 		this.streamCommitSerializer = new StreamCommitSerializer();
@@ -424,10 +496,27 @@ public class ReplicationCoordinator {
 			crossDcPublisher.setShipper((peer, segment) -> {
 			});
 		}
-		nettyTransport.bindHandlers(() -> orchidNode, appliers::get, crossDcEnabled ? crossDcPublisher : null, nodeState, homologousRepair, opLog, sparseCatchUp, peerMembershipService::onPeerDiscovered, peerMembershipService::maybePromoteVoter, regionClaimService::regionEpoch, regionClaimService::regionRoleWire);
+		nettyTransport.bindHandlers(
+				() -> orchidNode,
+				appliers::get,
+				crossDcEnabled ? crossDcPublisher : null,
+				nodeState,
+				homologousRepair,
+				opLog,
+				sparseCatchUp,
+				this::onPeerDiscoveredWithCatalog,
+				peerMembershipService::maybePromoteVoter,
+				regionClaimService::regionEpoch,
+				regionClaimService::regionRoleWire,
+				this::catalogAppliedEpoch,
+				this::catalogFingerprint);
+		nettyTransport.setSealedGridMapService(sealedGridMapService);
+		nettyTransport.setApplyNackHealHandler(this::onApplyNackHeal);
 		nettyTransport.setSealedShardPackHandler(sealedHydrateService::onSealedShardPack);
+		nettyTransport.setCatalogDdlSnapshotHandler(this::onCatalogDdlSnapshotBody);
 		nettyTransport.setRegionClaimHandlers(regionClaimService::onRegionClaimReqBuildAck, regionClaimService::onRegionClaimAck);
 		regionClaimService.seedObservedState();
+		catalogLagProgress.noteApplied(nodeState.appliedWatermark(CATALOG_DOMAIN, CATALOG_SHARD));
 	}
 
 	public void start() {
@@ -587,8 +676,23 @@ public class ReplicationCoordinator {
 			}
 			@Override
 			public void sendNack(ReplicationOp op, String reason) {
-				if (!peerTransportEnabled) {
+				if (!peerTransportEnabled || op == null) {
 					return;
+				}
+				// Prefer single peer when N=1; otherwise fan-out (no proposer id on ReplicationOp)
+				// — ApplyNackHealUtil coalesce prevents heal storms.
+				if (peers.size() == 1) {
+					nettyTransport.sendApplyNack(peers.getFirst().id(), op, reason);
+					return;
+				}
+				final String hint = promoteHint();
+				if (hint != null && !hint.isBlank()) {
+					for (ReplicationPeer peer : peers) {
+						if (hint.equals(peer.id())) {
+							nettyTransport.sendApplyNack(peer.id(), op, reason);
+							return;
+						}
+					}
 				}
 				for (ReplicationPeer peer : peers) {
 					nettyTransport.sendApplyNack(peer.id(), op, reason);
@@ -902,7 +1006,21 @@ public class ReplicationCoordinator {
 	public void truncateSafe(String domainType, int shard) {
 		final long applied = nodeState.appliedWatermark(domainType, shard);
 		final long peerMin = nodeState.minPeerAck(domainType, shard);
-		final long safe = peerMin == 0 ? applied : Math.min(applied, peerMin);
+		final long safe;
+		if (CATALOG_DOMAIN.equals(domainType)) {
+			// Fail-closed: retire _catalog ops only when all live voters ACK tip.
+			final long tip = opLog == null ? applied : opLog.lastSeq(domainType, shard);
+			final int liveVoters = orchidNode == null ? 0 : orchidNode.livePeerCount();
+			final long through = CatalogTruncateGateUtil.safeTruncateThrough(
+					tip, applied, peerMin, liveVoters);
+			if (through <= 0L) {
+				maybeShipCatalogReconcileToLaggingPeers();
+				return;
+			}
+			safe = through;
+		} else {
+			safe = peerMin == 0 ? applied : Math.min(applied, peerMin);
+		}
 		if (safe > 0) {
 			// Archive sync on caller thread; truncateSafe must not run on Netty EL.
 			OpLogArchiveUtil.archiveBeforeTruncate(opLog, opLogArchiveRoot, domainType, shard, safe);
@@ -1029,7 +1147,121 @@ public class ReplicationCoordinator {
 	}
 
 	public boolean isApplyLagStale() {
-		return regionClaimService != null && regionClaimService.isApplyLagStale();
+		final boolean dataStale = regionClaimService != null && regionClaimService.isApplyLagStale();
+		// Catalog lag → sticky rotate via ServerMeta.applyLagStale (never AUTH_FAILED).
+		// Object-set hole on non-writer: same sticky rotate; writer PRIMARY must not fence itself
+		// while peers lag CREATE* apply / reconcile.
+		final boolean catalogHoleOnFollower = !isWriterEligible() && isCatalogFingerprintStale();
+		return dataStale
+				|| CatalogLagFenceUtil.markApplyLagStale(catalogApplyLag())
+				|| catalogHoleOnFollower;
+	}
+
+	/**
+	 * Row-data completeness for client SQL meta / READ_REPLICA admission.
+	 * <p>
+	 * {@code true} when any OpLog stream has tip debt (including unhydrated LAZY tips) or
+	 * local Orchid tip trails an observed peer tip — the node must not be chosen for SELECT
+	 * that requires complete cluster-visible data. Orthogonal to serving-only
+	 * {@link #isApplyLagStale()} (write / HA {@code max-stale-lag}).
+	 */
+	public boolean isReplicaDataIncomplete() {
+		if (!enabled || nodeState == null || opLog == null) {
+			return false;
+		}
+		if (nodeState.maxApplyLag(opLog, null) > 0L) {
+			return true;
+		}
+		if (orchidNode != null) {
+			final long peerTip = orchidNode.maxSeenPeerCommittedSeq();
+			final long localTip = orchidNode.getLastCommittedSeq();
+			if (peerTip > localTip) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * AUTH / PROMOTE {@link org.genfork.grid.sql.client.ServerMeta#applyLagStale} and replica-read
+	 * gates: serving HA lag <em>or</em> incomplete row visibility.
+	 */
+	public boolean isClientApplyLagStale() {
+		return isApplyLagStale() || isReplicaDataIncomplete();
+	}
+
+	/**
+	 * Local catalog object-set fingerprint (HELLO / ServerMeta).
+	 */
+	public long catalogFingerprint() {
+		final Long value = catalogFingerprintSupplier.get();
+		return value == null ? 0L : value.longValue();
+	}
+
+	/**
+	 * {@code true} when any observed peer HELLO fingerprint differs from local (VIEW/TABLE hole).
+	 * Peer fingerprint {@code 0} is legacy / pre-bind unknown — not a mismatch.
+	 */
+	public boolean isCatalogFingerprintStale() {
+		final long local = catalogFingerprint();
+		if (local == 0L || peerCatalogFingerprint.isEmpty()) {
+			return false;
+		}
+		for (Long peerFp : peerCatalogFingerprint.values()) {
+			if (peerFp != null && peerFp.longValue() != 0L && peerFp.longValue() != local) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Local {@code _catalog} OpLog applied watermark (HELLO trailing advertise).
+	 */
+	public long catalogAppliedEpoch() {
+		if (nodeState == null) {
+			return 0L;
+		}
+		return Math.max(0L, nodeState.appliedWatermark(CATALOG_DOMAIN, CATALOG_SHARD));
+	}
+
+	/**
+	 * Max peer HELLO {@code catalogAppliedEpoch} observed (0 when no peers / solo).
+	 */
+	public long maxPeerCatalogAppliedEpoch() {
+		long max = 0L;
+		for (Long value : peerCatalogApplied.values()) {
+			if (value != null && value.longValue() > max) {
+				max = value.longValue();
+			}
+		}
+		return max;
+	}
+
+	/**
+	 * Readiness DOWN only when catalog apply lag is stuck (no applied progress).
+	 */
+	public boolean isCatalogApplyLagStuck() {
+		final long lag = catalogApplyLag();
+		catalogLagProgress.noteApplied(catalogAppliedEpoch());
+		return CatalogLagFenceUtil.readinessDownForStuckLag(
+				lag,
+				catalogLagProgress.millisSinceProgress(System.currentTimeMillis()),
+				CatalogLagFenceUtil.CATALOG_LAG_STUCK_MS);
+	}
+
+	/**
+	 * DDL mint fence: deny while local catalog lagging tip or behind peer HELLO applied.
+	 */
+	public boolean shouldDenyCatalogDdlMint() {
+		if (!enabled || nodeState == null || opLog == null) {
+			return false;
+		}
+		if (peers == null || peers.isEmpty()) {
+			return CatalogLagFenceUtil.denyDdlMint(catalogApplyLag(), catalogAppliedEpoch(), 0L);
+		}
+		return CatalogLagFenceUtil.denyDdlMint(
+				catalogApplyLag(), catalogAppliedEpoch(), maxPeerCatalogAppliedEpoch());
 	}
 
 	/**
@@ -1053,7 +1285,169 @@ public class ReplicationCoordinator {
 		}
 		final long tip = opLog.lastSeq(CATALOG_DOMAIN, CATALOG_SHARD);
 		final long applied = nodeState.appliedWatermark(CATALOG_DOMAIN, CATALOG_SHARD);
+		catalogLagProgress.noteApplied(applied);
 		return Math.max(0L, tip - applied);
+	}
+
+	private void onPeerDiscoveredWithCatalog(DiscoveredPeer discovered) {
+		if (discovered != null && discovered.id() != null) {
+			observePeerCatalogFence(
+					discovered.id(),
+					discovered.catalogAppliedEpoch(),
+					discovered.catalogFingerprint());
+		}
+		if (peerMembershipService != null) {
+			peerMembershipService.onPeerDiscovered(discovered);
+		}
+	}
+
+	/**
+	 * HELLO / catch-up catalog fence: remember peer applied watermark + object-set fingerprint,
+	 * pull {@code _catalog} when behind, ship compacted journal when writer sees a hole.
+	 */
+	public void observePeerCatalogFence(String peerId, long peerCatalogAppliedEpoch, long peerCatalogFingerprint) {
+		if (peerId == null) {
+			return;
+		}
+		peerCatalogApplied.put(peerId, Math.max(0L, peerCatalogAppliedEpoch));
+		final Long previousPeerFp = this.peerCatalogFingerprint.put(peerId, peerCatalogFingerprint);
+		final long localApplied = catalogAppliedEpoch();
+		if (peerCatalogAppliedEpoch > localApplied && nettyTransport != null) {
+			final long fromSeq = Math.max(1L, localApplied + 1L);
+			nettyTransport.sendOplogPull(peerId, CATALOG_DOMAIN, CATALOG_SHARD, fromSeq);
+		}
+		final long localFp = catalogFingerprint();
+		if (peerCatalogFingerprint != 0L && peerCatalogFingerprint == localFp) {
+			catalogSnapshotShippedLocalFp.remove(peerId);
+			return;
+		}
+		if (previousPeerFp != null
+				&& previousPeerFp.longValue() != 0L
+				&& previousPeerFp.longValue() != peerCatalogFingerprint) {
+			// Peer object-set moved but still mismatches — allow one more reconcile ship.
+			catalogSnapshotShippedLocalFp.remove(peerId);
+		}
+		if (localFp != 0L
+				&& peerCatalogFingerprint != 0L
+				&& localFp != peerCatalogFingerprint
+				&& isWriterEligible()) {
+			shipCatalogDdlSnapshotToPeer(peerId, peerCatalogAppliedEpoch);
+		}
+	}
+
+	private void maybeShipCatalogReconcileToLaggingPeers() {
+		if (!isWriterEligible() || nettyTransport == null) {
+			return;
+		}
+		final long localFp = catalogFingerprint();
+		if (localFp == 0L) {
+			return;
+		}
+		for (Map.Entry<String, Long> e : peerCatalogFingerprint.entrySet()) {
+			final Long peerFp = e.getValue();
+			if (peerFp == null || peerFp.longValue() == 0L || peerFp.longValue() == localFp) {
+				continue;
+			}
+			final long peerApplied = peerCatalogApplied.getOrDefault(e.getKey(), 0L);
+			shipCatalogDdlSnapshotToPeer(e.getKey(), peerApplied);
+		}
+	}
+
+	private void shipCatalogDdlSnapshotToPeer(String peerId, long peerCatalogAppliedEpoch) {
+		if (nettyTransport == null || peerId == null) {
+			return;
+		}
+		final List<String> lines = catalogCompactLinesSupplier.get();
+		if (lines == null || lines.isEmpty()) {
+			return;
+		}
+		final long localFp = catalogFingerprint();
+		final Long shipped = catalogSnapshotShippedLocalFp.get(peerId);
+		if (shipped != null && shipped.longValue() == localFp) {
+			return;
+		}
+		final Long maxApplied = catalogMaxAppliedSupplier.get();
+		final long base = Math.max(
+				maxApplied == null ? 0L : maxApplied.longValue(),
+				Math.max(0L, peerCatalogAppliedEpoch));
+		final CatalogDdlSnapshot snapshot = new CatalogDdlSnapshot(
+				nodeState == null ? "" : nodeState.getNodeId(),
+				localFp,
+				base,
+				lines);
+		log.info(
+				"Shipping catalog DDL snapshot to peer={} lines={} localFp={} baseEpoch={}",
+				peerId,
+				lines.size(),
+				localFp,
+				base);
+		catalogSnapshotShippedLocalFp.put(peerId, localFp);
+		nettyTransport.sendCatalogDdlSnapshot(peerId, CatalogDdlSnapshotRpcCodec.encode(snapshot));
+	}
+
+	private void onCatalogDdlSnapshotBody(byte[] body) {
+		if (body == null || body.length == 0 || catalogSnapshotApplyHandler == null) {
+			return;
+		}
+		final CatalogDdlSnapshot snapshot = CatalogDdlSnapshotRpcCodec.decode(body);
+		final long beforeFp = catalogFingerprint();
+		catalogSnapshotApplyHandler.accept(snapshot);
+		final long afterFp = catalogFingerprint();
+		log.info(
+				"Catalog DDL snapshot applied from={} lines={} writerFp={} baseEpoch={} fp {} -> {}",
+				snapshot.fromNodeId(),
+				snapshot.compactLines() == null ? 0 : snapshot.compactLines().size(),
+				snapshot.catalogFingerprint(),
+				snapshot.baseEpochExclusive(),
+				beforeFp,
+				afterFp);
+		// Re-advertise live fingerprint so writer/peers clear object-set fence after heal.
+		if (nettyTransport != null && peerTransportEnabled) {
+			nettyTransport.broadcastHello();
+		}
+	}
+
+	/**
+	 * Coalesced APPLY_NACK heal: SparseCatchUp + sealed baseline + repair toward nacking peer.
+	 * Never mints tip. Runs on logic executor (inbound already hops off EL).
+	 */
+	private void onApplyNackHeal(ApplyNack nack) {
+		if (nack == null || !peerTransportEnabled || nettyTransport == null || opLog == null || nodeState == null) {
+			return;
+		}
+		final String peerId = nack.fromNodeId();
+		final String domain = nack.domainType();
+		final int shard = nack.shard();
+		final long seq = nack.opSeq();
+		final long peerAck = nodeState.peerAck(peerId, domain, shard);
+		final boolean caughtUp = peerAck >= seq;
+		final boolean wantsPack = HelloSealedCatchUpUtil.needsSealedBaseline(opLog, domain, shard, peerAck);
+		ApplyNackHealUtil.trySchedule(
+				applyNackHealState,
+				domain,
+				shard,
+				seq,
+				System.currentTimeMillis(),
+				caughtUp,
+				wantsPack,
+				action -> ThreadService.getLogicExecutor().execute(action),
+				() -> {
+					ReplicationMetrics.recordApplyNackHealScheduled();
+					if (wantsPack) {
+						HelloSealedCatchUpUtil.shipSealedBaseline(
+								sealedGridMapService, nettyTransport, peerId, domain, shard);
+					}
+					if (peerMembershipService != null) {
+						final long peerWm = nodeState.peerAck(peerId, domain, shard);
+						peerMembershipService.shipCatchUpToPeer(peerId, domain, shard, peerWm);
+					}
+					if (repairEnabled && homologousRepair != null) {
+						nettyTransport.sendRepairRequest(
+								peerId, domain, shard,
+								homologousRepair.getLocusMap().snapshot(domain, shard));
+					}
+				},
+				ReplicationMetrics::recordApplyNackHealSuppressed);
 	}
 
 	public boolean isReplicaReadsEnabled() {
@@ -1110,6 +1504,10 @@ public class ReplicationCoordinator {
 			}
 			if (crossDcEnabled && crossDcPublisher != null) {
 				crossDcPublisher.onAppended(committed);
+			}
+			// Refresh HELLO catalog fingerprint so peers clear object-set fence after DDL.
+			if (nettyTransport != null) {
+				nettyTransport.broadcastHello();
 			}
 		} catch (CompletionException ex) {
 			final Throwable cause = ex.getCause() == null ? ex : ex.getCause();
@@ -1305,6 +1703,7 @@ public class ReplicationCoordinator {
 		}
 		final long tick = repairTickCount.incrementAndGet();
 		final boolean fullReconcile = (tick % REPAIR_FULL_RECONCILE_EVERY) == 0L;
+		sealedIntegritySensorTick();
 		for (ReplicationPeer peer : peers) {
 			for (String streamKey : opLog.streamKeys()) {
 				final int hash = streamKey.lastIndexOf('#');
@@ -1332,6 +1731,56 @@ public class ReplicationCoordinator {
 				}
 				nettyTransport.sendRepairRequest(peer.id(), domain, shard, homologousRepair.getLocusMap().snapshot(domain, shard));
 			}
+		}
+	}
+
+	/**
+	 * Header/truncate sealed sensor on opened/hydrated streams → ≤1 OPLOG_PULL (sealed ship) per shard/window.
+	 */
+	private void sealedIntegritySensorTick() {
+		if (sealedGridMapService == null || durableDataDir == null || peers.isEmpty() || nettyTransport == null) {
+			return;
+		}
+		final Path sealedRoot = durableDataDir.resolve("sealed");
+		final long now = System.currentTimeMillis();
+		for (String streamKey : opLog.streamKeys()) {
+			final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+			if (parsed == null) {
+				continue;
+			}
+			final String domain = parsed.domain();
+			final int shard = parsed.shard();
+			if (sealedHydrateService != null && sealedHydrateService.isLazyHydrate()
+					&& !sealedHydrateService.isStreamHydrated(streamKey)) {
+				continue;
+			}
+			if (sealedGridMapService.reader(domain, shard) == null) {
+				continue;
+			}
+			Path gmap = null;
+			try {
+				for (Path file : SealedShardPack.listShardFiles(sealedRoot, domain, shard)) {
+					final String name = file.getFileName() == null ? "" : file.getFileName().toString();
+					if (name.endsWith(".gmap") && !GridFs.isOrphanStagingName(file)) {
+						gmap = file;
+						break;
+					}
+				}
+			} catch (Exception ignored) {
+				continue;
+			}
+			final Probe probe = SealedIntegritySensorUtil.probeGmapHeader(gmap);
+			if (!SealedIntegritySensorUtil.needsPeerPack(probe)) {
+				continue;
+			}
+			if (!sealedIntegrityDebounce.tryAcquire(
+					domain, shard, now, SealedIntegritySensorUtil.PACK_REQUEST_DEBOUNCE_MS)) {
+				continue;
+			}
+			final ReplicationPeer peer = peers.getFirst();
+			final long fromSeq = Math.max(1L, nodeState.appliedWatermark(domain, shard) + 1L);
+			nettyTransport.sendOplogPull(peer.id(), domain, shard, fromSeq);
+			ReplicationMetrics.recordSealedIntegrityPackRequested();
 		}
 	}
 

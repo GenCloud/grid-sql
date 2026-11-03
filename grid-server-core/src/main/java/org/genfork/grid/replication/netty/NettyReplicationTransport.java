@@ -46,6 +46,7 @@ import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.orchid.OrchidTransport;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.repair.VersionLocus;
+import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
 import org.genfork.grid.replication.transport.ReplicationPeer;
@@ -138,6 +139,18 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	};
 	private Supplier<Long> regionEpochSupplier = () -> 0L;
 	private Supplier<Byte> regionRoleSupplier = () -> (byte) 0;
+	/** Local {@code _catalog} applied watermark for HELLO trailing field. */
+	private Supplier<Long> catalogAppliedEpochSupplier = () -> 0L;
+	/** Local catalog object-set fingerprint for HELLO trailing field. */
+	private Supplier<Long> catalogFingerprintSupplier = () -> 0L;
+	/** Peer compacted ddl.sql snapshot apply (logic VT). */
+	private Consumer<byte[]> catalogDdlSnapshotHandler = _ -> {
+	};
+	/** APPLY_NACK → coalesced heal (logic VT); set by coordinator. */
+	private Consumer<ApplyNack> applyNackHealHandler = _ -> {
+	};
+	/** Optional sealed source for OPLOG_PULL / HELLO baseline ship. */
+	private volatile SealedGridMapService sealedGridMapService;
 	/**
 	 * Peer FOR UPDATE lock SoT on this node (logic VT handlers only).
 	 */
@@ -246,6 +259,16 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	}
 
 	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier) {
+		bindHandlers(orchidNode, applierByDomain, crossDcPublisher, nodeState, homologousRepair, opLog, sparseCatchUp,
+				onPeerHello, onApplyAckPeer, regionEpochSupplier, regionRoleSupplier, () -> 0L, () -> 0L);
+	}
+
+	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier, Supplier<Long> catalogAppliedEpochSupplier) {
+		bindHandlers(orchidNode, applierByDomain, crossDcPublisher, nodeState, homologousRepair, opLog, sparseCatchUp,
+				onPeerHello, onApplyAckPeer, regionEpochSupplier, regionRoleSupplier, catalogAppliedEpochSupplier, () -> 0L);
+	}
+
+	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier, Supplier<Long> catalogAppliedEpochSupplier, Supplier<Long> catalogFingerprintSupplier) {
 		this.orchidNode = orchidNode;
 		this.applierByDomain = applierByDomain;
 		this.crossDcPublisher = crossDcPublisher;
@@ -259,6 +282,40 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		} : onApplyAckPeer;
 		this.regionEpochSupplier = regionEpochSupplier == null ? () -> 0L : regionEpochSupplier;
 		this.regionRoleSupplier = regionRoleSupplier == null ? () -> (byte) 0 : regionRoleSupplier;
+		this.catalogAppliedEpochSupplier = catalogAppliedEpochSupplier == null ? () -> 0L : catalogAppliedEpochSupplier;
+		this.catalogFingerprintSupplier = catalogFingerprintSupplier == null ? () -> 0L : catalogFingerprintSupplier;
+	}
+
+	/**
+	 * Peer catalog journal snapshot apply (logic VT).
+	 */
+	public void setCatalogDdlSnapshotHandler(Consumer<byte[]> handler) {
+		this.catalogDdlSnapshotHandler = handler == null ? _ -> {
+		} : handler;
+	}
+
+	public void applyCatalogDdlSnapshot(byte[] body) {
+		catalogDdlSnapshotHandler.accept(body);
+	}
+
+	/**
+	 * APPLY_NACK heal callback (scheduled off Netty EL by inbound handler).
+	 */
+	public void setApplyNackHealHandler(Consumer<ApplyNack> handler) {
+		this.applyNackHealHandler = handler == null ? _ -> {
+		} : handler;
+	}
+
+	public void dispatchApplyNackHeal(ApplyNack nack) {
+		applyNackHealHandler.accept(nack);
+	}
+
+	public void setSealedGridMapService(SealedGridMapService sealedGridMapService) {
+		this.sealedGridMapService = sealedGridMapService;
+	}
+
+	public SealedGridMapService sealedGridMapServiceOrNull() {
+		return sealedGridMapService;
 	}
 
 	/**
@@ -284,10 +341,51 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	}
 
 	/**
-	 * Re-broadcast HELLO with current schema/region fence (claim notify; no new opcode).
+	 * Local {@code _catalog} applied watermark advertised on HELLO (0 when unbound).
+	 */
+	public long currentCatalogAppliedEpoch() {
+		final Long value = catalogAppliedEpochSupplier.get();
+		return value == null ? 0L : Math.max(0L, value.longValue());
+	}
+
+	/**
+	 * Local catalog object-set fingerprint advertised on HELLO (0 when unbound).
+	 */
+	public long currentCatalogFingerprint() {
+		final Long value = catalogFingerprintSupplier.get();
+		return value == null ? 0L : value.longValue();
+	}
+
+	/**
+	 * Request OpLog (and sealed baseline on pull handler) from {@code peerId} starting at {@code fromSeqInclusive}.
+	 */
+	public void sendOplogPull(String peerId, String domainType, int shard, long fromSeqInclusive) {
+		if (peerId == null || domainType == null) {
+			return;
+		}
+		final byte[] body = ReplicationRpcCodec.encodeOplogPull(
+				localNodeId, domainType, shard, Math.max(1L, fromSeqInclusive));
+		write(peerId, new WireMessage(ReplicationMessageType.OPLOG_PULL.opcode(), body));
+	}
+
+	/**
+	 * Ship compacted catalog DDL snapshot to a peer (object-set reconcile).
+	 */
+	public void sendCatalogDdlSnapshot(String peerId, byte[] body) {
+		if (peerId == null || body == null || body.length == 0) {
+			return;
+		}
+		write(peerId, new WireMessage(ReplicationMessageType.CATALOG_DDL_SNAPSHOT.opcode(), body));
+	}
+
+	/**
+	 * Re-broadcast HELLO with current schema/region/catalog fence (claim notify; no new opcode).
 	 */
 	public void broadcastHello() {
-		final Hello hello = new Hello(localNodeId, clusterId, localDc, schemaEpoch.get(), currentRegionEpoch(), currentRegionRoleWire());
+		final Hello hello = new Hello(
+				localNodeId, clusterId, localDc, schemaEpoch.get(),
+				currentRegionEpoch(), currentRegionRoleWire(),
+				currentCatalogAppliedEpoch(), currentCatalogFingerprint());
 		broadcastEncoded(new WireMessage(ReplicationMessageType.HELLO.opcode(), ReplicationRpcCodec.encodeHello(hello)));
 	}
 

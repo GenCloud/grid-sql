@@ -25,9 +25,10 @@ import java.util.function.Consumer;
 
 import org.genfork.grid.sql.client.Connection;
 import org.genfork.grid.sql.client.RemoteConnection;
-import org.genfork.grid.sql.client.SqlClientMessages;
 import org.genfork.grid.sql.client.RemoteConnectionFactory;
+import org.genfork.grid.sql.client.ReplicaReadFallbackUtil;
 import org.genfork.grid.sql.client.Row;
+import org.genfork.grid.sql.client.SqlClientMessages;
 import org.genfork.grid.sql.client.transport.TransportConnection;
 import org.genfork.grid.sql.client.transport.TransportOutcome;
 
@@ -35,7 +36,9 @@ import org.genfork.grid.sql.client.transport.TransportOutcome;
  * Blocking statement over transport CompletionStage exec / autocommit.
  * <p>
  * Optional READ_REPLICA path borrows a channel from {@link RemoteConnectionFactory}
- * for the duration of {@link #execute()} then parks it.
+ * for the duration of {@link #execute()} then parks it. When every read endpoint reports
+ * apply-lag / incomplete data, auto-route falls back to the writer transport (complete-data
+ * guarantee) instead of surfacing {@code replica apply lag stale}.
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -44,6 +47,8 @@ import org.genfork.grid.sql.client.transport.TransportOutcome;
 public final class SyncStatement {
 	private final TransportConnection transport;
 	private final RemoteConnectionFactory readFactory;
+	/** Writer autocommit transport when read-pool obtain exhausts on incomplete replicas. */
+	private final TransportConnection writerFallback;
 	private final Integer sessionId;
 	private final AtomicBoolean txClosed;
 	private final String sql;
@@ -56,18 +61,29 @@ public final class SyncStatement {
 
 	/** Autocommit statement on the writer transport. */
 	SyncStatement(TransportConnection transport, String sql, Duration timeout, Executor syncExecutor) {
-		this(transport, null, null, sql, null, timeout, syncExecutor);
+		this(transport, null, null, null, sql, null, timeout, syncExecutor);
 	}
 
-	/** Autocommit statement that borrows a READ_REPLICA channel per execute. */
+	/**
+	 * Autocommit statement that borrows a READ_REPLICA channel per execute; falls back to
+	 * {@code writerFallback} when the read ring has no complete-data node.
+	 */
 	static SyncStatement autocommitRead(
 			RemoteConnectionFactory readFactory,
+			TransportConnection writerFallback,
 			String sql,
 			Duration timeout,
 			Executor syncExecutor
 	) {
-		return new SyncStatement(null, Objects.requireNonNull(readFactory, "readFactory"),
-				null, sql, null, timeout, syncExecutor);
+		return new SyncStatement(
+				null,
+				Objects.requireNonNull(readFactory, "readFactory"),
+				Objects.requireNonNull(writerFallback, "writerFallback"),
+				null,
+				sql,
+				null,
+				timeout,
+				syncExecutor);
 	}
 
 	/** TX-scoped statement. */
@@ -79,12 +95,13 @@ public final class SyncStatement {
 			Duration timeout,
 			Executor syncExecutor
 	) {
-		this(transport, null, Integer.valueOf(sessionId), sql, txClosed, timeout, syncExecutor);
+		this(transport, null, null, Integer.valueOf(sessionId), sql, txClosed, timeout, syncExecutor);
 	}
 
 	private SyncStatement(
 			TransportConnection transport,
 			RemoteConnectionFactory readFactory,
+			TransportConnection writerFallback,
 			Integer sessionId,
 			String sql,
 			AtomicBoolean txClosed,
@@ -96,6 +113,7 @@ public final class SyncStatement {
 		}
 		this.transport = transport;
 		this.readFactory = readFactory;
+		this.writerFallback = writerFallback;
 		this.sessionId = sessionId;
 		this.txClosed = txClosed;
 		this.sql = sql;
@@ -138,18 +156,28 @@ public final class SyncStatement {
 		}
 		final Object[] args = SyncConnection.denseBinds(binds);
 		if (readFactory != null) {
-			final Connection borrowed =
-					SyncAwait.await(readFactory.obtainStage(), timeout, cancelSlot, syncExecutor);
-			if (!(borrowed instanceof RemoteConnection readRemote)) {
-				throw new IllegalStateException("read obtainStage must return RemoteConnection");
-			}
 			try {
+				final Connection borrowed =
+						SyncAwait.await(readFactory.obtainStage(), timeout, cancelSlot, syncExecutor);
+				if (!(borrowed instanceof RemoteConnection readRemote)) {
+					throw new IllegalStateException("read obtainStage must return RemoteConnection");
+				}
+				try {
+					final TransportOutcome outcome = SyncAwait.await(
+							readRemote.transport().execAutocommit(sql, args, fetchWindowOverride),
+							timeout, cancelSlot, syncExecutor);
+					return SyncConnection.wrapOutcomes(List.of(outcome), timeout, syncExecutor);
+				} finally {
+					SyncAwait.awaitVoid(readRemote.transport().parkStage(), timeout, syncExecutor);
+				}
+			} catch (RuntimeException ex) {
+				if (writerFallback == null || !ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
+					throw ex;
+				}
 				final TransportOutcome outcome = SyncAwait.await(
-						readRemote.transport().execAutocommit(sql, args, fetchWindowOverride),
+						writerFallback.execAutocommit(sql, args, fetchWindowOverride),
 						timeout, cancelSlot, syncExecutor);
 				return SyncConnection.wrapOutcomes(List.of(outcome), timeout, syncExecutor);
-			} finally {
-				SyncAwait.awaitVoid(readRemote.transport().parkStage(), timeout, syncExecutor);
 			}
 		}
 		final TransportOutcome outcome;

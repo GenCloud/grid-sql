@@ -22,7 +22,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
 /**
- * HELLO handshake encode/decode (identity + schema + Multi-DC region fence).
+ * HELLO handshake encode/decode (identity + duplex schema + Multi-DC region + catalog applied).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -32,9 +32,15 @@ public final class HelloRpcCodec {
 	/** Trailing Multi-DC region fence after {@code schemaEpoch} on HELLO (optional for legacy peers). */
 	private static final int HELLO_REGION_EPOCH_BYTES = Long.BYTES;
 	private static final int HELLO_REGION_ROLE_BYTES = Byte.BYTES;
+	/** Trailing {@code _catalog} applied watermark after region role (optional). */
+	private static final int HELLO_CATALOG_APPLIED_BYTES = Long.BYTES;
+	/** Trailing catalog object-set fingerprint after applied watermark (optional). */
+	private static final int HELLO_CATALOG_FINGERPRINT_BYTES = Long.BYTES;
 	/** Legacy HELLO without region fields reports epoch {@code 0} / role {@code 0}. */
 	private static final long HELLO_LEGACY_REGION_EPOCH = 0L;
 	private static final byte HELLO_LEGACY_REGION_ROLE = 0;
+	private static final long HELLO_LEGACY_CATALOG_APPLIED = 0L;
+	private static final long HELLO_LEGACY_CATALOG_FINGERPRINT = 0L;
 
 	private HelloRpcCodec() {
 	}
@@ -49,13 +55,17 @@ public final class HelloRpcCodec {
 						+ Integer.BYTES + localDc.length
 						+ Long.BYTES
 						+ HELLO_REGION_EPOCH_BYTES
-						+ HELLO_REGION_ROLE_BYTES);
+						+ HELLO_REGION_ROLE_BYTES
+						+ HELLO_CATALOG_APPLIED_BYTES
+						+ HELLO_CATALOG_FINGERPRINT_BYTES);
 		EncodeBuffers.putLengthPrefixed(buf, nodeId);
 		EncodeBuffers.putLengthPrefixed(buf, clusterId);
 		EncodeBuffers.putLengthPrefixed(buf, localDc);
 		buf.putLong(hello.schemaEpoch());
 		buf.putLong(hello.regionEpoch());
 		buf.put(hello.regionRole());
+		buf.putLong(hello.catalogAppliedEpoch());
+		buf.putLong(hello.catalogFingerprint());
 		return EncodeBuffers.toByteArray(buf);
 	}
 
@@ -67,12 +77,22 @@ public final class HelloRpcCodec {
 		final long schemaEpoch = buf.getLong();
 		long regionEpoch = HELLO_LEGACY_REGION_EPOCH;
 		byte regionRole = HELLO_LEGACY_REGION_ROLE;
+		long catalogAppliedEpoch = HELLO_LEGACY_CATALOG_APPLIED;
+		long catalogFingerprint = HELLO_LEGACY_CATALOG_FINGERPRINT;
 		if (buf.remaining() >= HELLO_REGION_EPOCH_BYTES) {
 			regionEpoch = buf.getLong();
 		}
 		if (buf.remaining() >= HELLO_REGION_ROLE_BYTES) {
 			regionRole = buf.get();
 		}
-		return new Hello(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole);
+		if (buf.remaining() >= HELLO_CATALOG_APPLIED_BYTES) {
+			catalogAppliedEpoch = buf.getLong();
+		}
+		if (buf.remaining() >= HELLO_CATALOG_FINGERPRINT_BYTES) {
+			catalogFingerprint = buf.getLong();
+		}
+		return new Hello(
+				nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole,
+				catalogAppliedEpoch, catalogFingerprint);
 	}
 }

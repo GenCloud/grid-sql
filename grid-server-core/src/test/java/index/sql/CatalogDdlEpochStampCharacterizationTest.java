@@ -79,6 +79,17 @@ class CatalogDdlEpochStampCharacterizationTest {
 	}
 
 	@Test
+	void duplicateEpochMissingEffectStillExecutesCreate() {
+		engine.execute("CREATE TABLE epoch_dup_base (id INT PRIMARY KEY)");
+		catalog.noteAppliedDdlEpoch(777L);
+		engine.applyReplicatedDdl(
+				"CREATE TABLE epoch_dup_heal (id INT PRIMARY KEY)",
+				777L);
+		assertTrue(catalog.exists("epoch_dup_heal"));
+		assertEquals(777L, catalog.maxAppliedDdlEpoch());
+	}
+
+	@Test
 	void seedProposerFloorDoesNotMarkApplied() {
 		catalog.seedProposerEpochFloor(900L);
 		assertEquals(0L, catalog.maxAppliedDdlEpoch());

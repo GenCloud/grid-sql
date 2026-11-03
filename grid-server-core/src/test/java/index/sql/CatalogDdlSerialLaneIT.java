@@ -28,7 +28,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -44,7 +43,7 @@ class CatalogDdlSerialLaneIT {
 	Path tmp;
 
 	@Test
-	void duplicateEpochIsIdempotentAck() throws Exception {
+	void duplicateEpochSkipsOnlyWhenEffectPresent() throws Exception {
 		final Path catDir = tmp.resolve("cat-dup");
 		Files.createDirectories(catDir);
 		final SqlEngine engine = new SqlEngine(new TableCatalog(catDir), null, 2);
@@ -52,10 +51,15 @@ class CatalogDdlSerialLaneIT {
 		final long epoch = engine.catalog().maxAppliedDdlEpoch();
 		assertTrue(epoch >= 0L);
 		engine.catalog().noteAppliedDdlEpoch(42L);
+		// Missing effect under duplicate epoch → heal (CREATE*).
 		assertDoesNotThrow(() -> engine.applyReplicatedDdl(
 				"CREATE TABLE t_dup2 (id INT PRIMARY KEY)", 42L));
-		assertFalse(engine.catalog().exists("t_dup2"), "duplicate epoch must not re-execute");
+		assertTrue(engine.catalog().exists("t_dup2"), "duplicate epoch with missing effect must CREATE");
 		assertEquals(42L, engine.catalog().maxAppliedDdlEpoch());
+		// Effect already present → silent idempotent ACK (no throw).
+		assertDoesNotThrow(() -> engine.applyReplicatedDdl(
+				"CREATE TABLE t_dup2 (id INT PRIMARY KEY)", 42L));
+		assertTrue(engine.catalog().exists("t_dup2"));
 	}
 
 	@Test

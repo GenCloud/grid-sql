@@ -23,7 +23,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import org.genfork.grid.catalog.CatalogDdlCompactor;
 import org.genfork.grid.catalog.CatalogDdlJournalUtil;
+import org.genfork.grid.catalog.CatalogFingerprintUtil;
 import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.catalog.FunctionKind;
 import org.genfork.grid.catalog.PrivilegeCatalog;
@@ -108,8 +110,11 @@ import org.genfork.grid.sql.udf.SqlUdfCallContext;
 import org.genfork.grid.sql.udf.SqlUdfLookup;
 import org.genfork.grid.sql.udf.SqlUdfMutatingOps;
 import org.genfork.grid.replication.util.CatalogOpLogEpochUtil;
+import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec.CatalogDdlSnapshot;
 import org.genfork.grid.sql.util.CatalogDdlApplyLaneUtil;
+import org.genfork.grid.sql.util.CatalogDdlEffectPresentUtil;
 import org.genfork.grid.sql.util.CatalogDdlEpochUtil;
+import org.genfork.grid.sql.util.CatalogJournalReconcileUtil;
 import org.genfork.grid.store.TableStore;
 
 /**
@@ -167,8 +172,32 @@ public final class SqlEngine {
 				? Integer.MAX_VALUE
 				: preparePoolSize;
 		if (replicationCoordinator != null && replicationCoordinator.isEnabled()) {
-			replicationCoordinator.bindSqlCatalog(this::applyReplicatedDdl);
+			replicationCoordinator.bindSqlCatalog(
+					this::applyReplicatedDdl,
+					() -> CatalogFingerprintUtil.fingerprint(catalog),
+					() -> CatalogDdlCompactor.compactLines(catalog),
+					catalog::maxAppliedDdlEpoch,
+					this::applyCatalogJournalSnapshot);
 		}
+	}
+
+	/**
+	 * Apply writer compacted DDL snapshot as missing CREATE* diff (peer catalog reconcile).
+	 */
+	public void applyCatalogJournalSnapshot(CatalogDdlSnapshot snapshot) {
+		if (snapshot == null) {
+			return;
+		}
+		catalogDdlLane.runSerial(() -> applyCatalogJournalSnapshotOnLane(snapshot));
+	}
+
+	private void applyCatalogJournalSnapshotOnLane(CatalogDdlSnapshot snapshot) {
+		CatalogJournalReconcileUtil.applyMissingCreates(
+				catalog,
+				snapshot.compactLines(),
+				snapshot.baseEpochExclusive(),
+				apply -> applyReplicatedDdlOnLane(apply.ddlSql(), apply.schemaEpoch()));
+		catalog.rewriteCompactedDdl();
 	}
 
 	/**
@@ -808,6 +837,16 @@ public final class SqlEngine {
 		if (applyingReplicatedDdl.get()) {
 			return;
 		}
+		if (replication != null && replication.isEnabled()) {
+			ReplicaAccessGate.ensureWrite(replication);
+			if (replication.shouldDenyCatalogDdlMint()) {
+				throw new IllegalStateException(
+						"catalog apply lag or peer catalog ahead; catch-up before privilege DDL mint lag="
+								+ replication.catalogApplyLag()
+								+ " peerApplied=" + replication.maxPeerCatalogAppliedEpoch()
+								+ " localApplied=" + replication.catalogAppliedEpoch());
+			}
+		}
 		final long epoch = CatalogDdlEpochUtil.allocate(catalog, false);
 		final long applied = catalog.maxAppliedDdlEpoch();
 		if (epoch > 0L && epoch < applied) {
@@ -875,8 +914,12 @@ public final class SqlEngine {
 				catalog.rejectIfStaleDdlEpoch(schemaEpoch);
 			}
 			if (schemaEpoch <= applied) {
-				// Idempotent ACK: already applied this epoch (duplicate ship / boot overlap).
-				return;
+				// Duplicate epoch: skip only when catalog effect already present.
+				// Epoch alone is not proof of object presence (ACK without effect → VIEW holes).
+				if (CatalogDdlEffectPresentUtil.effectPresent(catalog, ddlSql)) {
+					return;
+				}
+				// Missing effect under duplicate epoch → execute CREATE* / DROP* idempotent path.
 			}
 		}
 		if (!applyingReplicatedDdl.compareAndSet(false, true)) {
@@ -924,10 +967,12 @@ public final class SqlEngine {
 					continue;
 				}
 				if (catalog.exists(meta.catalogKey())) {
+					catalog.ensureIdentitySequences(meta);
 					catalog.ensureEpochAtLeast(meta.schemaEpoch());
 					continue;
 				}
 				catalog.createTable(meta);
+				catalog.ensureIdentitySequences(meta);
 				catalog.ensureEpochAtLeast(meta.schemaEpoch());
 			}
 			catalog.pruneOrphanMetaFiles();

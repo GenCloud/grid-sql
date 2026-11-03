@@ -55,7 +55,10 @@ public final class ReplicationRpcCodec {
 	}
 
 	/**
-	 * Peer handshake: identity + schema fence + Multi-DC {@code regionEpoch}/{@code regionRole}.
+	 * Peer handshake: identity + duplex schema fence + Multi-DC region + catalog applied watermark.
+	 * <p>
+	 * {@code schemaEpoch} is duplex/layout (mismatch closes). {@code catalogAppliedEpoch} is
+	 * {@code _catalog} OpLog applied watermark (skew → catch-up, never close).
 	 */
 	public record Hello(
 			String nodeId,
@@ -63,8 +66,38 @@ public final class ReplicationRpcCodec {
 			String localDc,
 			long schemaEpoch,
 			long regionEpoch,
-			byte regionRole
+			byte regionRole,
+			long catalogAppliedEpoch,
+			long catalogFingerprint
 	) {
+		/**
+		 * Legacy ctor without catalog fingerprint (defaults to {@code 0}).
+		 */
+		public Hello(
+				String nodeId,
+				String clusterId,
+				String localDc,
+				long schemaEpoch,
+				long regionEpoch,
+				byte regionRole,
+				long catalogAppliedEpoch
+		) {
+			this(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole, catalogAppliedEpoch, 0L);
+		}
+
+		/**
+		 * Legacy ctor without catalog applied (defaults to {@code 0}).
+		 */
+		public Hello(
+				String nodeId,
+				String clusterId,
+				String localDc,
+				long schemaEpoch,
+				long regionEpoch,
+				byte regionRole
+		) {
+			this(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole, 0L, 0L);
+		}
 	}
 
 	public record ApplyAck(String fromNodeId, String domainType, int shard, long opSeq) {

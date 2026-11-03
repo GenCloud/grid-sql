@@ -15,9 +15,12 @@
  */
 package index.benchmarks;
 
+import org.genfork.grid.catalog.CatalogDdlCompactor;
 import org.genfork.grid.catalog.TableCatalog;
+import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec.CatalogDdlSnapshot;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlSession;
+import org.genfork.grid.sql.util.CatalogJournalReconcileUtil;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
@@ -102,6 +105,17 @@ public class CatalogDdlRecoverBenchmark extends AbstractLatencyBenchmark {
 		} finally {
 			deleteRecursive(work);
 		}
+	}
+
+	@Benchmark
+	public Object reconcileDiffApplyLatency() {
+		final SqlEngine full = new SqlEngine(new TableCatalog(compactedDir), null, 2);
+		full.recoverPersistedCatalog();
+		final java.util.List<String> lines = CatalogDdlCompactor.compactLines(full.catalog());
+		final SqlEngine hole = new SqlEngine(new TableCatalog(), null, 2);
+		hole.applyCatalogJournalSnapshot(new CatalogDdlSnapshot("bench", 0L, 0L, lines));
+		return Boolean.valueOf(hole.catalog().exists(TABLE)
+				|| CatalogJournalReconcileUtil.isCreateLine(lines.isEmpty() ? "" : lines.getFirst()));
 	}
 
 	private static void copyCatalog(Path fromRoot, Path toRoot) throws Exception {

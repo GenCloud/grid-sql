@@ -39,7 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 public class ReplicationRpcCodecTest {
 	@Test
 	void helloRoundTrip() {
-		final Hello hello = new Hello("n1", "c1", "dc-a", 7L, 5L, (byte) 1);
+		final Hello hello = new Hello("n1", "c1", "dc-a", 7L, 5L, (byte) 1, 42L, 99L);
 		final Hello decoded = ReplicationRpcCodec.decodeHello(ReplicationRpcCodec.encodeHello(hello));
 		assertEquals("n1", decoded.nodeId());
 		assertEquals("c1", decoded.clusterId());
@@ -47,6 +47,8 @@ public class ReplicationRpcCodecTest {
 		assertEquals(7L, decoded.schemaEpoch());
 		assertEquals(5L, decoded.regionEpoch());
 		assertEquals((byte) 1, decoded.regionRole());
+		assertEquals(42L, decoded.catalogAppliedEpoch());
+		assertEquals(99L, decoded.catalogFingerprint());
 	}
 
 	@Test
@@ -56,6 +58,7 @@ public class ReplicationRpcCodecTest {
 		assertEquals(3L, decoded.schemaEpoch());
 		assertEquals(0L, decoded.regionEpoch());
 		assertEquals((byte) 0, decoded.regionRole());
+		assertEquals(0L, decoded.catalogAppliedEpoch());
 	}
 
 	@Test

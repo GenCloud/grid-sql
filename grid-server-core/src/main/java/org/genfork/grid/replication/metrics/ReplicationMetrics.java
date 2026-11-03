@@ -40,6 +40,9 @@ public final class ReplicationMetrics {
 	private static final LongAdder DUPLEX_REPAIR = new LongAdder();
 	private static final LongAdder DUPLEX_UNCORRECTABLE = new LongAdder();
 	private static final LongAdder APPLY_NACK_RECV = new LongAdder();
+	private static final LongAdder APPLY_NACK_HEAL_SCHEDULED = new LongAdder();
+	private static final LongAdder APPLY_NACK_HEAL_SUPPRESSED = new LongAdder();
+	private static final LongAdder SEALED_INTEGRITY_PACK_REQUESTED = new LongAdder();
 	private static final LongAdder MAP_GET_HIT = new LongAdder();
 	private static final LongAdder MAP_GET_MISS = new LongAdder();
 	private static final LongAdder SHIP_BACKPRESSURE = new LongAdder();
@@ -93,6 +96,30 @@ public final class ReplicationMetrics {
 
 	public static void recordApplyNackRecv() {
 		APPLY_NACK_RECV.increment();
+	}
+
+	public static void recordApplyNackHealScheduled() {
+		APPLY_NACK_HEAL_SCHEDULED.increment();
+	}
+
+	public static long applyNackHealScheduled() {
+		return APPLY_NACK_HEAL_SCHEDULED.sum();
+	}
+
+	public static void recordApplyNackHealSuppressed() {
+		APPLY_NACK_HEAL_SUPPRESSED.increment();
+	}
+
+	public static long applyNackHealSuppressed() {
+		return APPLY_NACK_HEAL_SUPPRESSED.sum();
+	}
+
+	public static void recordSealedIntegrityPackRequested() {
+		SEALED_INTEGRITY_PACK_REQUESTED.increment();
+	}
+
+	public static long sealedIntegrityPackRequested() {
+		return SEALED_INTEGRITY_PACK_REQUESTED.sum();
 	}
 
 	public static void recordMapGetHit() {

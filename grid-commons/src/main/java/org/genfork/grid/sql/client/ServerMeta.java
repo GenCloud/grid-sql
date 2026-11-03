@@ -20,6 +20,7 @@ package org.genfork.grid.sql.client;
  * <p>
  * {@code schemaEpoch} is DDL catalog epoch; {@code regionEpoch}/{@code regionRole} are Multi-DC
  * Active/Hold fencing (orthogonal — never mixed).
+ * {@code catalogFingerprint} is the live object-set hash (replica-read / AUTH rotate fence).
  *
  * Lives in {@code grid-commons} (shared client/server; JDK-only).
  *
@@ -34,7 +35,8 @@ public record ServerMeta(
 		boolean applyLagStale,
 		long schemaEpoch,
 		long regionEpoch,
-		byte regionRole
+		byte regionRole,
+		long catalogFingerprint
 ) {
 	public static final byte REGION_ROLE_NONE = 0;
 	public static final byte REGION_ROLE_ACTIVE = 1;
@@ -42,17 +44,32 @@ public record ServerMeta(
 	public static final byte REGION_ROLE_WITNESS = 3;
 
 	public static final ServerMeta EMPTY =
-			new ServerMeta("", false, "", false, 0L, 0L, REGION_ROLE_NONE);
+			new ServerMeta("", false, "", false, 0L, 0L, REGION_ROLE_NONE, 0L);
 
 	/**
 	 * Solo / peer-replication disabled: this node accepts writes (no HA fencing).
 	 */
 	public static final ServerMeta SOLO_WRITER =
-			new ServerMeta("", true, "", false, 0L, 0L, REGION_ROLE_NONE);
+			new ServerMeta("", true, "", false, 0L, 0L, REGION_ROLE_NONE, 0L);
 
 	public ServerMeta {
 		nodeId = nodeId == null ? "" : nodeId;
 		promoteHint = promoteHint == null ? "" : promoteHint;
+	}
+
+	/**
+	 * Compatibility ctor omitting catalog fingerprint (defaults to {@code 0}).
+	 */
+	public ServerMeta(
+			String nodeId,
+			boolean writerEligible,
+			String promoteHint,
+			boolean applyLagStale,
+			long schemaEpoch,
+			long regionEpoch,
+			byte regionRole
+	) {
+		this(nodeId, writerEligible, promoteHint, applyLagStale, schemaEpoch, regionEpoch, regionRole, 0L);
 	}
 
 	/**
@@ -65,7 +82,7 @@ public record ServerMeta(
 			boolean applyLagStale,
 			long schemaEpoch
 	) {
-		this(nodeId, writerEligible, promoteHint, applyLagStale, schemaEpoch, 0L, REGION_ROLE_NONE);
+		this(nodeId, writerEligible, promoteHint, applyLagStale, schemaEpoch, 0L, REGION_ROLE_NONE, 0L);
 	}
 
 	public boolean hasPromoteHint() {
