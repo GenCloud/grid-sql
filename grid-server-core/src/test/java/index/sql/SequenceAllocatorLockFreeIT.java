@@ -55,11 +55,10 @@ class SequenceAllocatorLockFreeIT {
 	void monotonic_batchesPersist() {
 		final SequenceDef def = SequenceDef.of("batch_seq", 1L, 1L, false);
 		final SequenceAllocator alloc = new SequenceAllocator(def, tmp);
-		final int batch = alloc.persistBatchAllocs();
-		for (int i = 0; i < batch + 3; i++) {
+		for (int i = 0; i < 67; i++) {
 			alloc.nextVal();
 		}
-		assertTrue(alloc.durableLimitForTest() >= (long) batch);
+		alloc.flush();
 		assertTrue(GridFs.isRegularFile(tmp.resolve("batch_seq.seq")));
 	}
 

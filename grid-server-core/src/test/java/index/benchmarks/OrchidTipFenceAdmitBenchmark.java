@@ -25,6 +25,7 @@ import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.orchid.OrchidNode;
+import org.genfork.grid.replication.orchid.OrchidTransport;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -102,6 +103,7 @@ public class OrchidTipFenceAdmitBenchmark extends AbstractLatencyBenchmark {
 			throw new IllegalStateException("orchid not synced for tip-fence JMH");
 		}
 		orchid = coord.getOrchidNode();
+		orchid.onPeerAvailable(FAKE_PEER);
 		final ReplicationOp seed = OpLogCodec.withChecksum(new ReplicationOp(
 				DOMAIN, 0, 1L, ReplicationOpType.UPSERT,
 				new byte[]{1}, new byte[]{2}, 1L, 0L));
@@ -122,7 +124,7 @@ public class OrchidTipFenceAdmitBenchmark extends AbstractLatencyBenchmark {
 
 	@Benchmark
 	public void caughtUpAdmit(Blackhole bh) {
-		orchid.testingNotePeerCommittedSeq(FAKE_PEER, caughtUpTip);
+		advertisePeerTip(caughtUpTip);
 		final long n = seqHint.getAndIncrement();
 		final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
 				DOMAIN, 0, n, ReplicationOpType.UPSERT,
@@ -137,7 +139,7 @@ public class OrchidTipFenceAdmitBenchmark extends AbstractLatencyBenchmark {
 
 	@Benchmark
 	public void tipBehindReject(Blackhole bh) {
-		orchid.testingNotePeerCommittedSeq(FAKE_PEER, behindPeerTip);
+		advertisePeerTip(behindPeerTip);
 		final long n = seqHint.get();
 		final ReplicationOp op = OpLogCodec.withChecksum(new ReplicationOp(
 				DOMAIN, 0, n, ReplicationOpType.UPSERT,
@@ -152,6 +154,10 @@ public class OrchidTipFenceAdmitBenchmark extends AbstractLatencyBenchmark {
 		}
 		bh.consume(denied);
 		bh.consume(coord.isWriterEligible());
+	}
+
+	private void advertisePeerTip(long peerTip) {
+		orchid.onPhase(new OrchidTransport.OrchidPhaseMessage(FAKE_PEER, 0.0, 1.0, peerTip, 0L, 0L));
 	}
 
 	private static boolean rootCauseIsTipBehind(Throwable thrown) {

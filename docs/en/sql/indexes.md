@@ -107,8 +107,8 @@ Check the plan with `EXPLAIN` — [EXPLAIN and AQE](explain-and-aqe.md).
 
 An index lookup goes through three levels, top down:
 
-1. **In-memory index** — the hot-set accelerator.
-2. **Sealed `.sbpt` tree** — an immutable fixed-page B+ tree on disk (written as **VERSION 2**, signed INT/LONG order). **VERSION 1** (legacy unsigned) files are **rejected** on read — reseal / `dumpDomain` after upgrade.
+1. **In-memory index** — the hot-set accelerator (including the PK portal when warm).
+2. **Sealed `.sbpt` tree** — an immutable fixed-page B+ tree on disk (written as **VERSION 3**: signed INT/LONG + UTF-8 payload-lex for string keys). **VERSION 1** and **VERSION 2** files are **rejected** on read — reseal / `dumpDomain` after upgrade. When the in-memory PK portal is unavailable, point lookups **fall back** to the sealed PK index instead of failing open.
 3. **`.gmap` data file** — the row is fetched by the pointer that was found.
 
 **An index miss does not turn into a full partition scan.** If the index answers “no such value”, the query answers the same way instead of reading the whole table.
@@ -125,7 +125,9 @@ The practical consequence: the index trails the data rather than leading it. Poi
 
 ## Long-term storage
 
-Once a segment is sealed, secondary indexes live in fixed-page files (`.sbpt`, or `.sbm` for bitmaps). New `.sbpt` files are written as **VERSION 2** (signed INT/LONG compare on disk matches RAM). **VERSION 1** (unsigned compare) files are **rejected** on open — after a binary upgrade reseal / `dumpDomain`, do not expect silent reads of old trees: [upgrade](../configure-and-operate/operations/upgrade.md).
+Once a segment is sealed, secondary indexes live in fixed-page files (`.sbpt`, or `.sbm` for bitmaps). New `.sbpt` files are written as **VERSION 3** (signed INT/LONG + UTF-8 payload-lex for `VARCHAR`/`STRING` keys — same order as `String.compareTo` for ASCII). **VERSION 1** and **VERSION 2** (pre–payload-lex) files are **rejected** on open — after a binary upgrade reseal / `dumpDomain`, do not expect silent reads of old trees: [upgrade](../configure-and-operate/operations/upgrade.md).
+
+The catalog may auto-create a **synthetic PRIMARY KEY covering index** (name derived from the table catalog key). `DROP INDEX` of that synthetic PK index is **rejected** — drop/replace the table PK instead.
 
 The in-memory index remains a hot-set accelerator and may be evicted entirely — no data is lost; the query goes to the sealed file. Under `hydrate-mode: LAZY`, the first miss after restart pays sealed-file I/O; under `FULL`, trees are warmer at the cost of a longer start.
 

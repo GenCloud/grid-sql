@@ -40,6 +40,9 @@ public final class ReplicationMetrics {
 	private static final LongAdder DUPLEX_REPAIR = new LongAdder();
 	private static final LongAdder DUPLEX_UNCORRECTABLE = new LongAdder();
 	private static final LongAdder APPLY_NACK_RECV = new LongAdder();
+	private static final LongAdder APPLY_NACK_HEAL_SCHEDULED = new LongAdder();
+	private static final LongAdder APPLY_NACK_HEAL_SUPPRESSED = new LongAdder();
+	private static final LongAdder SEALED_INTEGRITY_PACK_REQUESTED = new LongAdder();
 	private static final LongAdder MAP_GET_HIT = new LongAdder();
 	private static final LongAdder MAP_GET_MISS = new LongAdder();
 	private static final LongAdder SHIP_BACKPRESSURE = new LongAdder();
@@ -53,6 +56,17 @@ public final class ReplicationMetrics {
 	private static final LongAdder MIGRATE_IO_SUPPRESSED_PIN = new LongAdder();
 	/** Sealed dump shard skipped (open TX / envelope defer). */
 	private static final LongAdder SEALED_DUMP_DEFERRED = new LongAdder();
+	/** At-risk sealed dump (huge OpLog delta, no {@code .sbpt}) attempted or deferred. */
+	private static final LongAdder SEALED_DUMP_AT_RISK = new LongAdder();
+	/**
+	 * Multi-stream apply envelope aborted after LAZY one-stream hydrate could not complete
+	 * siblings (orphan membership that would starve sealed dump forever).
+	 */
+	private static final LongAdder ORPHAN_APPLY_ENVELOPE_ABORT = new LongAdder();
+	/** Sealed dump deferred specifically for ENVELOPE membership (mid-TX or orphan). */
+	private static final LongAdder ENVELOPE_DEFER = new LongAdder();
+	/** Fully-committed apply envelope still in {@code applyOpen} cleared before seal dump. */
+	private static final LongAdder STICKY_APPLY_ENVELOPE_CLEAR = new LongAdder();
 
 	private static final long[] ORCHID_WAIT_NS = new long[LATENCY_SAMPLES];
 	private static final AtomicInteger ORCHID_WAIT_IDX = new AtomicInteger();
@@ -82,6 +96,30 @@ public final class ReplicationMetrics {
 
 	public static void recordApplyNackRecv() {
 		APPLY_NACK_RECV.increment();
+	}
+
+	public static void recordApplyNackHealScheduled() {
+		APPLY_NACK_HEAL_SCHEDULED.increment();
+	}
+
+	public static long applyNackHealScheduled() {
+		return APPLY_NACK_HEAL_SCHEDULED.sum();
+	}
+
+	public static void recordApplyNackHealSuppressed() {
+		APPLY_NACK_HEAL_SUPPRESSED.increment();
+	}
+
+	public static long applyNackHealSuppressed() {
+		return APPLY_NACK_HEAL_SUPPRESSED.sum();
+	}
+
+	public static void recordSealedIntegrityPackRequested() {
+		SEALED_INTEGRITY_PACK_REQUESTED.increment();
+	}
+
+	public static long sealedIntegrityPackRequested() {
+		return SEALED_INTEGRITY_PACK_REQUESTED.sum();
 	}
 
 	public static void recordMapGetHit() {
@@ -179,6 +217,38 @@ public final class ReplicationMetrics {
 
 	public static long sealedDumpDeferred() {
 		return SEALED_DUMP_DEFERRED.sum();
+	}
+
+	public static void recordSealedDumpAtRisk() {
+		SEALED_DUMP_AT_RISK.increment();
+	}
+
+	public static long sealedDumpAtRisk() {
+		return SEALED_DUMP_AT_RISK.sum();
+	}
+
+	public static void recordOrphanApplyEnvelopeAbort() {
+		ORPHAN_APPLY_ENVELOPE_ABORT.increment();
+	}
+
+	public static long orphanApplyEnvelopeAbort() {
+		return ORPHAN_APPLY_ENVELOPE_ABORT.sum();
+	}
+
+	public static void recordEnvelopeDefer() {
+		ENVELOPE_DEFER.increment();
+	}
+
+	public static long envelopeDefer() {
+		return ENVELOPE_DEFER.sum();
+	}
+
+	public static void recordStickyApplyEnvelopeClear() {
+		STICKY_APPLY_ENVELOPE_CLEAR.increment();
+	}
+
+	public static long stickyApplyEnvelopeClear() {
+		return STICKY_APPLY_ENVELOPE_CLEAR.sum();
 	}
 
 	public static long oplogPushSent() {

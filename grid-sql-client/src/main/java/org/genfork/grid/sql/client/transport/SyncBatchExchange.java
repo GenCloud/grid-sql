@@ -19,8 +19,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 
 import org.genfork.grid.sql.SqlResult;
@@ -37,20 +35,9 @@ import org.genfork.grid.sql.netty.SqlWire;
  * @since: 1.0
  */
 public final class SyncBatchExchange implements PendingExchange {
-	private static final String ERR_AUTH = "AUTH unexpected on BATCH_EXEC";
-	private static final String ERR_SESSION_OPEN = "SESSION_OPEN unexpected on BATCH_EXEC";
-	private static final String ERR_SESSION_CLOSE = "SESSION_CLOSE unexpected on BATCH_EXEC";
-
-	private final int expectedStatements;
-	private final int fetchWindow;
-	private final IntConsumer fetchSender;
-	private final Runnable cancelSender;
-	private final AtomicInteger completedStatements = new AtomicInteger();
-	private final AtomicBoolean finished = new AtomicBoolean();
-	private final AtomicBoolean cancelled = new AtomicBoolean();
+	private final BatchExchangeSupport.State state;
 	private final ConcurrentLinkedQueue<TransportOutcome> orderedOutcomes = new ConcurrentLinkedQueue<>();
 	private final CompletableFuture<List<TransportOutcome>> outcomesFuture = new CompletableFuture<>();
-	private volatile BatchStatementSlot current;
 
 	public SyncBatchExchange(int expectedStatements, IntConsumer fetchSender, Runnable cancelSender) {
 		this(expectedStatements, SqlWire.DEFAULT_FETCH_WINDOW, fetchSender, cancelSender);
@@ -62,10 +49,8 @@ public final class SyncBatchExchange implements PendingExchange {
 			IntConsumer fetchSender,
 			Runnable cancelSender
 	) {
-		this.expectedStatements = Math.max(0, expectedStatements);
-		this.fetchWindow = Math.max(1, fetchWindow);
-		this.fetchSender = fetchSender;
-		this.cancelSender = cancelSender;
+		this.state = new BatchExchangeSupport.State(
+				expectedStatements, fetchWindow, fetchSender, cancelSender);
 	}
 
 	/**
@@ -76,106 +61,53 @@ public final class SyncBatchExchange implements PendingExchange {
 	}
 
 	public int expectedStatements() {
-		return expectedStatements;
+		return state.expectedStatements();
 	}
 
 	/** Best-effort CANCEL for the whole batch. */
 	public void cancel() {
-		if (finished.get()) {
-			return;
-		}
-		if (!cancelled.compareAndSet(false, true)) {
-			return;
-		}
-		if (cancelSender != null) {
-			cancelSender.run();
-		}
+		state.cancel();
 	}
 
 	@Override
 	public void completeAuth(ServerMeta serverMeta) {
-		fail(new IllegalStateException(ERR_AUTH));
+		fail(BatchExchangeSupport.unexpectedAuth());
 	}
 
 	@Override
 	public void completeSessionOpen(int sessionId) {
-		fail(new IllegalStateException(ERR_SESSION_OPEN));
+		fail(BatchExchangeSupport.unexpectedSessionOpen());
 	}
 
 	@Override
 	public void completeSessionClose() {
-		fail(new IllegalStateException(ERR_SESSION_CLOSE));
+		fail(BatchExchangeSupport.unexpectedSessionClose());
 	}
 
 	@Override
 	public void onRowDesc(List<SqlResult.ColumnMeta> columns) {
-		if (finished.get()) {
-			return;
-		}
-		final BatchStatementSlot slot = new BatchStatementSlot(
-				fetchWindow, fetchSender, cancelSender, cancelled);
-		current = slot;
-		emitOutcome(new TransportOutcome.ResultSet(columns, slot.portal()));
+		state.onRowDesc(columns, orderedOutcomes::offer);
 	}
 
 	@Override
 	public void onRowData(Object[] row) {
-		final BatchStatementSlot slot = current;
-		if (slot == null || finished.get()) {
-			return;
-		}
-		slot.portal().offerRow(row);
+		state.onRowData(row);
 	}
 
 	@Override
 	public boolean completeExec(long affected, String tag) {
-		if (finished.get()) {
-			return true;
-		}
-
-		if (tag != null && TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
-			final BatchStatementSlot slot = current;
-			if (slot != null) {
-				slot.portal().complete();
-			}
-			finishOk();
-			return true;
-		}
-
-		final BatchStatementSlot slot = current;
-		if (slot != null) {
-			slot.portal().complete();
-			current = null;
-		} else {
-			current = null;
-			emitOutcome(new TransportOutcome.Dml(affected, tag));
-		}
-
-		if (completedStatements.incrementAndGet() >= expectedStatements) {
-			finishOk();
-			return true;
-		}
-		return false;
+		return state.completeExec(affected, tag, orderedOutcomes::offer, this::finishOk);
 	}
 
 	@Override
 	public void fail(Throwable t) {
-		if (!finished.compareAndSet(false, true)) {
-			return;
+		if (state.failPortal(t)) {
+			outcomesFuture.completeExceptionally(t);
 		}
-		final BatchStatementSlot slot = current;
-		if (slot != null) {
-			slot.portal().fail(t);
-		}
-		outcomesFuture.completeExceptionally(t);
-	}
-
-	private void emitOutcome(TransportOutcome outcome) {
-		orderedOutcomes.offer(outcome);
 	}
 
 	private void finishOk() {
-		if (!finished.compareAndSet(false, true)) {
+		if (!state.finished().compareAndSet(false, true)) {
 			return;
 		}
 		outcomesFuture.complete(List.copyOf(orderedOutcomes));

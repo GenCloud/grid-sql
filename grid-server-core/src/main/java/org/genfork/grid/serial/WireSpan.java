@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.serial;
 
-import com.google.common.annotations.VisibleForTesting;
-
 /**
  * Zero-copy view of a wire field span inside an owning row blob.
  * <p>
@@ -70,11 +68,6 @@ public final class WireSpan {
 	public static WireSpan nullSpan() {
 		final byte[] nullPtr = SqlWireUtil.getNullPtr();
 		return of(nullPtr, 0, nullPtr.length);
-	}
-
-	@VisibleForTesting
-	public static WireSpan wrapForTest(byte[] blob, int offset, int length) {
-		return of(blob, offset, length);
 	}
 
 	public byte[] blob() {

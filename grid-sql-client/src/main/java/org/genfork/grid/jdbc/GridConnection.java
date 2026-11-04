@@ -733,6 +733,32 @@ public final class GridConnection implements Connection {
 		}
 	}
 
+	/**
+	 * Mid-op orchid / apply-lag fence: AUTH-rediscover writer and replace the held channel.
+	 * <p>
+	 * Used by {@link org.genfork.grid.sql.client.WriterFenceRetryUtil} via JDBC (one transparent retry). Open TX is dropped —
+	 * caller must not assume in-TX state survives a fence rediscover.
+	 */
+	void rediscoverWriterAfterFence() {
+		synchronized (this) {
+			if (closed) {
+				return;
+			}
+			openTx = null;
+			final SyncConnection next = syncFactory.rediscoverWriter();
+			final SyncConnection previous = sync;
+			spi = next.remote();
+			sync = next;
+			if (previous != null && previous != next) {
+				try {
+					previous.close();
+				} catch (RuntimeException ignored) {
+					// best-effort park of fenced channel
+				}
+			}
+		}
+	}
+
 	private static boolean isSpiLive(RemoteConnection connection) {
 		return connection != null && connection.isOpen();
 	}

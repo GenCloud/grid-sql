@@ -16,11 +16,11 @@
 package index.unit.replication;
 
 import org.genfork.grid.context.config.GridConfigurationProperties.CrossDcProps;
-import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.crossdc.CrossDcMode;
 import org.genfork.grid.replication.crossdc.CrossDcPublisher;
 import org.genfork.grid.replication.transport.ReplicationPeer;
+import org.genfork.grid.replication.util.CrossDcVoterUtil;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -46,7 +46,7 @@ public class CrossDcPublisherVotersTest {
 		final CrossDcProps props = new CrossDcProps();
 		props.setVoters(List.of());
 		props.setLearners(List.of("learner-1"));
-		final Set<String> voters = ReplicationCoordinator.resolveRemoteVoters(
+		final Set<String> voters = CrossDcVoterUtil.resolveRemoteVoters(
 				CrossDcMode.SYNC_VOTERS_ACROSS_DC,
 				props,
 				List.of(
@@ -62,7 +62,7 @@ public class CrossDcPublisherVotersTest {
 	@Test
 	void asyncShipHasNoRemoteVoters() {
 		final CrossDcProps props = new CrossDcProps();
-		final Set<String> voters = ReplicationCoordinator.resolveRemoteVoters(
+		final Set<String> voters = CrossDcVoterUtil.resolveRemoteVoters(
 				CrossDcMode.ASYNC_SHIP,
 				props,
 				List.of(new ReplicationPeer("r1", "127.0.0.1", 1, "dc-b")),

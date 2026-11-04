@@ -33,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -147,8 +148,7 @@ public class SqlTxReplicationMidCommitIT {
 			assertNull(hydrated.getCommittedBytes(keyBytes));
 			final ReplicaApplier applier = second.applier("kv");
 			if (applier != null) {
-				assertTrue(!applier.hasOpenTx("kv", shard)
-						|| applier.openTxStagedCount("kv", shard) == 0);
+				assertFalse(applier.hasOpenTx("kv", shard));
 			}
 		} finally {
 			second.stop();

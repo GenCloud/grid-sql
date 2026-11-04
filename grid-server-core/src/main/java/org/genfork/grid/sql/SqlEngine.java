@@ -23,9 +23,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
-import com.google.common.annotations.VisibleForTesting;
-
+import org.genfork.grid.catalog.CatalogDdlCompactor;
 import org.genfork.grid.catalog.CatalogDdlJournalUtil;
+import org.genfork.grid.catalog.CatalogFingerprintUtil;
 import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.catalog.FunctionKind;
 import org.genfork.grid.catalog.PrivilegeCatalog;
@@ -109,6 +109,12 @@ import org.genfork.grid.sql.udf.SqlUdfBinder;
 import org.genfork.grid.sql.udf.SqlUdfCallContext;
 import org.genfork.grid.sql.udf.SqlUdfLookup;
 import org.genfork.grid.sql.udf.SqlUdfMutatingOps;
+import org.genfork.grid.replication.util.CatalogOpLogEpochUtil;
+import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec.CatalogDdlSnapshot;
+import org.genfork.grid.sql.util.CatalogDdlApplyLaneUtil;
+import org.genfork.grid.sql.util.CatalogDdlEffectPresentUtil;
+import org.genfork.grid.sql.util.CatalogDdlEpochUtil;
+import org.genfork.grid.sql.util.CatalogJournalReconcileUtil;
 import org.genfork.grid.store.TableStore;
 
 /**
@@ -129,6 +135,7 @@ public final class SqlEngine {
 	private final ReplicationCoordinator replication;
 	private final SqlRecordLockManager lockManager = new SqlRecordLockManager();
 	private final AtomicBoolean applyingReplicatedDdl = new AtomicBoolean(false);
+	private final CatalogDdlApplyLaneUtil catalogDdlLane = new CatalogDdlApplyLaneUtil();
 	private final SqlDdlExecutor ddl;
 	private final SqlDmlExecutor dml;
 	private final SqlQueryExecutor query;
@@ -165,8 +172,32 @@ public final class SqlEngine {
 				? Integer.MAX_VALUE
 				: preparePoolSize;
 		if (replicationCoordinator != null && replicationCoordinator.isEnabled()) {
-			replicationCoordinator.bindSqlCatalog(this::applyReplicatedDdl);
+			replicationCoordinator.bindSqlCatalog(
+					this::applyReplicatedDdl,
+					() -> CatalogFingerprintUtil.fingerprint(catalog),
+					() -> CatalogDdlCompactor.compactLines(catalog),
+					catalog::maxAppliedDdlEpoch,
+					this::applyCatalogJournalSnapshot);
 		}
+	}
+
+	/**
+	 * Apply writer compacted DDL snapshot as missing CREATE* diff (peer catalog reconcile).
+	 */
+	public void applyCatalogJournalSnapshot(CatalogDdlSnapshot snapshot) {
+		if (snapshot == null) {
+			return;
+		}
+		catalogDdlLane.runSerial(() -> applyCatalogJournalSnapshotOnLane(snapshot));
+	}
+
+	private void applyCatalogJournalSnapshotOnLane(CatalogDdlSnapshot snapshot) {
+		CatalogJournalReconcileUtil.applyMissingCreates(
+				catalog,
+				snapshot.compactLines(),
+				snapshot.baseEpochExclusive(),
+				apply -> applyReplicatedDdlOnLane(apply.ddlSql(), apply.schemaEpoch()));
+		catalog.rewriteCompactedDdl();
 	}
 
 	/**
@@ -203,17 +234,14 @@ public final class SqlEngine {
 	 * Test/internal wiring for opt-in remote dirty upsert fan-out.
 	 * Production transports must provide ORCHID-admitted, transaction-scoped suppliers.
 	 */
-	@VisibleForTesting
 	public void setRemoteDirtyPeerKeyExecutors(List<Function<String, List<byte[]>>> peers) {
 		tables.setRemoteDirtyPeerKeyExecutors(peers);
 	}
 
-	@VisibleForTesting
 	public void setRemoteDirtyPeerRowBlobFetchers(List<BiFunction<String, byte[], byte[]>> fetchers) {
 		tables.setRemoteDirtyPeerRowBlobFetchers(fetchers);
 	}
 
-	@VisibleForTesting
 	public void setRemoteDirtyPeerTombstoneKeyExecutors(List<Function<String, List<byte[]>>> peers) {
 		tables.setRemoteDirtyPeerTombstoneKeyExecutors(peers);
 	}
@@ -222,7 +250,6 @@ public final class SqlEngine {
 	 * Peer FOR UPDATE lock agents (Phase 3). Empty = local locks only.
 	 * Prefer {@link org.genfork.grid.sql.tx.InProcessDistForUpdatePeerLockAgent} in tests.
 	 */
-	@VisibleForTesting
 	public void setDistForUpdatePeerLockAgents(List<DistForUpdatePeerLockAgent> agents) {
 		tables.setDistForUpdatePeerLockAgents(agents);
 	}
@@ -249,14 +276,6 @@ public final class SqlEngine {
 		this.defaultTimezone = zone == null ? ZoneOffset.UTC : zone;
 	}
 
-	public ZoneId defaultTimezone() {
-		return defaultTimezone;
-	}
-
-	public OverlayStore overlayStore() {
-		return overlayStore;
-	}
-
 	public TableCatalog catalog() {
 		return catalog;
 	}
@@ -274,6 +293,10 @@ public final class SqlEngine {
 	/** Shared fair record lock manager (SQL TX / DML). */
 	public SqlRecordLockManager lockManager() {
 		return lockManager;
+	}
+
+	public ReplicationCoordinator replication() {
+		return replication;
 	}
 
 	public SqlSession newSession() {
@@ -814,33 +837,34 @@ public final class SqlEngine {
 		if (applyingReplicatedDdl.get()) {
 			return;
 		}
-		final long epoch = catalog.nextEpoch();
-		catalog.noteAppliedDdlEpoch(epoch);
+		if (replication != null && replication.isEnabled()) {
+			ReplicaAccessGate.ensureWrite(replication);
+			if (replication.shouldDenyCatalogDdlMint()) {
+				throw new IllegalStateException(
+						"catalog apply lag or peer catalog ahead; catch-up before privilege DDL mint lag="
+								+ replication.catalogApplyLag()
+								+ " peerApplied=" + replication.maxPeerCatalogAppliedEpoch()
+								+ " localApplied=" + replication.catalogAppliedEpoch());
+			}
+		}
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, false);
+		final long applied = catalog.maxAppliedDdlEpoch();
+		if (epoch > 0L && epoch < applied) {
+			throw new IllegalStateException(
+					"stale schema epoch localApplied=" + applied + " remote=" + epoch);
+		}
 		if (replication != null && replication.isEnabled()) {
 			replication.recordDdl(sql, epoch);
 		}
+		catalog.noteAppliedDdlEpoch(epoch);
 	}
 
 	/**
 	 * Peer / proposer self-apply path for {@link org.genfork.grid.replication.codec.ReplicationOpType#DDL}.
+	 * Serial with {@link #recoverPersistedCatalog()}; duplicate epoch is idempotent ACK (no-op).
 	 */
 	public void applyReplicatedDdl(String ddlSql, long schemaEpoch) {
-		if (ddlSql == null || ddlSql.isBlank()) {
-			throw new IllegalArgumentException("replicated DDL is empty");
-		}
-		catalog.rejectIfStaleDdlEpoch(schemaEpoch);
-		if (!applyingReplicatedDdl.compareAndSet(false, true)) {
-			throw new IllegalStateException("nested replicated DDL apply");
-		}
-		try {
-			execute(ddlSql);
-			if (schemaEpoch > 0L) {
-				catalog.noteAppliedDdlEpoch(schemaEpoch);
-				catalog.ensureEpochAtLeast(schemaEpoch);
-			}
-		} finally {
-			applyingReplicatedDdl.set(false);
-		}
+		catalogDdlLane.runSerial(() -> applyReplicatedDdlOnLane(ddlSql, schemaEpoch));
 	}
 
 	/**
@@ -848,8 +872,73 @@ public final class SqlEngine {
 	 * {@code schemas.list} → {@code ddl.sql} → missing tables from {@code *.meta}.
 	 * Skips re-append / OpLog publish. Row data durability is outside this catalog path
 	 * (in-memory / replication OpLog); meta+DDL keep schema aligned with disk.
+	 * Serial with {@link #applyReplicatedDdl}.
 	 */
 	public void recoverPersistedCatalog() {
+		catalogDdlLane.runSerial(this::recoverPersistedCatalogOnLane);
+	}
+
+	/**
+	 * Raise proposer {@code epochSequence} from durable floor, meta epochs, and
+	 * {@code _catalog} OpLog DDL max — {@code ensureEpochAtLeast} only (never
+	 * {@code noteApplied} of OpLog max before/instead of hydrate).
+	 */
+	public void seedCatalogDdlEpochFloor() {
+		long floor = catalog.loadDurableEpochFloor();
+		final List<TableSchema> metas = catalog.loadPersistedMetaSchemas();
+		for (int i = 0, n = metas.size(); i < n; i++) {
+			final TableSchema meta = metas.get(i);
+			if (meta != null && meta.schemaEpoch() > floor) {
+				floor = meta.schemaEpoch();
+			}
+		}
+		if (replication != null && replication.isEnabled() && replication.getOpLog() != null) {
+			final long opLogMax = CatalogOpLogEpochUtil.maxDdlSchemaEpoch(
+					replication.getOpLog(),
+					ReplicationCoordinator.CATALOG_DOMAIN,
+					ReplicationCoordinator.CATALOG_SHARD);
+			if (opLogMax > floor) {
+				floor = opLogMax;
+			}
+		}
+		catalog.seedProposerEpochFloor(floor);
+	}
+
+	private void applyReplicatedDdlOnLane(String ddlSql, long schemaEpoch) {
+		if (ddlSql == null || ddlSql.isBlank()) {
+			throw new IllegalArgumentException("replicated DDL is empty");
+		}
+		if (schemaEpoch > 0L) {
+			final long applied = catalog.maxAppliedDdlEpoch();
+			if (schemaEpoch < applied) {
+				catalog.rejectIfStaleDdlEpoch(schemaEpoch);
+			}
+			if (schemaEpoch <= applied) {
+				// Duplicate epoch: skip only when catalog effect already present.
+				// Epoch alone is not proof of object presence (ACK without effect → VIEW holes).
+				if (CatalogDdlEffectPresentUtil.effectPresent(catalog, ddlSql)) {
+					return;
+				}
+				// Missing effect under duplicate epoch → execute CREATE* / DROP* idempotent path.
+			}
+		}
+		if (!applyingReplicatedDdl.compareAndSet(false, true)) {
+			throw new IllegalStateException("nested replicated DDL apply");
+		}
+		CatalogDdlEpochUtil.enterReplicated(schemaEpoch);
+		try {
+			execute(ddlSql);
+			if (schemaEpoch > 0L) {
+				catalog.noteAppliedDdlEpoch(schemaEpoch);
+				catalog.ensureEpochAtLeast(schemaEpoch);
+			}
+		} finally {
+			CatalogDdlEpochUtil.exitReplicated();
+			applyingReplicatedDdl.set(false);
+		}
+	}
+
+	private void recoverPersistedCatalogOnLane() {
 		final List<String> named = catalog.loadPersistedNamedSchemas();
 		final List<String> lines = catalog.loadPersistedDdl();
 		final List<TableSchema> metas = catalog.loadPersistedMetaSchemas();
@@ -878,10 +967,12 @@ public final class SqlEngine {
 					continue;
 				}
 				if (catalog.exists(meta.catalogKey())) {
+					catalog.ensureIdentitySequences(meta);
 					catalog.ensureEpochAtLeast(meta.schemaEpoch());
 					continue;
 				}
 				catalog.createTable(meta);
+				catalog.ensureIdentitySequences(meta);
 				catalog.ensureEpochAtLeast(meta.schemaEpoch());
 			}
 			catalog.pruneOrphanMetaFiles();
@@ -897,15 +988,4 @@ public final class SqlEngine {
 		}
 	}
 
-	/** Test hook: privilege catalog snapshot bytes. */
-	@VisibleForTesting
-	public byte[] privilegeSnapshotBytes() {
-		return privileges.toSnapshotBytes();
-	}
-
-	/** Test hook: replace privilege catalog from snapshot bytes. */
-	@VisibleForTesting
-	public void loadPrivilegeSnapshotBytes(byte[] bytes) {
-		privileges.loadSnapshotBytes(bytes);
-	}
 }

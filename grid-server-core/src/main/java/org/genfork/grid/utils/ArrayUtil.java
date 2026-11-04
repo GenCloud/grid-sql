@@ -31,22 +31,4 @@ public class ArrayUtil {
 		}
 		return result;
 	}
-
-	/**
-	 * Byte equality with {@link java.util.Arrays#equals(byte[], byte[])} null semantics.
-	 * <p>
-	 * Delegates to {@link ArrayVectors#bytesEqual(byte[], byte[])}.
-	 */
-	public static boolean bytesEqual(byte[] left, byte[] right) {
-		return ArrayVectors.bytesEqual(left, right);
-	}
-
-	/**
-	 * Unsigned lexicographic compare.
-	 * <p>
-	 * Delegates to {@link ArrayVectors#compareUnsigned(byte[], byte[])}.
-	 */
-	public static int compareUnsigned(byte[] left, byte[] right) {
-		return ArrayVectors.compareUnsigned(left, right);
-	}
 }

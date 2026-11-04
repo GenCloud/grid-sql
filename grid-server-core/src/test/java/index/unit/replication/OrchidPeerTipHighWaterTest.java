@@ -19,7 +19,9 @@ import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.orchid.DigestQuorum;
 import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.orchid.OrchidTransport;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.genfork.grid.threading.ThreadService;
 
 import java.util.List;
 
@@ -34,6 +36,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class OrchidPeerTipHighWaterTest {
 	private static final long ACTIVE_TIP = 42L;
+	private static final long PHASE_WAIT_MS = 2_000L;
+	private static final long PHASE_POLL_MS = 10L;
+
+	@AfterEach
+	void tearDown() {
+		ThreadService.shutdownNow();
+	}
 
 	private static final OrchidTransport NOOP = new OrchidTransport() {
 		@Override
@@ -66,7 +75,7 @@ class OrchidPeerTipHighWaterTest {
 	};
 
 	@Test
-	void maxSeenPeerCommittedSeqSurvivesForgetPeer() {
+	void maxSeenPeerCommittedSeqSurvivesForgetPeer() throws InterruptedException {
 		final OrchidNode node = new OrchidNode(
 				"hold-b1",
 				15.0,
@@ -76,10 +85,21 @@ class OrchidPeerTipHighWaterTest {
 				DigestQuorum.MAJORITY,
 				NOOP,
 				List.of("a1"));
-		node.testingNotePeerCommittedSeq("a1", ACTIVE_TIP);
+		node.start();
+		node.onPeerAvailable("a1");
+		node.onPhase(new OrchidTransport.OrchidPhaseMessage("a1", 0.0, 1.0, ACTIVE_TIP, 0L, 0L));
+		waitUntilMaxPeerTip(node, ACTIVE_TIP, PHASE_WAIT_MS);
 		assertEquals(ACTIVE_TIP, node.maxSeenPeerCommittedSeq());
 		node.forgetPeer("a1");
 		assertEquals(ACTIVE_TIP, node.maxSeenPeerCommittedSeq(),
 				"durable high-water must retain Active tip after disconnect");
+		node.stop();
+	}
+
+	private static void waitUntilMaxPeerTip(OrchidNode node, long wantTip, long timeoutMs) throws InterruptedException {
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline && node.maxSeenPeerCommittedSeq() < wantTip) {
+			Thread.sleep(PHASE_POLL_MS);
+		}
 	}
 }

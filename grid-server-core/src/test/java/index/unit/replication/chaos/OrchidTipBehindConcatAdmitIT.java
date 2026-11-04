@@ -25,6 +25,7 @@ import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.orchid.OrchidNode;
+import org.genfork.grid.replication.orchid.OrchidTransport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.CleanupMode;
 import org.junit.jupiter.api.io.TempDir;
@@ -55,6 +56,8 @@ public class OrchidTipBehindConcatAdmitIT {
 	private static final String FAKE_PEER = "tadm-peer";
 	private static final long TIP_AHEAD_DELTA = 3L;
 	private static final long SYNC_TIMEOUT_MS = 8_000L;
+	private static final long PHASE_WAIT_MS = 2_000L;
+	private static final long PHASE_POLL_MS = 10L;
 
 	@TempDir(cleanup = CleanupMode.NEVER)
 	Path tempDir;
@@ -86,7 +89,10 @@ public class OrchidTipBehindConcatAdmitIT {
 			final long peerTip = localTip + TIP_AHEAD_DELTA;
 			assertTrue(peerTip - localTip <= orchid.getMaxProposeInFlight(),
 					"delta must sit inside former inFlight tip hole");
-			orchid.testingNotePeerCommittedSeq(FAKE_PEER, peerTip);
+			orchid.onPeerAvailable(FAKE_PEER);
+			orchid.onPhase(new OrchidTransport.OrchidPhaseMessage(
+					FAKE_PEER, 0.0, 1.0, peerTip, 0L, 0L));
+			waitUntilPeerTipAhead(orchid, PHASE_WAIT_MS);
 			assertTrue(orchid.maxSeenPeerCommittedSeq() > orchid.getLastCommittedSeq());
 
 			final ReplicationOp steal = OpLogCodec.withChecksum(new ReplicationOp(
@@ -132,6 +138,14 @@ public class OrchidTipBehindConcatAdmitIT {
 	private static int freePort() throws Exception {
 		try (ServerSocket s = new ServerSocket(0)) {
 			return s.getLocalPort();
+		}
+	}
+
+	private static void waitUntilPeerTipAhead(OrchidNode orchid, long timeoutMs) throws InterruptedException {
+		final long localTip = orchid.getLastCommittedSeq();
+		final long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline && orchid.maxSeenPeerCommittedSeq() <= localTip) {
+			Thread.sleep(PHASE_POLL_MS);
 		}
 	}
 }

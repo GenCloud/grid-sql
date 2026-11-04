@@ -20,27 +20,30 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
+import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.mem.index.IndexPointerRef;
 import org.genfork.grid.mem.index.bitmap.GridBitmapIndex;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.mem.stage.GridEntriesProcessor;
 import org.genfork.grid.replication.ReplicationNodeState;
-import org.genfork.grid.replication.codec.ReplicationOp;
-import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.util.OpLogArchiveUtil;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.utils.ArrayUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Per-domain sealed GridMap lifecycle service.
@@ -54,6 +57,8 @@ import org.genfork.grid.utils.ArrayUtil;
  * @since: 1.0
  */
 public final class SealedGridMapService {
+	private static final Logger log = LoggerFactory.getLogger(SealedGridMapService.class);
+
 	private final Path sealedRoot;
 	/** Non-null when {@code grid.durability.oplog-archive.enabled}; else skip archive. */
 	private final Path opLogArchiveRoot;
@@ -89,7 +94,6 @@ public final class SealedGridMapService {
 	/** Safety cap: Function must return null past last shard (see TableStore). */
 	private static final int MAX_SHARD_PROBE = 4_096;
 	/** OpLog read chunk when merging into sealed dump (same order as hydrate). */
-	private static final int SEAL_DUMP_OPLOG_BATCH = 2_048;
 
 	/**
 	 * Per-shard gate: {@code true} skips dump for that shard (open TX / envelope).
@@ -116,7 +120,7 @@ public final class SealedGridMapService {
 	}
 
 	public int dumpDomain(String domainType, OpLog opLog, ReplicationNodeState nodeState) {
-		return dumpDomain(domainType, opLog, nodeState, null, true);
+		return dumpDomainResult(domainType, opLog, nodeState, null, true).rows();
 	}
 
 	/**
@@ -128,7 +132,7 @@ public final class SealedGridMapService {
 			ReplicationNodeState nodeState,
 			DumpDeferGate deferGate
 	) {
-		return dumpDomain(domainType, opLog, nodeState, deferGate, true);
+		return dumpDomainResult(domainType, opLog, nodeState, deferGate, true).rows();
 	}
 
 	/**
@@ -144,25 +148,31 @@ public final class SealedGridMapService {
 			DumpDeferGate deferGate,
 			boolean truncateOpLog
 	) {
+		return dumpDomainResult(domainType, opLog, nodeState, deferGate, truncateOpLog).rows();
+	}
+
+	/**
+	 * Sealed dump with deferred-shard accounting (at-risk / heal success contract).
+	 */
+	public DumpDomainResult dumpDomainResult(
+			String domainType,
+			OpLog opLog,
+			ReplicationNodeState nodeState,
+			DumpDeferGate deferGate,
+			boolean truncateOpLog
+	) {
 		if (sealedRoot == null || domainType == null) {
-			return 0;
+			return DumpDomainResult.empty();
 		}
 		final Function<Integer, GridEntriesProcessor> byShard = processors.get(domainType);
 		if (byShard == null) {
-			return 0;
+			return DumpDomainResult.empty();
 		}
-		final Set<Integer> shards = new LinkedHashSet<>();
+		final Set<Integer> shards = collectDumpShards(domainType, opLog);
 		final Set<Integer> bound = registeredShards.get(domainType);
-		if (bound != null) {
-			shards.addAll(bound);
-		}
-		if (opLog != null) {
-			for (String streamKey : opLog.streamKeys()) {
-				if (streamKey.startsWith(domainType + "#")) {
-					shards.add(parseShard(streamKey));
-				}
-			}
-		}
+		final int tableShardCount = bound != null && !bound.isEmpty()
+				? bound.size()
+				: Math.max(1, shards.size());
 
 		int rows = 0;
 		for (Integer shard : shards) {
@@ -170,9 +180,34 @@ public final class SealedGridMapService {
 				continue;
 			}
 			rows += dumpOneShard(
-					domainType, shard, byShard, opLog, nodeState, shards.size(), truncateOpLog);
+					domainType, shard, byShard, opLog, nodeState, tableShardCount, truncateOpLog);
 		}
-		return rows;
+		if (deferGate instanceof SealedDumpSafetyUtil.TrackingDeferGate tracking) {
+			return new DumpDomainResult(rows, tracking.deferredShards(), tracking.deferredReasons());
+		}
+		return new DumpDomainResult(rows, List.of(), List.of());
+	}
+
+	/**
+	 * Shards to visit for dump / seal-prepare: registered table shards ∪ OpLog streams.
+	 */
+	public Set<Integer> collectDumpShards(String domainType, OpLog opLog) {
+		final Set<Integer> shards = new LinkedHashSet<>();
+		if (domainType == null) {
+			return shards;
+		}
+		final Set<Integer> bound = registeredShards.get(domainType);
+		if (bound != null) {
+			shards.addAll(bound);
+		}
+		if (opLog != null) {
+			for (String streamKey : opLog.streamKeys()) {
+				if (OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
+					shards.add(Integer.valueOf(SealedDumpMergeUtil.parseShard(streamKey)));
+				}
+			}
+		}
+		return shards;
 	}
 
 	/**
@@ -197,7 +232,7 @@ public final class SealedGridMapService {
 				opLog == null ? 0L : opLog.lastSeq(domainType, shard));
 		// Sealed ∪ OpLog-delta ∪ RAM: eviction may drop cold keys from the working set before
 		// first seal; OpLog recovers them so truncate after dump cannot lose rows.
-		final LinkedHashMap<BytesKey, byte[]> merged = new LinkedHashMap<>();
+		final LinkedHashMap<SealedDumpMergeUtil.BytesKey, byte[]> merged = new LinkedHashMap<>();
 		final SealedGridMapReader prior = reader(domainType, shard);
 		final long priorWm = prior == null ? 0L : prior.watermark();
 		final boolean pinned = prior != null;
@@ -206,39 +241,105 @@ public final class SealedGridMapService {
 		}
 		try {
 			if (prior != null) {
-				prior.forEachLive((key, value) -> merged.put(new BytesKey(key), value));
+				prior.forEachLive((key, value) -> merged.put(new SealedDumpMergeUtil.BytesKey(key), value));
 			}
-			mergeOpLogDeltaInto(merged, domainType, shard, priorWm, opLog);
-			processor.forEachCommitted((key, value) -> merged.put(new BytesKey(key), value));
+			SealedDumpMergeUtil.mergeOpLogDeltaInto(merged, domainType, shard, priorWm, opLog);
+			// Live puts overwrite; sealed-delete tombstones remove (STRICT displace/repair).
+			// Skipping tombstones here used to resurrect losers from prior sealed into .gmap/.sbpt.
+			processor.forEachSealDumpOverlay(
+					(key, value) -> merged.put(new SealedDumpMergeUtil.BytesKey(key), value),
+					key -> merged.remove(new SealedDumpMergeUtil.BytesKey(key)));
 		} finally {
 			if (pinned) {
 				lifecycleGate.unpin(domainType, shard);
 			}
 		}
 		if (merged.isEmpty()) {
+			final long tip = opLog == null ? 0L : opLog.lastSeq(domainType, shard);
+			// STRICT displace tombstones can clear every live key on this shard while prior
+			// .gmap still holds the loser. Leaving prior files + truncating OpLog resurrects duals.
+			if (prior != null) {
+				try {
+					return lifecycleGate.callExclusive(domainType, shard, () -> {
+						try {
+							releaseReadersBeforeOverwriteUnlocked(domainType, shard);
+							deleteOrphanNodes(domainType, shard, List.of());
+							dumpIndexes(domainType, shard, shardCount, processor, 0, merged);
+							swapReader(domainType, shard, processor, null);
+							final long through = Math.max(watermark, tip);
+							if (truncateOpLog && opLog != null && through > 0L) {
+								OpLogArchiveUtil.archiveBeforeTruncate(
+										opLog, opLogArchiveRoot, domainType, shard, through);
+								opLog.truncateTo(domainType, shard, through);
+							}
+							log.info(
+									"Sealed dump cleared empty shard after tombstone overlay domain={} shard={} throughSeq={}",
+									domainType, shard, through);
+							return 0;
+						} catch (IOException e) {
+							throw new UncheckedSealedIo(e);
+						}
+					});
+				} catch (UncheckedSealedIo wrapped) {
+					throw new IllegalStateException(
+							"sealed empty-clear failed " + OpLogStreamKeyUtil.format(domainType, shard),
+							wrapped.io);
+				}
+			}
+			if (tip > priorWm) {
+				log.warn(
+						"Sealed dump merge empty with OpLog tip ahead domain={} shard={} priorWm={} tip={} (markers/net-empty?)",
+						domainType, shard, priorWm, tip);
+				// Net-empty / markers-only tip must not permanently fence LAZY reopen:
+				// retire the replayed empty delta (same truncate contract as a successful dump).
+				if (truncateOpLog && opLog != null && tip > 0L) {
+					OpLogArchiveUtil.archiveBeforeTruncate(
+							opLog, opLogArchiveRoot, domainType, shard, tip);
+					opLog.truncateTo(domainType, shard, tip);
+					log.warn(
+							"Sealed dump truncated net-empty OpLog tip domain={} shard={} throughSeq={}",
+							domainType, shard, tip);
+				}
+			}
 			return 0;
 		}
 		final List<SealedGridMapWriter.Kv>[] nodeBuckets = SealedGridMapWriter.newNodeBuckets();
-		for (Map.Entry<BytesKey, byte[]> e : merged.entrySet()) {
+		for (Map.Entry<SealedDumpMergeUtil.BytesKey, byte[]> e : merged.entrySet()) {
 			SealedGridMapWriter.addToNodeBucket(nodeBuckets, e.getKey().bytes(), e.getValue());
 		}
 		final int rowCount = merged.size();
 		try {
 			return lifecycleGate.callExclusive(domainType, shard, () -> {
 				try {
-					// Unmap/close live readers before rewrite — Windows denies REPLACE on mmap'd sealed (G-00001).
-					releaseReadersBeforeOverwriteUnlocked(domainType, shard);
-					SealedGridMapWriter.writeNodeBuckets(sealedRoot, domainType, shard, watermark, nodeBuckets);
-					// RAM BPTree may be WS-capped; rebuild index postings from sealed∪OpLog∪RAM merge.
-					reindexMergedForSealDump(processor, merged);
-					dumpIndexes(domainType, shard, shardCount, processor);
-					final List<SealedGridMapWriter.Kv> flatForOrphans = flattenNodeBuckets(nodeBuckets);
-					deleteOrphanNodes(domainType, shard, flatForOrphans);
-					final SealedGridMapReader opened = SealedGridMapReader.openShard(sealedRoot, domainType, shard);
-					if (opened == null) {
-						throw new IOException("node seal produced no files for " + domainType + "#" + shard);
+					// Publish-next-then-drop (G-00001 + no null-generation EQ gap):
+					// 1) write .gmap to unpublished siblings (prior may stay mapped)
+					// 2) dumpIndexes: write .sbpt staging → install next → close prior → publish
+					// 3) open+install next .gmap (swapReader closes prior)
+					// 4) orphan delete + publish staging→canonical + remount + truncate
+					final Path[] staging = SealedGridMapWriter.writeNodeBucketsUnpublished(
+							sealedRoot, domainType, shard, watermark, nodeBuckets);
+					dumpIndexes(domainType, shard, shardCount, processor, rowCount, merged);
+					final SealedGridMapReader openedStaging = SealedGridMapReader.openShardFromNodePaths(
+							sealedRoot, domainType, shard, staging);
+					if (openedStaging == null) {
+						SealedGridMapWriter.deleteStagingQuietly(staging);
+						throw new IOException("node seal produced no files for "
+								+ OpLogStreamKeyUtil.format(domainType, shard));
 					}
-					swapReader(domainType, shard, processor, opened);
+					swapReader(domainType, shard, processor, openedStaging);
+					final List<SealedGridMapWriter.Kv> flatForOrphans =
+							SealedDumpMergeUtil.flattenNodeBuckets(nodeBuckets);
+					deleteOrphanNodes(domainType, shard, flatForOrphans);
+					SealedGridMapWriter.publishNodeBuckets(sealedRoot, domainType, shard, staging);
+					final SealedGridMapReader openedCanonical =
+							SealedGridMapReader.openShard(sealedRoot, domainType, shard);
+					if (openedCanonical == null) {
+						SealedGridMapWriter.deleteStagingQuietly(staging);
+						throw new IOException("canonical seal open failed for "
+								+ OpLogStreamKeyUtil.format(domainType, shard));
+					}
+					swapReader(domainType, shard, processor, openedCanonical);
+					SealedGridMapWriter.deleteStagingQuietly(staging);
 					if (truncateOpLog && opLog != null && watermark > 0L) {
 						// Archive sync on seal thread (already off Netty EL); fail-closed before truncate.
 						OpLogArchiveUtil.archiveBeforeTruncate(
@@ -251,7 +352,7 @@ public final class SealedGridMapService {
 				}
 			});
 		} catch (UncheckedSealedIo wrapped) {
-			throw new IllegalStateException("sealed dump failed " + domainType + "#" + shard, wrapped.io);
+			throw new IllegalStateException("sealed dump failed " + OpLogStreamKeyUtil.format(domainType, shard), wrapped.io);
 		}
 	}
 
@@ -306,11 +407,11 @@ public final class SealedGridMapService {
 		}
 		final SealedGridMapReader reader = opened[0];
 		try {
-			final List<GridEntriesProcessor.AddEntry> chunk = new ArrayList<>(SEAL_DUMP_OPLOG_BATCH);
+			final List<GridEntriesProcessor.AddEntry> chunk = new ArrayList<>(SealedDumpMergeUtil.SEAL_DUMP_OPLOG_BATCH);
 			reader.forEachLive((key, value) -> {
 				processor.putMapOnly(key, value);
 				chunk.add(new GridEntriesProcessor.AddEntry(null, key, value));
-				if (chunk.size() >= SEAL_DUMP_OPLOG_BATCH) {
+				if (chunk.size() >= SealedDumpMergeUtil.SEAL_DUMP_OPLOG_BATCH) {
 					processor.indexDeltaNow(chunk);
 					chunk.clear();
 				}
@@ -343,37 +444,57 @@ public final class SealedGridMapService {
 			bindSealedIndexes(domainType, shard, processor);
 			return reader.watermark();
 		} catch (IOException e) {
-			throw new IllegalStateException("sealed open lazy failed for " + domainType + "#" + shard, e);
+			throw new IllegalStateException("sealed open lazy failed for " + OpLogStreamKeyUtil.format(domainType, shard), e);
 		}
 	}
 
 	public SealedGridMapReader reader(String domainType, int shard) {
-		return readers.get(readerKey(domainType, shard));
+		return readers.get(OpLogStreamKeyUtil.format(domainType, shard));
 	}
 
 	/**
-	 * True when at least one sealed {@code .sbpt} exists for the shard (cold index path).
+	 * True when at least one sealed {@code .sbpt} for the shard is authoritative
+	 * ({@code entryCount > 0}). Empty shells and truncated debris count as absent
+	 * (at-risk / reject-huge-delta fences).
 	 */
 	public boolean hasAnySealedIndex(String domainType, int shard) {
+		return hasUsableSealedIndex(domainType, shard);
+	}
+
+	/**
+	 * True when at least one {@code .sbpt} has {@code entryCount > 0}.
+	 */
+	public boolean hasUsableSealedIndex(String domainType, int shard) {
 		if (sealedRoot == null || domainType == null || !Files.isDirectory(sealedRoot)) {
 			return false;
 		}
 		final String prefix = SealedShardPack.domainHex(domainType) + "_" + shard + "_idx_";
 		try (DirectoryStream<Path> stream = GridFs.newDirectoryStream(sealedRoot, prefix + "*.sbpt")) {
-			return stream.iterator().hasNext();
+			for (Path idxFile : stream) {
+				if (SealedLazyIndexRebuildUtil.isAuthoritativeSealedIndexFile(idxFile)) {
+					return true;
+				}
+			}
+			return false;
 		} catch (IOException ignored) {
 			return false;
 		}
 	}
 
 	/**
-	 * List sealed {@code .gmap} + {@code .sbpt} artifacts for peer ship/repair (same domain/shard).
+	 * Declared single/composite accelerators missing, truncated, or empty-shell — heal via dump.
 	 */
-	public List<Path> listShardArtifacts(String domainType, int shard) throws IOException {
-		if (sealedRoot == null) {
-			return List.of();
+	public boolean shardAcceleratorsIncomplete(String domainType, int shard) {
+		if (sealedBPTreeService == null || domainType == null) {
+			return false;
 		}
-		return SealedShardPack.listShardFiles(sealedRoot, domainType, shard);
+		final Function<Integer, GridEntriesProcessor> byShard = processors.get(domainType);
+		final GridEntriesProcessor processor = byShard == null ? null : byShard.apply(shard);
+		if (processor == null || processor.compositeIndex() == null) {
+			return false;
+		}
+		return SealedLazyIndexRebuildUtil.anyAcceleratorIncomplete(
+				sealedBPTreeService, domainType, shard, processor.compositeIndex());
 	}
 
 	/**
@@ -416,14 +537,16 @@ public final class SealedGridMapService {
 		}
 	}
 
-	/** Unmap live sealed readers for {@code domain#shard} before file overwrite (caller holds lifecycle gate). */
+	/**
+	 * Unmap {@code .gmap}/{@code .sbpt} for one shard before overwrite (caller holds lifecycle gate).
+	 * Does <em>not</em> {@code clearSealedIndexes} — shared composite keeps other shards' sealed readers
+	 * (Windows denies REPLACE on mmap'd sealed — G-00001).
+	 */
 	private void releaseReadersBeforeOverwriteUnlocked(String domainType, int shard) throws IOException {
 		final Function<Integer, GridEntriesProcessor> byShard = processors.get(domainType);
 		final GridEntriesProcessor processor = byShard == null ? null : byShard.apply(shard);
 		releaseReaderForOverwrite(domainType, shard, processor);
-		if (sealedBPTreeService != null) {
-			sealedBPTreeService.releaseShard(domainType, shard);
-		}
+		SealedIndexLifecycleUtil.releaseShardSealedOnly(sealedBPTreeService, domainType, shard);
 	}
 
 	public SealedBPTreeService sealedBPTreeService() {
@@ -436,24 +559,33 @@ public final class SealedGridMapService {
 
 	public void closeAll() {
 		for (SealedGridMapReader reader : readers.values()) {
-			closeQuietly(reader);
+			SealedDumpMergeUtil.closeQuietly(reader);
 		}
 		readers.clear();
-		if (sealedBPTreeService != null) {
-			sealedBPTreeService.closeAll();
+		final List<GridEntriesProcessor> domainProcessors = new ArrayList<>();
+		for (Map.Entry<String, Function<Integer, GridEntriesProcessor>> entry : processors.entrySet()) {
+			final GridEntriesProcessor sample = sampleProcessor(entry.getKey(), entry.getValue());
+			if (sample != null) {
+				domainProcessors.add(sample);
+			}
 		}
+		SealedIndexLifecycleUtil.detachAllDomainsThenCloseBptree(domainProcessors, sealedBPTreeService);
 		if (sealedBitmapService != null) {
 			sealedBitmapService.close();
 		}
 	}
 
 	/**
-	 * DROP INDEX: unmap and delete sealed {@code .sbpt}/{@code .sbm} for one secondary index.
+	 * DROP INDEX: detach query sealed refs, then unmap and delete sealed {@code .sbpt}/{@code .sbm}.
 	 */
 	public void purgeIndexArtifacts(String domainType, String catalogIndexName, List<String> columns) {
 		if (sealedRoot == null || domainType == null || domainType.isBlank()) {
 			return;
 		}
+		final Function<Integer, GridEntriesProcessor> byShard = processors.get(domainType);
+		final GridEntriesProcessor sample = sampleProcessor(domainType, byShard);
+		SealedIndexLifecycleUtil.detachQuerySealedIndexes(
+				sample == null ? null : sample.compositeIndex());
 		final Set<Integer> known = registeredShards.get(domainType);
 		SealedIndexPurgeUtil.purge(
 				sealedRoot,
@@ -481,23 +613,25 @@ public final class SealedGridMapService {
 			}
 		}
 		for (String key : readerKeys) {
-			closeQuietly(readers.remove(key));
+			SealedDumpMergeUtil.closeQuietly(readers.remove(key));
 		}
 		final Set<Integer> shards = registeredShards.remove(domainType);
-		if (shards != null && sealedBPTreeService != null) {
+		final Function<Integer, GridEntriesProcessor> byShard = processors.get(domainType);
+		if (shards != null) {
 			for (Integer shard : shards) {
 				if (shard != null) {
 					try {
-						sealedBPTreeService.releaseShard(domainType, shard.intValue());
+						SealedIndexLifecycleUtil.detachAndReleaseShard(
+								byShard, sealedBPTreeService, domainType, shard.intValue());
 					} catch (IOException e) {
 						throw new IllegalStateException(
-								"sealed release before deleteDomain failed " + domainType + "#" + shard, e);
+								"sealed release before deleteDomain failed " + OpLogStreamKeyUtil.format(domainType, shard), e);
 					}
 				}
 			}
 		}
 		processors.remove(domainType);
-		final String filePrefix = safe(domainType) + "_";
+		final String filePrefix = SealedShardPack.domainHex(domainType) + "_";
 		if (!Files.isDirectory(sealedRoot)) {
 			return;
 		}
@@ -510,46 +644,43 @@ public final class SealedGridMapService {
 		}
 	}
 
-	private void dumpIndexes(String domainType, int shard, int shardCount, GridEntriesProcessor processor)
-			throws IOException {
+	private void dumpIndexes(
+			String domainType,
+			int shard,
+			int shardCount,
+			GridEntriesProcessor processor,
+			int mergeRowCount,
+			LinkedHashMap<SealedDumpMergeUtil.BytesKey, byte[]> merged
+	) throws IOException {
 		if (processor.compositeIndex() == null) {
 			return;
 		}
-		// Drop query-path refs, then unmap .sbpt before atomic replace (Windows mmap lock).
-		processor.compositeIndex().clearSealedIndexes();
-		if (sealedBPTreeService != null) {
-			sealedBPTreeService.releaseShard(domainType, shard);
-		}
+		final TableSchema schema = processor.compositeIndex().tableSchema();
+		// No early releaseShardSealedOnly — dumpIndex install-before-drop keeps prior∨next open.
 		try {
 			if (sealedBPTreeService != null) {
 				processor.compositeIndex().forEachSingleColumnBPTree((property, tree) -> {
-					final List<SealedBPTreeWriter.Entry> indexEntries = new ArrayList<>();
-					tree.forEachLeafEntry((indexKey, rowKey) -> {
-						if (Math.abs(ArrayUtil.fastHash(rowKey) % shardCount) == shard) {
-							indexEntries.add(new SealedBPTreeWriter.Entry(indexKey, rowKey));
-						}
-					});
+					final List<SealedBPTreeWriter.Entry> indexEntries =
+							SealedDumpMergeUtil.singleColumnSealedEntries(
+									merged, schema, property, shard, shardCount);
 					try {
-						sealedBPTreeService.dumpIndex(domainType, shard, property, indexEntries);
-						processor.compositeIndex().installSealedFallback(property,
-								sealedBPTreeService.open(domainType, shard, property));
+						dumpBpTreeIndexOrPreserve(
+								domainType, shard, property, indexEntries, mergeRowCount,
+								reader -> processor.compositeIndex().installSealedFallback(property, reader));
 					} catch (IOException failure) {
 						throw new SealedIndexDumpException(failure);
 					}
 				});
 				processor.compositeIndex().forEachCompositeBPTree((columns, tree) -> {
 					final String sealedName = SealedCompositeIndexNames.of(columns);
-					final List<SealedBPTreeWriter.Entry> indexEntries = new ArrayList<>();
-					tree.forEachLeafEntry((indexKey, rowKey) -> {
-						if (Math.abs(ArrayUtil.fastHash(rowKey) % shardCount) == shard) {
-							indexEntries.add(new SealedBPTreeWriter.Entry(
-									SealedCompositeIndexKey.encode(indexKey), rowKey));
-						}
-					});
+					final List<SealedBPTreeWriter.Entry> indexEntries =
+							SealedDumpMergeUtil.compositeSealedEntries(
+									merged, schema, columns, shard, shardCount);
 					try {
-						sealedBPTreeService.dumpIndex(domainType, shard, sealedName, indexEntries);
-						processor.compositeIndex().installSealedCompositeFallback(columns,
-								sealedBPTreeService.open(domainType, shard, sealedName));
+						dumpBpTreeIndexOrPreserve(
+								domainType, shard, sealedName, indexEntries, mergeRowCount,
+								reader -> processor.compositeIndex()
+										.installSealedCompositeFallback(columns, reader));
 					} catch (IOException failure) {
 						throw new SealedIndexDumpException(failure);
 					}
@@ -581,6 +712,37 @@ public final class SealedGridMapService {
 		}
 	}
 
+	/**
+	 * Write {@code .sbpt} from dump entries. Never atomically replace an authoritative
+	 * prior file with an empty shell when the merge map was non-empty (V10).
+	 */
+	private void dumpBpTreeIndexOrPreserve(
+			String domainType,
+			int shard,
+			String indexName,
+			List<SealedBPTreeWriter.Entry> indexEntries,
+			int mergeRowCount,
+			Consumer<SealedBPTreeReader> install
+	) throws IOException {
+		final Path idxFile = sealedBPTreeService.indexFile(domainType, shard, indexName);
+		final boolean priorAuthoritative =
+				SealedLazyIndexRebuildUtil.isAuthoritativeSealedIndexFile(idxFile);
+		if (indexEntries == null || indexEntries.isEmpty()) {
+			if (mergeRowCount > 0 && priorAuthoritative) {
+				// Keep prior good accelerator — empty dump must not stamp over it.
+				return;
+			}
+			if (mergeRowCount > 0 && !priorAuthoritative) {
+				throw new IOException(
+						"seal dump produced empty .sbpt for non-empty merge domain="
+								+ domainType + " shard=" + shard + " index=" + indexName
+								+ " mergeRows=" + mergeRowCount);
+			}
+			// Empty merge / empty table: empty shell OK (DDL shape).
+		}
+		sealedBPTreeService.dumpIndex(domainType, shard, indexName, indexEntries, install);
+	}
+
 	private void bindSealedIndexes(String domainType, int shard, GridEntriesProcessor processor) throws IOException {
 		if (processor == null || processor.compositeIndex() == null) {
 			return;
@@ -589,8 +751,8 @@ public final class SealedGridMapService {
 			if (sealedBPTreeService != null) {
 				processor.compositeIndex().forEachSingleColumnBPTree((property, tree) -> {
 					final Path idxFile = sealedBPTreeService.indexFile(domainType, shard, property);
-					// Truncated HELLO debris: same as missing — .sbpt is accelerator, not SoT.
-					if (!isUsableSealedIndexFile(idxFile)) {
+					// Empty shell / truncated debris = absent — do not bind authoritative empty fallback.
+					if (!SealedLazyIndexRebuildUtil.isAuthoritativeSealedIndexFile(idxFile)) {
 						return;
 					}
 					try {
@@ -603,7 +765,7 @@ public final class SealedGridMapService {
 				processor.compositeIndex().forEachCompositeBPTree((columns, tree) -> {
 					final String sealedName = SealedCompositeIndexNames.of(columns);
 					final Path idxFile = sealedBPTreeService.indexFile(domainType, shard, sealedName);
-					if (!isUsableSealedIndexFile(idxFile)) {
+					if (!SealedLazyIndexRebuildUtil.isAuthoritativeSealedIndexFile(idxFile)) {
 						return;
 					}
 					try {
@@ -632,22 +794,13 @@ public final class SealedGridMapService {
 		}
 	}
 
-	/** Regular file with sealed BPTree header size; truncated peer debris treated as absent. */
-	private static boolean isUsableSealedIndexFile(Path idxFile) {
-		try {
-			return Files.isRegularFile(idxFile) && Files.size(idxFile) >= SealedBPTreeReader.MIN_FILE_BYTES;
-		} catch (IOException ignored) {
-			return false;
-		}
-	}
-
 	/**
 	 * Drop the live sealed reader for {@code domain#shard} before file rewrite/orphan delete.
 	 * Fail-closed {@link SealedGridMapReader#closeForOverwrite} — overwrite path only.
 	 */
 	private void releaseReaderForOverwrite(String domainType, int shard, GridEntriesProcessor processor)
 			throws IOException {
-		final SealedGridMapReader previous = readers.remove(readerKey(domainType, shard));
+		final SealedGridMapReader previous = readers.remove(OpLogStreamKeyUtil.format(domainType, shard));
 		if (processor != null) {
 			processor.setSealedReader(null);
 		}
@@ -658,104 +811,19 @@ public final class SealedGridMapService {
 
 	private void swapReader(String domainType, int shard, GridEntriesProcessor processor,
 	                        SealedGridMapReader reader) {
-		final SealedGridMapReader previous = readers.put(readerKey(domainType, shard), reader);
+		final String streamKey = OpLogStreamKeyUtil.format(domainType, shard);
+		final SealedGridMapReader previous;
+		if (reader == null) {
+			// ConcurrentHashMap disallows null values — empty seal clear after tombstone overlay.
+			previous = readers.remove(streamKey);
+		} else {
+			previous = readers.put(streamKey, reader);
+		}
 		if (processor != null) {
 			processor.setSealedReader(reader);
 		}
 		if (previous != null && previous != reader) {
-			closeQuietly(previous);
-		}
-	}
-
-	private static List<SealedGridMapWriter.Kv> flattenNodeBuckets(List<SealedGridMapWriter.Kv>[] nodes) {
-		final List<SealedGridMapWriter.Kv> flat = new ArrayList<>();
-		if (nodes == null) {
-			return flat;
-		}
-		for (List<SealedGridMapWriter.Kv> bucket : nodes) {
-			if (bucket != null) {
-				flat.addAll(bucket);
-			}
-		}
-		return flat;
-	}
-
-	/**
-	 * Replay OpLog after sealed watermark into the dump merge map (UPSERT/DELETE only).
-	 */
-	private static void mergeOpLogDeltaInto(
-			LinkedHashMap<BytesKey, byte[]> merged,
-			String domainType,
-			int shard,
-			long priorWm,
-			OpLog opLog
-	) {
-		if (merged == null || opLog == null || domainType == null) {
-			return;
-		}
-		long from = Math.max(1L, priorWm + 1L);
-		while (true) {
-			final List<ReplicationOp> batch = opLog.readFrom(domainType, shard, from, SEAL_DUMP_OPLOG_BATCH);
-			if (batch.isEmpty()) {
-				break;
-			}
-			for (ReplicationOp op : batch) {
-				if (op.type() == ReplicationOpType.UPSERT) {
-					merged.put(new BytesKey(op.key()), op.value());
-				} else if (op.type() == ReplicationOpType.DELETE) {
-					merged.remove(new BytesKey(op.key()));
-				}
-				from = op.opSeq() + 1L;
-			}
-			if (batch.size() < SEAL_DUMP_OPLOG_BATCH) {
-				break;
-			}
-		}
-	}
-
-	/**
-	 * Fill RAM secondary/PK trees from the dump merge so {@link #dumpIndexes} writes complete {@code .sbpt}.
-	 */
-	private static void reindexMergedForSealDump(
-			GridEntriesProcessor processor,
-			LinkedHashMap<BytesKey, byte[]> merged
-	) {
-		if (processor == null || merged == null || merged.isEmpty() || processor.compositeIndex() == null) {
-			return;
-		}
-		final List<GridEntriesProcessor.AddEntry> chunk = new ArrayList<>(SEAL_DUMP_OPLOG_BATCH);
-		for (Map.Entry<BytesKey, byte[]> e : merged.entrySet()) {
-			final byte[] value = e.getValue();
-			if (value == null) {
-				continue;
-			}
-			chunk.add(new GridEntriesProcessor.AddEntry(null, e.getKey().bytes(), value));
-			if (chunk.size() >= SEAL_DUMP_OPLOG_BATCH) {
-				processor.indexDeltaNow(chunk);
-				chunk.clear();
-			}
-		}
-		if (!chunk.isEmpty()) {
-			processor.indexDeltaNow(chunk);
-		}
-	}
-
-	/** Equality by wire key bytes for sealed∪RAM merge. */
-	private record BytesKey(byte[] bytes) {
-		@Override
-		public boolean equals(Object o) {
-			if (this == o) {
-				return true;
-			}
-			if (!(o instanceof BytesKey other)) {
-				return false;
-			}
-			return Arrays.equals(bytes, other.bytes);
-		}
-
-		@Override
-		public int hashCode() {
-			return Arrays.hashCode(bytes);
+			SealedDumpMergeUtil.closeQuietly(previous);
 		}
 	}
 
@@ -766,10 +834,10 @@ public final class SealedGridMapService {
 			liveNodes.add(Math.abs(ArrayUtil.fastHash(entry.key)
 					% SealedGridMapWriter.NODE_COUNT));
 		}
-		final String pattern = safe(domainType) + "_" + shard + "_n*.gmap";
+		final String pattern = SealedShardPack.domainHex(domainType) + "_" + shard + "_n*.gmap";
 		try (DirectoryStream<Path> files = Files.newDirectoryStream(sealedRoot, pattern)) {
 			for (Path file : files) {
-				final int node = parseNode(file.getFileName().toString());
+				final int node = SealedDumpMergeUtil.parseNode(file.getFileName().toString());
 				if (!liveNodes.contains(node)) {
 					GridFs.deleteIfExists(file);
 				}
@@ -779,7 +847,7 @@ public final class SealedGridMapService {
 
 	private Set<Integer> listShards(String domainType) throws IOException {
 		final Set<Integer> shards = new LinkedHashSet<>();
-		final String prefix = safe(domainType) + "_";
+		final String prefix = SealedShardPack.domainHex(domainType) + "_";
 		try (DirectoryStream<Path> files = Files.newDirectoryStream(sealedRoot, prefix + "*_n*.gmap")) {
 			for (Path file : files) {
 				final String name = file.getFileName().toString();
@@ -801,42 +869,40 @@ public final class SealedGridMapService {
 		return shards;
 	}
 
-	private static int parseNode(String name) throws IOException {
-		final int marker = name.lastIndexOf("_n");
-		final int extension = name.lastIndexOf(".gmap");
-		if (marker < 0 || extension <= marker + 2) {
-			throw new IOException("invalid sealed node filename: " + name);
+	/**
+	 * First non-null processor for {@code domainType} (any registered/probed shard).
+	 */
+	private GridEntriesProcessor sampleProcessor(
+			String domainType,
+			Function<Integer, GridEntriesProcessor> byShard
+	) {
+		if (byShard == null) {
+			return null;
 		}
-		try {
-			return Integer.parseInt(name.substring(marker + 2, extension));
-		} catch (NumberFormatException e) {
-			throw new IOException("invalid sealed node filename: " + name, e);
+		final Set<Integer> known = registeredShards.get(domainType);
+		if (known != null) {
+			for (Integer shard : known) {
+				if (shard == null) {
+					continue;
+				}
+				final GridEntriesProcessor processor = byShard.apply(shard.intValue());
+				if (processor != null) {
+					return processor;
+				}
+			}
 		}
-	}
-
-	private static int parseShard(String streamKey) {
-		return Integer.parseInt(streamKey.substring(streamKey.lastIndexOf('#') + 1));
-	}
-
-	private static String readerKey(String domainType, int shard) {
-		return domainType + "#" + shard;
-	}
-
-	private static String safe(String domainType) {
-		return SealedShardPack.domainHex(domainType);
+		for (int shard = 0; shard < MAX_SHARD_PROBE; shard++) {
+			final GridEntriesProcessor processor = byShard.apply(shard);
+			if (processor != null) {
+				return processor;
+			}
+		}
+		return null;
 	}
 
 	private static final class SealedIndexDumpException extends RuntimeException {
 		private SealedIndexDumpException(IOException cause) {
 			super(cause);
-		}
-	}
-
-	private static void closeQuietly(SealedGridMapReader reader) {
-		try {
-			reader.close();
-		} catch (IOException ignored) {
-			// Reader replacement remains authoritative; close is best effort.
 		}
 	}
 

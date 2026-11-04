@@ -94,7 +94,7 @@ public final class SealedGridMapWriter {
 		nodeEntries.add(new Kv(key, value));
 	}
 
-	/** Write pre-bucketed node lists (streaming seal path). */
+	/** Write pre-bucketed node lists (streaming seal path) via atomic publish. */
 	public static void writeNodeBuckets(
 			Path sealedRoot,
 			String domainType,
@@ -102,9 +102,27 @@ public final class SealedGridMapWriter {
 			long watermark,
 			List<Kv>[] nodes
 	) throws IOException {
+		final Path[] staging = writeNodeBucketsUnpublished(sealedRoot, domainType, shard, watermark, nodes);
+		publishNodeBuckets(sealedRoot, domainType, shard, staging);
+		deleteStagingQuietly(staging);
+	}
+
+	/**
+	 * Write node files to unpublished siblings (prior canonical may stay mapped — G-00001).
+	 *
+	 * @return staging paths per node slot ({@code null} when the node is empty)
+	 */
+	public static Path[] writeNodeBucketsUnpublished(
+			Path sealedRoot,
+			String domainType,
+			int shard,
+			long watermark,
+			List<Kv>[] nodes
+	) throws IOException {
 		GridFs.createDirs(sealedRoot);
+		final Path[] staging = new Path[NODE_COUNT];
 		if (nodes == null) {
-			return;
+			return staging;
 		}
 		final String safe = Integer.toHexString(domainType.hashCode());
 		for (int node = 0; node < NODE_COUNT; node++) {
@@ -124,9 +142,43 @@ public final class SealedGridMapWriter {
 			final int bucketCapacity = capacity;
 			final List<Kv>[][] nodeBuckets = buckets;
 			final List<Kv> nodeOrdered = ordered;
-			GridFs.writeAtomic(target, temporary -> writeFile(
+			staging[node] = GridFs.writeUnpublished(target, temporary -> writeFile(
 					temporary, VERSION_NODE, 1, nodeId, domainType, shard, watermark, bucketCapacity,
 					nodeBuckets, nodeOrdered, true, true));
+		}
+		return staging;
+	}
+
+	/**
+	 * Copy unpublished staging node files onto canonical {@code *.gmap} names (target unmapped).
+	 */
+	public static void publishNodeBuckets(
+			Path sealedRoot,
+			String domainType,
+			int shard,
+			Path[] staging
+	) throws IOException {
+		if (staging == null) {
+			return;
+		}
+		final String safe = Integer.toHexString(domainType.hashCode());
+		for (int node = 0; node < NODE_COUNT; node++) {
+			final Path staged = staging[node];
+			if (staged == null) {
+				continue;
+			}
+			final Path target = sealedRoot.resolve(safe + "_" + shard + "_n" + node + ".gmap");
+			GridFs.publishFromMapped(staged, target);
+		}
+	}
+
+	/** Best-effort delete of unpublished staging siblings after remount onto canonical. */
+	public static void deleteStagingQuietly(Path[] staging) {
+		if (staging == null) {
+			return;
+		}
+		for (int node = 0; node < staging.length; node++) {
+			GridFs.deleteQuietly(staging[node]);
 		}
 	}
 

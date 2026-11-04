@@ -148,7 +148,7 @@ public final class QueryChunkMerge {
 	/**
 	 * Full-row wire key for set-op membership (length-prefixed column encodings).
 	 */
-	public static WireFieldBytes wireKeyOfRow(Object[] row) {
+	public static WireFieldBytes setOpWireKeyOfRow(Object[] row) {
 		if (row == null || row.length == 0) {
 			return new WireFieldBytes(null);
 		}
@@ -181,7 +181,7 @@ public final class QueryChunkMerge {
 		final List<Object[]> out = new ArrayList<>(rows.size());
 		final int cap = Math.max(0, limit);
 		for (Object[] row : rows) {
-			if (seen.add(wireKeyOfRow(row))) {
+			if (seen.add(setOpWireKeyOfRow(row))) {
 				out.add(row);
 				if (cap > 0 && out.size() >= cap) {
 					return out;
@@ -198,7 +198,7 @@ public final class QueryChunkMerge {
 		final List<Object[]> out = new ArrayList<>();
 		final int cap = Math.max(0, limit);
 		for (Object[] row : left) {
-			final WireFieldBytes key = wireKeyOfRow(row);
+			final WireFieldBytes key = setOpWireKeyOfRow(row);
 			if (rightKeys.contains(key) && emitted.add(key)) {
 				out.add(row);
 				if (cap > 0 && out.size() >= cap) {
@@ -214,7 +214,7 @@ public final class QueryChunkMerge {
 		final List<Object[]> out = new ArrayList<>();
 		final int cap = Math.max(0, limit);
 		for (Object[] row : left) {
-			final WireFieldBytes key = wireKeyOfRow(row);
+			final WireFieldBytes key = setOpWireKeyOfRow(row);
 			final Integer remaining = rightCounts.get(key);
 			if (remaining != null && remaining > MULTISET_EMPTY) {
 				rightCounts.put(key, remaining - MULTISET_UNIT);
@@ -234,7 +234,7 @@ public final class QueryChunkMerge {
 		final List<Object[]> out = new ArrayList<>();
 		final int cap = Math.max(0, limit);
 		for (Object[] row : left) {
-			final WireFieldBytes key = wireKeyOfRow(row);
+			final WireFieldBytes key = setOpWireKeyOfRow(row);
 			if (!rightKeys.contains(key) && emitted.add(key)) {
 				out.add(row);
 				if (cap > 0 && out.size() >= cap) {
@@ -250,7 +250,7 @@ public final class QueryChunkMerge {
 		final List<Object[]> out = new ArrayList<>();
 		final int cap = Math.max(0, limit);
 		for (Object[] row : left) {
-			final WireFieldBytes key = wireKeyOfRow(row);
+			final WireFieldBytes key = setOpWireKeyOfRow(row);
 			final Integer remaining = rightCounts.get(key);
 			if (remaining != null && remaining > MULTISET_EMPTY) {
 				rightCounts.put(key, remaining - MULTISET_UNIT);
@@ -268,7 +268,7 @@ public final class QueryChunkMerge {
 		final int capacity = Math.max(HASH_MAP_MIN_CAPACITY, rows.size() * 2);
 		final Set<WireFieldBytes> keys = new HashSet<>(capacity);
 		for (Object[] row : rows) {
-			keys.add(wireKeyOfRow(row));
+			keys.add(setOpWireKeyOfRow(row));
 		}
 		return keys;
 	}
@@ -277,7 +277,7 @@ public final class QueryChunkMerge {
 		final int capacity = Math.max(HASH_MAP_MIN_CAPACITY, rows.size() * 2);
 		final Map<WireFieldBytes, Integer> counts = new HashMap<>(capacity);
 		for (Object[] row : rows) {
-			final WireFieldBytes key = wireKeyOfRow(row);
+			final WireFieldBytes key = setOpWireKeyOfRow(row);
 			final Integer prev = counts.get(key);
 			counts.put(key, prev == null ? MULTISET_UNIT : prev + MULTISET_UNIT);
 		}

@@ -20,6 +20,7 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 import org.genfork.grid.utils.ArrayUtil;
+import org.genfork.grid.utils.ArrayVectors;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Mode;
@@ -62,7 +63,7 @@ public class ArrayUtilVectorBenchmark extends AbstractBenchmark {
 
 	@Benchmark
 	public boolean vectorEquals() {
-		return ArrayUtil.bytesEqual(left, equal);
+		return ArrayVectors.bytesEqual(left, equal);
 	}
 
 	@Benchmark

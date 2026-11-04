@@ -107,8 +107,28 @@ install_sql_client() {
   (cd "$ROOT" && run_mvn -B -pl grid-sql-client -am install -DskipTests)
 }
 
+run_honesty_if_enabled() {
+  local out_file="$1"
+  if [[ "${JEPSEN_CATALOG_HONESTY:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ ! -x "$JEPSEN_DIR/scripts/jepsen-honesty-gate.sh" ]]; then
+    return 0
+  fi
+  local honesty
+  honesty="$("$JEPSEN_DIR/scripts/jepsen-honesty-gate.sh" "$out_file" 2>&1 || true)"
+  echo "$honesty"
+  if echo "$honesty" | grep -Fq 'HONESTY_FAIL='; then
+    return 1
+  fi
+  return 0
+}
+
 run_workload() {
   local workload="$1"
+  local tmp
+  tmp="$(mktemp)"
+  local code=0
   if command -v lein >/dev/null 2>&1; then
     cd "$JEPSEN_DIR/clojure"
     export JEPSEN_USE_LOCALHOST=1
@@ -116,29 +136,42 @@ run_workload() {
     export JEPSEN_HTTP_PORTS=7777,7778,7779
     export JEPSEN_SQL_PORTS=15432,15433,15434
     export JEPSEN_SCRIPTS="$JEPSEN_DIR/scripts"
-    lein run -m jamoa-jepsen.core test --workload "$workload" --time-limit "$TIME_LIMIT"
-    return $?
-  fi
-  docker compose --profile control up -d jepsen
-  local ready=0
-  local i=0
-  while (( i < 90 )); do
-    if MSYS_NO_PATHCONV=1 docker compose --profile control exec -T jepsen \
-        test -f /tmp/jepsen-control-ready >/dev/null 2>&1; then
-      ready=1
-      break
+    set +e
+    lein run -m jamoa-jepsen.core test --workload "$workload" --time-limit "$TIME_LIMIT" 2>&1 | tee "$tmp"
+    code=${PIPESTATUS[0]}
+    set -e
+  else
+    docker compose --profile control up -d jepsen
+    local ready=0
+    local i=0
+    while (( i < 90 )); do
+      if MSYS_NO_PATHCONV=1 docker compose --profile control exec -T jepsen \
+          test -f /tmp/jepsen-control-ready >/dev/null 2>&1; then
+        ready=1
+        break
+      fi
+      sleep 2
+      i=$((i + 1))
+    done
+    if [[ "$ready" != "1" ]]; then
+      echo "ERROR: jepsen control did not become ready (lein bootstrap)"
+      rm -f "$tmp"
+      return 1
     fi
-    sleep 2
-    i=$((i + 1))
-  done
-  if [[ "$ready" != "1" ]]; then
-    echo "ERROR: jepsen control did not become ready (lein bootstrap)"
+    set +e
+    MSYS_NO_PATHCONV=1 docker compose --profile control exec -T \
+      -e JAVA_HOME=/opt/java/openjdk \
+      -e JAVA_CMD=/opt/java/openjdk/bin/java \
+      jepsen sh -c "set -e; export PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd /jepsen/jamoa; export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=15432,15433,15434 JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0; java -version; lein run -m jamoa-jepsen.core test --workload ${workload} --time-limit ${TIME_LIMIT}" 2>&1 | tee "$tmp"
+    code=${PIPESTATUS[0]}
+    set -e
+  fi
+  if ! run_honesty_if_enabled "$tmp"; then
+    rm -f "$tmp"
     return 1
   fi
-  MSYS_NO_PATHCONV=1 docker compose --profile control exec -T \
-    -e JAVA_HOME=/opt/java/openjdk \
-    -e JAVA_CMD=/opt/java/openjdk/bin/java \
-    jepsen sh -c "set -e; export PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd /jepsen/jamoa; export JEPSEN_NODES=n1,n2,n3 JEPSEN_HTTP_PORTS=7777,7778,7779 JEPSEN_SQL_PORTS=15432,15433,15434 JEPSEN_SCRIPTS=/jepsen/scripts JEPSEN_USE_LOCALHOST=0; java -version; lein run -m jamoa-jepsen.core test --workload ${workload} --time-limit ${TIME_LIMIT}"
+  rm -f "$tmp"
+  return "$code"
 }
 
 install_sql_client

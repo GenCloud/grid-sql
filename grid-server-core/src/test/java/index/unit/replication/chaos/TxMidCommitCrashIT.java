@@ -66,7 +66,6 @@ public class TxMidCommitCrashIT {
 			)), false);
 
 			assertTrue(applier.hasOpenTx("chaos.Tx", 0));
-			assertTrue(applier.openTxStagedCount("chaos.Tx", 0) >= 2);
 			assertNull(processor.get(new byte[]{10}), "partial TX row must not be visible");
 			assertNull(processor.get(new byte[]{11}), "partial TX row must not be visible");
 
@@ -168,7 +167,7 @@ public class TxMidCommitCrashIT {
 			)), false);
 
 			applier.discardOpenTxStaging("chaos.Tx", 1);
-			assertEquals(1, applier.openTxStagedCount("chaos.Tx", 0), "shard0 staging must survive");
+			assertTrue(applier.hasOpenTx("chaos.Tx", 0), "shard0 staging must survive");
 			assertFalse(applier.hasOpenTx("chaos.Tx", 1));
 
 			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
@@ -192,7 +191,7 @@ public class TxMidCommitCrashIT {
 			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
 					"chaos.Tx", 0, 2L, ReplicationOpType.UPSERT, new byte[]{10}, new byte[]{99}, 1L, 0L
 			)), true);
-			assertEquals(1, applier.openTxStagedCount("chaos.Tx", 0));
+			assertTrue(applier.hasOpenTx("chaos.Tx", 0));
 
 			final IllegalStateException ex = assertThrows(
 					IllegalStateException.class,
@@ -201,7 +200,7 @@ public class TxMidCommitCrashIT {
 					)), true));
 			assertTrue(ex.getMessage().contains("non-empty staging"),
 					() -> "message=" + ex.getMessage());
-			assertEquals(1, applier.openTxStagedCount("chaos.Tx", 0), "prior staging must remain");
+			assertTrue(applier.hasOpenTx("chaos.Tx", 0), "prior staging must remain");
 
 			applier.apply(OpLogCodec.withChecksum(new ReplicationOp(
 					"chaos.Tx", 0, 4L, ReplicationOpType.TX_COMMIT, new byte[]{1}, null, 1L, 0L

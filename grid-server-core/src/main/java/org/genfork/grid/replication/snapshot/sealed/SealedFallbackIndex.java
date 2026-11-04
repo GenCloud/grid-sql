@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -29,10 +28,11 @@ import org.genfork.grid.serial.WireLikeMatcher;
  * <p>
  * EQ/range merge sealed seeks. {@link #searchLike} merges a sealed leaf-walk using
  * {@link WireLikeMatcher} (same {@code %}/{@code _} semantics as RAM). Trailing-percent
- * patterns use a starts-with fast path inside the matcher; length-first sealed key order
- * prevents a contiguous range seek for {@code LIKE 'foo%'}.
+ * patterns use a starts-with fast path inside the matcher; LIKE still leaf-walks
+ * (no contiguous range seek for {@code LIKE 'foo%'}).
  * {@link #searchAll} / {@link #searchNotEq} merge RAM with sealed leaf walk (no FULL
  * {@code .sbpt} hydrate into RAM BPTree).
+ * Closed readers are pruned and skipped (no ISE on the query path).
  *
  * @author: GenCloud
  * @date: 2026/05
@@ -77,29 +77,18 @@ public final class SealedFallbackIndex extends AbstractSealedBpTreeFallback<byte
 		if (readersEmpty() || skipSealedOnRamHit(ram)) {
 			return ram == null ? IndexOperationResult.EMPTY : ram;
 		}
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchRange(low.getKey(), high.getKey()));
-		}
-		return mergeRamAndSealed(ram, sealed, NO_LIMIT);
+		return mergeRamAndSealed(ram, collectFromOpenReaders(
+				reader -> reader.searchRange(low.getKey(), high.getKey())), NO_LIMIT);
 	}
 
 	private List<byte[]> sealedEq(SingleTreeKey key) {
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchEq(key.getKey()));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchEq(key.getKey()));
 	}
 
 	private List<byte[]> sealedLike(SingleTreeKey pattern) {
 		final byte[] patternWire = pattern.getKey();
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(
-					indexKey -> WireLikeMatcher.matchesWire(indexKey, patternWire)));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchMatching(
+				indexKey -> WireLikeMatcher.matchesWire(indexKey, patternWire)));
 	}
 
 	@Override
@@ -113,11 +102,8 @@ public final class SealedFallbackIndex extends AbstractSealedBpTreeFallback<byte
 
 	private List<byte[]> sealedNotEq(SingleTreeKey key) {
 		final byte[] exclude = key.getKey();
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(indexKey -> !Arrays.equals(indexKey, exclude)));
-		}
-		return sealed;
+		return collectFromOpenReaders(reader -> reader.searchMatching(
+				indexKey -> !Arrays.equals(indexKey, exclude)));
 	}
 
 	@Override
@@ -160,11 +146,8 @@ public final class SealedFallbackIndex extends AbstractSealedBpTreeFallback<byte
 			return ram == null ? IndexOperationResult.EMPTY : ram;
 		}
 		final byte[] boundKey = key.getKey();
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchMatching(indexKey -> openCmp(indexKey, boundKey, bound)));
-		}
-		return mergeRamAndSealed(ram, sealed, NO_LIMIT);
+		return mergeRamAndSealed(ram, collectFromOpenReaders(
+				reader -> reader.searchMatching(indexKey -> openCmp(indexKey, boundKey, bound))), NO_LIMIT);
 	}
 
 	@Override
@@ -177,10 +160,6 @@ public final class SealedFallbackIndex extends AbstractSealedBpTreeFallback<byte
 	}
 
 	private List<byte[]> sealedAll() {
-		final List<byte[]> sealed = new ArrayList<>();
-		for (SealedBPTreeReader reader : readers()) {
-			sealed.addAll(reader.searchAll());
-		}
-		return sealed;
+		return collectFromOpenReaders(SealedBPTreeReader::searchAll);
 	}
 }

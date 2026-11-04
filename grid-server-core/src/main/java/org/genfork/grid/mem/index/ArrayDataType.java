@@ -17,7 +17,7 @@ package org.genfork.grid.mem.index;
 
 import java.time.temporal.Temporal;
 
-import org.genfork.grid.utils.SerialUtil;
+import org.genfork.grid.mem.index.btree.comparator.WireUtf8KeyOrderUtil;
 import org.genfork.grid.utils.UnsafeMemory;
 
 /**
@@ -113,40 +113,7 @@ public enum ArrayDataType {
 			final int blobLen2 = UnsafeMemory.readInt(valuePtr2);
 			valuePtr1 += Integer.BYTES;
 			valuePtr2 += Integer.BYTES;
-
-			if (blobLen1 < 4 || blobLen2 < 4) {
-				return Integer.compare(blobLen1, blobLen2);
-			}
-
-			final int strLen1 = readIntBE(valuePtr1);
-			final int strLen2 = readIntBE(valuePtr2);
-			if (strLen1 == SerialUtil.STRING_NULL) {
-				return strLen2 == SerialUtil.STRING_NULL ? 0 : -1;
-			}
-			if (strLen2 == SerialUtil.STRING_NULL) {
-				return 1;
-			}
-			valuePtr1 += Integer.BYTES;
-			valuePtr2 += Integer.BYTES;
-
-			final int length = Math.min(Math.max(0, strLen1), Math.max(0, strLen2));
-			for (int offset = 0; offset < length; offset++) {
-				final int b1 = UnsafeMemory.readByte(valuePtr1 + offset) & 0xFF;
-				final int b2 = UnsafeMemory.readByte(valuePtr2 + offset) & 0xFF;
-				final int diff = Integer.compare(b1, b2);
-				if (diff != 0) {
-					return diff;
-				}
-			}
-
-			return Integer.compare(strLen1, strLen2);
-		}
-
-		private static int readIntBE(long addr) {
-			return ((UnsafeMemory.readByte(addr) & 0xFF) << 24)
-					| ((UnsafeMemory.readByte(addr + 1) & 0xFF) << 16)
-					| ((UnsafeMemory.readByte(addr + 2) & 0xFF) << 8)
-					| (UnsafeMemory.readByte(addr + 3) & 0xFF);
+			return WireUtf8KeyOrderUtil.compareUtf8PrefixedMemory(valuePtr1, blobLen1, valuePtr2, blobLen2);
 		}
 	}
 

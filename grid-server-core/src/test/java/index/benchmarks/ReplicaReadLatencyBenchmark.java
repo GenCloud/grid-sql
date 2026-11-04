@@ -19,8 +19,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import org.genfork.grid.replication.OrchidNotSyncedException;
-import org.genfork.grid.replication.ReplicaAccessGate;
 import org.genfork.grid.sql.client.HostEndpoint;
 import org.genfork.grid.sql.client.ReadEndpointSelector;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -75,28 +73,6 @@ public class ReplicaReadLatencyBenchmark extends AbstractLatencyBenchmark {
 		staleSkipSelector = new ReadEndpointSelector(staleSkipEndpoints);
 		// Mark first endpoint stale so acquire must skip when a fresh peer exists.
 		staleSkipSelector.markStale(staleSkipEndpoints.get(0), true);
-	}
-
-	@Benchmark
-	public void linearizableProposer(Blackhole bh) {
-		ReplicaAccessGate.ensureLinearizableReadState(true, false, true);
-		bh.consume(true);
-	}
-
-	@Benchmark
-	public void replicaReadSyncedVoter(Blackhole bh) {
-		ReplicaAccessGate.ensureReplicaReadState(true, false, true, true);
-		bh.consume(true);
-	}
-
-	@Benchmark
-	public void replicaReadStaleFailClosed(Blackhole bh) {
-		try {
-			ReplicaAccessGate.ensureReplicaReadState(true, true, true, true);
-			bh.consume(false);
-		} catch (OrchidNotSyncedException ex) {
-			bh.consume(ex);
-		}
 	}
 
 	@Benchmark

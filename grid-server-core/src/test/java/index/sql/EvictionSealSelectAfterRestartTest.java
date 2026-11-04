@@ -64,7 +64,7 @@ class EvictionSealSelectAfterRestartTest {
 			for (int i = 0; i < ROW_COUNT; i++) {
 				engine.execute("INSERT INTO " + TABLE + " (id, v) VALUES (" + i + ", 'r" + i + "')");
 			}
-			final ReplicationCoordinator coord = first.ownedReplication();
+			final ReplicationCoordinator coord = first.replication();
 			assertNotNull(coord);
 			final int sealedRows = coord.dumpDomainSnapshot(TABLE);
 			assertTrue(sealedRows >= ROW_COUNT, "seal must retain full domain after eviction, got " + sealedRows);

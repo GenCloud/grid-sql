@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
 
 import org.genfork.grid.sql.SqlResult;
@@ -37,14 +36,8 @@ import org.genfork.grid.sql.netty.SqlWire;
  * @since: 1.0
  */
 public final class SyncExecExchange implements PendingExchange {
-	private final int fetchWindow;
-	private final IntConsumer fetchSender;
-	private final Runnable cancelSender;
+	private final ExecExchangeSupport.State state;
 	private final CompletableFuture<TransportOutcome> outcome = new CompletableFuture<>();
-	private final AtomicBoolean done = new AtomicBoolean();
-	private final AtomicBoolean resultEmitted = new AtomicBoolean();
-	private volatile boolean streaming;
-	private volatile FetchPortal portal;
 
 	public SyncExecExchange() {
 		this(SqlWire.DEFAULT_FETCH_WINDOW, null, null);
@@ -59,9 +52,8 @@ public final class SyncExecExchange implements PendingExchange {
 	}
 
 	public SyncExecExchange(int fetchWindow, IntConsumer fetchSender, Runnable cancelSender) {
-		this.fetchWindow = fetchWindow > 0 ? fetchWindow : SqlWire.DEFAULT_FETCH_WINDOW;
-		this.fetchSender = fetchSender;
-		this.cancelSender = cancelSender;
+		final int window = fetchWindow > 0 ? fetchWindow : SqlWire.DEFAULT_FETCH_WINDOW;
+		this.state = new ExecExchangeSupport.State(window, fetchSender, cancelSender);
 		outcome.whenComplete((value, error) -> {
 			if (error instanceof CancellationException || outcome.isCancelled()) {
 				cancel();
@@ -75,12 +67,7 @@ public final class SyncExecExchange implements PendingExchange {
 
 	/** Best-effort CANCEL when the sync consumer abandons the exchange. */
 	public void cancel() {
-		final FetchPortal live = portal;
-		if (live != null) {
-			live.cancel();
-		} else if (cancelSender != null) {
-			cancelSender.run();
-		}
+		state.cancel();
 	}
 
 	@Override
@@ -100,59 +87,30 @@ public final class SyncExecExchange implements PendingExchange {
 
 	@Override
 	public void onRowDesc(List<SqlResult.ColumnMeta> columns) {
-		streaming = true;
-		final FetchPortal created = new FetchPortal(fetchWindow, fetchSender, cancelSender);
-		portal = created;
-		emitOutcome(new TransportOutcome.ResultSet(columns, created));
+		state.onRowDesc(columns, this::deliverOutcome);
 	}
 
 	@Override
 	public void onRowData(Object[] row) {
-		if (done.get()) {
-			return;
-		}
-		final FetchPortal live = portal;
-		if (live != null) {
-			live.offerRow(row);
-		}
+		state.onRowData(row);
 	}
 
 	@Override
 	public boolean completeExec(long affected, String tag) {
-		if (!done.compareAndSet(false, true)) {
-			return true;
-		}
-
-		if (streaming) {
-			final FetchPortal live = portal;
-			if (live != null) {
-				live.complete();
-			}
-			return true;
-		}
-
-		if (tag != null && TransportOutcome.CANCEL_TAG.equalsIgnoreCase(tag)) {
-			emitOutcome(new TransportOutcome.Dml(0L, TransportOutcome.CANCEL_TAG));
-			return true;
-		}
-
-		emitOutcome(new TransportOutcome.Dml(affected, tag));
-		return true;
+		return state.completeExec(affected, tag, this::deliverOutcome);
 	}
 
 	@Override
 	public void fail(Throwable t) {
-		done.set(true);
-		final FetchPortal live = portal;
-		if (live != null) {
-			live.fail(t);
-		}
+		state.failPortal(t);
 		outcome.completeExceptionally(t);
 	}
 
 	private void emitOutcome(TransportOutcome value) {
-		if (resultEmitted.compareAndSet(false, true)) {
-			outcome.complete(value);
-		}
+		state.emitOutcomeOnce(value, this::deliverOutcome);
+	}
+
+	private void deliverOutcome(TransportOutcome value) {
+		outcome.complete(value);
 	}
 }

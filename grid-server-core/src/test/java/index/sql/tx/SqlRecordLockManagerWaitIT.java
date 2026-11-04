@@ -112,11 +112,10 @@ public class SqlRecordLockManagerWaitIT {
 			}
 		});
 		assertTrue(held.await(JOIN_TIMEOUT_MS, TimeUnit.MILLISECONDS));
-		locks.setDefaultWaitNanosForTest(TimeUnit.SECONDS.toNanos(30L));
 		final Thread waiter = Thread.ofVirtual().start(() -> {
 			waiterStarted.countDown();
 			try {
-				locks.lock(TABLE, KEY);
+				locks.lock(TABLE, KEY, TimeUnit.SECONDS.toNanos(30L));
 			} catch (Throwable ex) {
 				waiterError.set(ex);
 			}

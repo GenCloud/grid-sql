@@ -27,6 +27,8 @@ import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.repair.HomologousRepair;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+import org.genfork.grid.replication.util.SealedHydrateTxFenceUtil;
 
 /**
  * OpLog-range hydrate and bootstrap marker segments (sealed GMAP is SoT for map rows).
@@ -85,7 +87,7 @@ public class SnapshotService {
 		}
 		int total = 0;
 		for (String streamKey : opLog.streamKeys()) {
-			if (!streamKey.startsWith(domainType + "#")) {
+			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
 				continue;
 			}
 			final int hash = streamKey.lastIndexOf('#');
@@ -106,7 +108,7 @@ public class SnapshotService {
 			return shards;
 		}
 		for (String streamKey : opLog.streamKeys()) {
-			if (!streamKey.startsWith(domainType + "#")) {
+			if (!OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
 				continue;
 			}
 			final int hash = streamKey.lastIndexOf('#');
@@ -135,6 +137,9 @@ public class SnapshotService {
 
 	/**
 	 * Replay OpLog from watermark+1 only.
+	 * <p>
+	 * Per-stream open-TX fence before/after so live bootstrap apply cannot interleave
+	 * with sealed/LAZY tail replay ({@link SealedHydrateTxFenceUtil}).
 	 */
 	public int hydrateOpLogFrom(
 			String domainType,
@@ -143,7 +148,12 @@ public class SnapshotService {
 			ReplicaApplier applier,
 			HomologousRepair repair
 	) {
-		return hydrateShardFromWatermark(domainType, shard, snapWm, applier, repair);
+		SealedHydrateTxFenceUtil.beforeSealedOrLazyOpLogHydrate(applier, domainType, shard);
+		try {
+			return hydrateShardFromWatermark(domainType, shard, snapWm, applier, repair);
+		} finally {
+			SealedHydrateTxFenceUtil.afterOpLogHydrate(applier, domainType, shard);
+		}
 	}
 
 	private int hydrateShardFromWatermark(

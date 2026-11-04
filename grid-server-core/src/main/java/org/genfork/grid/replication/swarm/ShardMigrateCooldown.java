@@ -15,8 +15,9 @@
  */
 package org.genfork.grid.replication.swarm;
 
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -52,7 +53,9 @@ public final class ShardMigrateCooldown {
 		if (cooldownTicks <= 0 || domainType == null) {
 			return;
 		}
-		remainingByStream.put(streamKey(domainType, shard), new AtomicInteger(cooldownTicks));
+		remainingByStream.put(
+				OpLogStreamKeyUtil.format(domainType, shard),
+				new AtomicInteger(cooldownTicks));
 	}
 
 	/**
@@ -62,7 +65,7 @@ public final class ShardMigrateCooldown {
 		if (cooldownTicks <= 0 || domainType == null) {
 			return false;
 		}
-		final AtomicInteger remaining = remainingByStream.get(streamKey(domainType, shard));
+		final AtomicInteger remaining = remainingByStream.get(OpLogStreamKeyUtil.format(domainType, shard));
 		return remaining != null && remaining.get() > 0;
 	}
 
@@ -80,7 +83,4 @@ public final class ShardMigrateCooldown {
 		});
 	}
 
-	private static String streamKey(String domainType, int shard) {
-		return Objects.requireNonNull(domainType, "domainType") + "#" + shard;
-	}
 }

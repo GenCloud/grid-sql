@@ -25,12 +25,9 @@ import org.genfork.grid.replication.snapshot.sealed.SealedPackFingerprint;
 import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
 import org.genfork.grid.replication.tx.OpLogTxUnits;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 
@@ -64,7 +61,6 @@ public class ShardMigrator {
 	private volatile SealedGridMapService sealedGridMapService;
 	/** When set, migrateRange is a no-op unless the supplier returns true (writer-only). */
 	private volatile BooleanSupplier writerEligibleGate;
-	private final AtomicLong sealedShipCount = new AtomicLong();
 
 	public ShardMigrator(OpLog opLog, NettyReplicationTransport transport) {
 		this(opLog, transport, ShardMigrateCooldown.DEFAULT_CUTOVER_COOLDOWN_TICKS);
@@ -221,15 +217,10 @@ public class ShardMigrator {
 			}
 			transport.pushSealedShardPack(peerId, domainType, shard, packed);
 			sealedShipGate.onShipped(domainType, shard, fingerprint);
-			sealedShipCount.incrementAndGet();
 		} catch (IOException failure) {
 			throw new IllegalStateException(
 					"sealed pack ship failed " + domainType + "#" + shard, failure);
 		}
 	}
 
-	@VisibleForTesting
-	public long sealedShipCount() {
-		return sealedShipCount.get();
-	}
 }

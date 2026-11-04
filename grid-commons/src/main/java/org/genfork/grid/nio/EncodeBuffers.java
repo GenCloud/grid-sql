@@ -59,11 +59,6 @@ public final class EncodeBuffers {
 		return false;
 	}
 
-	/** Resolved {@code grid.encode.direct} / env (compat). Prefer site-specific allocate*. */
-	public static boolean preferDirect() {
-		return DEFAULT_DIRECT;
-	}
-
 	/**
 	 * SQL / replication wire frames that materialize {@code byte[]} for Netty (WireTiny).
 	 * Always heap — proven faster than direct when {@link #toByteArray} is required.
@@ -78,15 +73,8 @@ public final class EncodeBuffers {
 	}
 
 	/**
-	 * Direct LE — WireLarge off-heap staging or encodeInto paths that avoid {@link #toByteArray}.
-	 */
-	public static ByteBuffer allocateDirectLe(int size) {
-		return allocateLe(size, true);
-	}
-
-	/**
 	 * Compat allocate: respects {@code grid.encode.direct} (default false = heap).
-	 * Prefer {@link #allocateWireLe(int)} / {@link #allocateHeapLe(int)} / {@link #allocateDirectLe(int)}.
+	 * Prefer {@link #allocateWireLe(int)} / {@link #allocateHeapLe(int)}.
 	 */
 	public static ByteBuffer allocateLe(int size) {
 		return allocateLe(size, DEFAULT_DIRECT);
@@ -96,39 +84,6 @@ public final class EncodeBuffers {
 	public static ByteBuffer allocateLe(int size, boolean direct) {
 		final ByteBuffer buf = direct ? ByteBuffer.allocateDirect(size) : ByteBuffer.allocate(size);
 		return buf.order(ByteOrder.LITTLE_ENDIAN);
-	}
-
-	/**
-	 * Write a little-endian {@code int} at the current position.
-	 * Ensures LE regardless of {@code buf.order()} (restores prior order).
-	 */
-	public static void putIntLe(ByteBuffer buf, int value) {
-		final ByteOrder prev = buf.order();
-		buf.order(ByteOrder.LITTLE_ENDIAN);
-		buf.putInt(value);
-		buf.order(prev);
-	}
-
-	/**
-	 * Write a little-endian {@code short} at the current position.
-	 * Ensures LE regardless of {@code buf.order()} (restores prior order).
-	 */
-	public static void putShortLe(ByteBuffer buf, short value) {
-		final ByteOrder prev = buf.order();
-		buf.order(ByteOrder.LITTLE_ENDIAN);
-		buf.putShort(value);
-		buf.order(prev);
-	}
-
-	/**
-	 * Write a little-endian {@code long} at the current position.
-	 * Ensures LE regardless of {@code buf.order()} (restores prior order).
-	 */
-	public static void putLongLe(ByteBuffer buf, long value) {
-		final ByteOrder prev = buf.order();
-		buf.order(ByteOrder.LITTLE_ENDIAN);
-		buf.putLong(value);
-		buf.order(prev);
 	}
 
 	/**
@@ -174,12 +129,7 @@ public final class EncodeBuffers {
 		return data;
 	}
 
-	/** UTF-8 string as length-prefixed bytes ({@link #putLengthPrefixed}). */
-	public static void putUtf8(ByteBuffer buf, String value) {
-		putLengthPrefixed(buf, value.getBytes(StandardCharsets.UTF_8));
-	}
-
-	/** Decode UTF-8 string written by {@link #putUtf8} / {@link #putLengthPrefixed}. */
+	/** Decode UTF-8 string written by {@link #putLengthPrefixed}. */
 	public static String getUtf8(ByteBuffer buf) {
 		return new String(getLengthPrefixed(buf), StandardCharsets.UTF_8);
 	}

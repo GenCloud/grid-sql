@@ -15,10 +15,11 @@
  */
 package org.genfork.grid.replication.swarm;
 
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 /**
  * Per-stream sealed pack ship gate: ship once per CATCH_UP entry unless fingerprint changes.
@@ -62,18 +63,14 @@ public final class SealedPackShipGate {
 	 * Reset ship-once flag when drain leaves CATCH_UP (cutover / abort).
 	 */
 	public void onDrainFinished(String domainType, int shard) {
-		final StreamShipState state = byStream.get(streamKey(domainType, shard));
+		final StreamShipState state = byStream.get(OpLogStreamKeyUtil.format(domainType, shard));
 		if (state != null) {
 			state.catchUpShipDone.set(false);
 		}
 	}
 
 	private StreamShipState streamState(String domainType, int shard) {
-		return byStream.computeIfAbsent(streamKey(domainType, shard), k -> new StreamShipState());
-	}
-
-	private static String streamKey(String domainType, int shard) {
-		return Objects.requireNonNull(domainType, "domainType") + "#" + shard;
+		return byStream.computeIfAbsent(OpLogStreamKeyUtil.format(domainType, shard), k -> new StreamShipState());
 	}
 
 	private static final class StreamShipState {

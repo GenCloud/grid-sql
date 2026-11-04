@@ -91,15 +91,18 @@ class SchemaQualifiedFkPersistRecoverIT {
 	void applyReplicatedDdlWithQualifiedReferencesUnderPublicSession() {
 		final SqlEngine engine = new SqlEngine(new TableCatalog(), null, 2);
 		engine.execute("CREATE SCHEMA IF NOT EXISTS " + SCHEMA);
+		// Local CREATE SCHEMA advances maxAppliedDdlEpoch; peer epochs must be strictly after it
+		// (idempotent ACK skips schemaEpoch <= applied — duplicate ship, not different DDL).
+		final long base = engine.catalog().maxAppliedDdlEpoch();
 		engine.applyReplicatedDdl(
 				"CREATE TABLE IF NOT EXISTS " + PARENT + " (id INT PRIMARY KEY)",
-				1L);
+				base + 1L);
 		engine.applyReplicatedDdl(
 				"CREATE TABLE IF NOT EXISTS " + CHILD
 						+ " (id INT PRIMARY KEY, crest_id INT, "
 						+ "CONSTRAINT pledge_crest_fk FOREIGN KEY (crest_id) "
 						+ REF_QUALIFIED + " (id) ON DELETE CASCADE)",
-				2L);
+				base + 2L);
 		final FkDef fk = engine.catalog().requireSchema(CHILD).foreignKeys().getFirst();
 		assertEquals(SCHEMA, fk.parentSchema());
 		assertEquals(PARENT, fk.parentCatalogKey());

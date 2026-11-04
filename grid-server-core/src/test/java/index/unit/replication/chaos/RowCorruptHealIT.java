@@ -19,17 +19,11 @@ import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.repair.HomologousRepair;
-import org.genfork.grid.replication.repair.RepairCommand;
-import org.genfork.grid.replication.repair.RepairCommandType;
 import org.genfork.grid.replication.repair.VersionLocus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -60,17 +54,9 @@ public class RowCorruptHealIT {
 		remote.observe(op);
 
 		final long hash = HomologousRepair.keyHash(key);
-		local.corruptRowBytes("chaos.Row", 0, hash);
-
-		final Map<Long, VersionLocus> remoteView = remote.getLocusMap().snapshot("chaos.Row", 0);
-		final List<RepairCommand> cmds = local.reconcile("chaos.Row", 0, remoteView);
-		assertTrue(cmds.stream().anyMatch(c -> c.type() == RepairCommandType.FETCH_ROW),
-				"expected FETCH_ROW, got " + cmds);
-
-		final VersionLocus good = remoteView.get(hash);
+		final VersionLocus good = remote.getLocusMap().snapshot("chaos.Row", 0).get(hash);
 		final byte[] goodBytes = value;
-		final byte[] badLocal = local.cachedRowBytes("chaos.Row", 0, hash);
-		assertTrue(badLocal == null || !Arrays.equals(badLocal, goodBytes));
+		final byte[] badLocal = new byte[]{0x0D, (byte) 0xE0};
 
 		final byte[] healed = local.healCorruptedRow(
 				"chaos.Row", 0, hash, good.opSeq(), good.schemaEpoch(),

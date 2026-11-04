@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+
 /**
  * Per-shard map of keyHash → VersionLocus.
  *
@@ -30,29 +32,27 @@ import java.util.concurrent.ConcurrentHashMap;
 public class VersionLocusMap {
 	private final Map<String, Map<Long, VersionLocus>> byDomainShard = new ConcurrentHashMap<>();
 
-	private static String key(String domainType, int shard) {
-		return domainType + "#" + shard;
-	}
-
 	public void put(VersionLocus locus) {
 		byDomainShard
-				.computeIfAbsent(key(locus.domainType(), locus.shard()), k -> new ConcurrentHashMap<>())
+				.computeIfAbsent(
+						OpLogStreamKeyUtil.format(locus.domainType(), locus.shard()),
+						k -> new ConcurrentHashMap<>())
 				.put(locus.keyHash(), locus);
 	}
 
 	public VersionLocus get(String domainType, int shard, long keyHash) {
-		final Map<Long, VersionLocus> map = byDomainShard.get(key(domainType, shard));
+		final Map<Long, VersionLocus> map = byDomainShard.get(OpLogStreamKeyUtil.format(domainType, shard));
 		return map == null ? null : map.get(keyHash);
 	}
 
 	public Map<Long, VersionLocus> snapshot(String domainType, int shard) {
-		final Map<Long, VersionLocus> map = byDomainShard.get(key(domainType, shard));
+		final Map<Long, VersionLocus> map = byDomainShard.get(OpLogStreamKeyUtil.format(domainType, shard));
 		return map == null ? Map.of() : Map.copyOf(map);
 	}
 
 	/** Entry count for one domain#shard (0 if absent). */
 	public int size(String domainType, int shard) {
-		final Map<Long, VersionLocus> map = byDomainShard.get(key(domainType, shard));
+		final Map<Long, VersionLocus> map = byDomainShard.get(OpLogStreamKeyUtil.format(domainType, shard));
 		return map == null ? 0 : map.size();
 	}
 

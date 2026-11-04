@@ -45,6 +45,7 @@ import org.genfork.grid.replication.repair.RepairCommandType;
 import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
 import org.genfork.grid.replication.tx.OpLogTxUnits;
+import org.genfork.grid.replication.util.HelloSealedCatchUpUtil;
 import org.genfork.grid.net.NettyClientDisconnectUtil;
 import org.genfork.grid.threading.ThreadService;
 import org.slf4j.Logger;
@@ -132,7 +133,9 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 				localDc,
 				schemaEpoch.get(),
 				transport.currentRegionEpoch(),
-				transport.currentRegionRoleWire());
+				transport.currentRegionRoleWire(),
+				transport.currentCatalogAppliedEpoch(),
+				transport.currentCatalogFingerprint());
 		ctx.writeAndFlush(new WireMessage(ReplicationMessageType.HELLO.opcode(), ReplicationRpcCodec.encodeHello(hello)));
 	}
 
@@ -189,8 +192,13 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			case FOR_UPDATE_PREPARE_REQ -> onForUpdatePrepareReq(ctx, msg.body());
 			case FOR_UPDATE_PREPARE_ACK -> onForUpdatePrepareAck(msg.body());
 			case FOR_UPDATE_COMMIT_DEC -> onForUpdateCommitDec(msg.body());
+			case CATALOG_DDL_SNAPSHOT -> onCatalogDdlSnapshot(msg.body());
 			default -> log.debug("Unhandled replication message {}", type);
 		}
+	}
+
+	private void onCatalogDdlSnapshot(byte[] body) {
+		ThreadService.getLogicExecutor().execute(() -> transport.applyCatalogDdlSnapshot(body));
 	}
 
 	private void onSealedShardPack(byte[] body) {
@@ -278,9 +286,11 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			port = isa.getPort();
 		}
 		onPeerHello.accept(new DiscoveredPeer(
-				hello.nodeId(), host, port, hello.localDc(), hello.regionEpoch(), hello.regionRole()));
-		log.info("Replication HELLO from node={} dc={} regionEpoch={} regionRole={}",
-				hello.nodeId(), hello.localDc(), hello.regionEpoch(), hello.regionRole());
+				hello.nodeId(), host, port, hello.localDc(), hello.regionEpoch(), hello.regionRole(),
+				hello.catalogAppliedEpoch(), hello.catalogFingerprint()));
+		log.info("Replication HELLO from node={} dc={} regionEpoch={} regionRole={} catalogApplied={} catalogFp={}",
+				hello.nodeId(), hello.localDc(), hello.regionEpoch(), hello.regionRole(),
+				hello.catalogAppliedEpoch(), hello.catalogFingerprint());
 	}
 
 	private void onOplogPush(byte[] body) {
@@ -318,8 +328,20 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		if (opLog == null || sparseCatchUp == null) {
 			return;
 		}
+		// Sealed baseline first when peer is behind truncate / integrity pull (HELLO path adopt).
+		final long peerAckHint = Math.max(0L, pull.fromSeqInclusive() - 1L);
+		if (HelloSealedCatchUpUtil.needsSealedBaseline(
+				opLog, pull.domainType(), pull.shard(), peerAckHint)
+				|| peerAckHint == 0L) {
+			HelloSealedCatchUpUtil.shipSealedBaseline(
+					transport.sealedGridMapServiceOrNull(),
+					transport,
+					pull.fromNodeId(),
+					pull.domainType(),
+					pull.shard());
+		}
 		final List<ReplicationOp> ops = sparseCatchUp.catchUpFromWatermark(
-				pull.domainType(), pull.shard(), Math.max(0L, pull.fromSeqInclusive() - 1));
+				pull.domainType(), pull.shard(), peerAckHint);
 		if (ops.isEmpty()) {
 			return;
 		}
@@ -359,6 +381,8 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		final ApplyNack nack = ReplicationRpcCodec.decodeApplyNack(body);
 		log.warn("APPLY_NACK from={} domain={} shard={} seq={} reason={}",
 				nack.fromNodeId(), nack.domainType(), nack.shard(), nack.opSeq(), nack.reason());
+		// Coalesced heal off EL (SparseCatchUp / sealed / repair) — never tip mint.
+		ThreadService.getLogicExecutor().execute(() -> transport.dispatchApplyNackHeal(nack));
 	}
 
 	private void onRepairRequest(ChannelHandlerContext ctx, byte[] body) {

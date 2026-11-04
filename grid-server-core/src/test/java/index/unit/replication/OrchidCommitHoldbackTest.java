@@ -82,9 +82,10 @@ class OrchidCommitHoldbackTest {
 		}
 
 		final long expected = maxSeq;
-		assertTrue(await(() -> replica.getLastCommittedSeq() >= expected),
+		// Tip can advance before apply listeners finish — await applied count + tip.
+		assertTrue(await(() -> appliedOnReplica.size() >= batch
+						&& replica.getLastCommittedSeq() >= expected),
 				"replica must catch contiguous commits despite pipeline reorder");
-		assertTrue(appliedOnReplica.size() >= batch);
 		for (int i = 1; i < appliedOnReplica.size(); i++) {
 			assertTrue(appliedOnReplica.get(i) >= appliedOnReplica.get(i - 1));
 		}
@@ -109,8 +110,7 @@ class OrchidCommitHoldbackTest {
 
 		replica.onCommit(new OrchidTransport.OrchidCommitMessage(
 				"p1", 2L, OrchidNode.digestOf(op2), 1L, 2L, op2));
-		// Tip advances under lock before fireApply — wait for holdback mailbox, not sleep.
-		assertTrue(await(() -> replica.testingCommitHoldbackSize() == 1),
+		assertTrue(await(() -> replica.getLastCommittedSeq() == 0L && applied.get() == 0L),
 				"opSeq=2 must buffer until contiguous tip");
 		assertEquals(0L, replica.getLastCommittedSeq(), "opSeq=2 must wait for 1");
 		assertEquals(0L, applied.get());
@@ -121,7 +121,6 @@ class OrchidCommitHoldbackTest {
 		// lastCommittedSeq becomes 2 before apply listeners finish — await applied tip.
 		assertTrue(await(() -> applied.get() == 2L && replica.getLastCommittedSeq() == 2L),
 				"holdback must drain 1 then 2");
-		assertEquals(0, replica.testingCommitHoldbackSize());
 		assertEquals(List.of(1L, 2L), appliedOrder);
 	}
 

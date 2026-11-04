@@ -86,7 +86,7 @@ grid://<user>:<password>@<host>:<port>[,<host>:<port>...]/<schema>?<опции>
 | `PROMOTE_NOTIFY` / обновлённый `ServerMeta` на живом канале | Следовать promote-подсказке; фабрика может вызвать `rediscoverWriter()` сама |
 | Запись всё ещё падает / липнет к мёртвому хосту | Вызвать `rediscoverWriter()` на `RemoteConnectionFactory` (новый `Connection`); смотреть `lastServerMeta()` / `connection.serverMeta()` — `writerEligible`, `promoteHint`, `regionEpoch` |
 
-Повторы connect (`retryMode`) не заменяют `rediscoverWriter()` после смены роли. Бюджет AUTH-редиректа: на пути записи — **один** hop по `promoteHint`; на `READ_REPLICA` — до `ring−1` по кольцу эндпоинтов; после исчерпания бюджета — fail-closed (в т.ч. `applyLagStale`). Sync/JDBC: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` (без `Mono.block` на hot path). Регламент: [повышение роли](../configure-and-operate/operations/ha-promote.md).
+Повторы connect (`retryMode`) не заменяют `rediscoverWriter()` после смены роли. Бюджет AUTH-редиректа: на пути записи — **один** hop по `promoteHint`; на `READ_REPLICA` — до `ring−1` по кольцу эндпоинтов; после исчерпания бюджета — fail-closed (в т.ч. `applyLagStale`). Sync/JDBC: `rediscoverWriterStage()` / `SyncSession.callWithWriterRediscover` (без `Mono.block` на hot path). При orchid / region / apply-lag **writer fence** Sync и JDBC делают **один** прозрачный повтор через `WriterFenceRetryUtil.callWithOneRediscover` (один rediscover, затем повтор оператора); второй fence уже уходит в приложение. Регламент: [повышение роли](../configure-and-operate/operations/ha-promote.md).
 
 ## Автокоммит
 
@@ -209,7 +209,7 @@ Mono<Void> parallel = Mono.zip(
 grid://grid:grid@primary:15432/public?readEndpoints=replica-1:15433,replica-2:15434&readPreference=REPLICA&maxReadConnections=2
 ```
 
-Чтение своих записей через реплику без лишнего обхода через пишущий не гарантируется. При превышении допустимого отставания реплика отвечает `REPLICA_READ_STALE`, и клиент меняет адрес реплики. Полный разбор политик, отказов и рисков — [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
+Чтение своих записей через реплику без лишнего обхода через пишущий не гарантируется. Если реплика stale или **data-incomplete** (`applyLagStale`, непроигранный LAZY tip, несовпадение `catalogFingerprint`), AUTH-ротация обходит кольцо чтения; если все реплики всё ещё incomplete (`ReplicaReadFallbackUtil`), auto-route **уходит на writer**, а не отдаёт тихий пустой SELECT. Полный разбор — [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 
 ### Принудительно на пишущий (`SqlClientRouteContext`)
 

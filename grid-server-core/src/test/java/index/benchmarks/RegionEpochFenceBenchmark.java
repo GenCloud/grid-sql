@@ -92,9 +92,8 @@ public class RegionEpochFenceBenchmark extends AbstractLatencyBenchmark {
 	}
 
 	@Benchmark
-	public void coordinatorObserveAndClaim(Blackhole bh) {
-		coordinator.forceState(RegionLeaseState.bootstrap(RegionRole.HOLD, 1L, "b1", "dc-b"));
-		coordinator.observePeerEpoch(1L, "a1");
-		bh.consume(coordinator.tryCompleteClaim(CLAIM_ACKS));
+	public void coordinatorObservePeerEpoch(Blackhole bh) {
+		bh.consume(coordinator.observePeerEpoch(2L, "b1"));
+		bh.consume(coordinator.regionAllowsWrites());
 	}
 }

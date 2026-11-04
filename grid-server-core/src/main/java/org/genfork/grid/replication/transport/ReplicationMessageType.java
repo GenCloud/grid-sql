@@ -78,6 +78,11 @@ public enum ReplicationMessageType {
 	 * Body: {@link org.genfork.grid.replication.netty.ReplicationRpcCodec#encodeForUpdateCommitDec}.
 	 */
 	FOR_UPDATE_COMMIT_DEC(0x20),
+	/**
+	 * Writer compacted {@code ddl.sql} snapshot for peer catalog object-set reconcile.
+	 * Body: {@link org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec}.
+	 */
+	CATALOG_DDL_SNAPSHOT(0x21),
 	ORCHID_PHASE(0x30),
 	ORCHID_PROPOSE(0x31),
 	ORCHID_COMMIT(0x32),

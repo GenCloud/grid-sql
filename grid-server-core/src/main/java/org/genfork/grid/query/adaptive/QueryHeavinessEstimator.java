@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.query.adaptive;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.catalog.TableAnalyzeStats;
 import org.genfork.grid.query.filters.FilterCondition;
@@ -110,7 +109,6 @@ public final class QueryHeavinessEstimator {
 		return QueryHeaviness.estimate(clampPredicted(est), fullyIndexed);
 	}
 
-	@VisibleForTesting
 	public static long estimateFilter(TableAnalyzeStats stats, FilterCondition filter, long tableRows) {
 		final long rows = Math.max(1L, tableRows);
 		if (filter == null || filter instanceof AlwaysTrueCondition) {

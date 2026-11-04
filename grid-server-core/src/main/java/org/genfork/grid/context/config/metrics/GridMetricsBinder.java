@@ -33,6 +33,7 @@ import org.genfork.grid.replication.snapshot.sealed.SealedMetrics;
 import org.genfork.grid.replication.swarm.AdaptiveReplicaSwarm;
 import org.genfork.grid.replication.swarm.PlacementHint;
 import org.genfork.grid.replication.swarm.SwarmMigrateLoadGate;
+import org.genfork.grid.sql.SqlServerRuntime;
 import org.springframework.beans.factory.ObjectProvider;
 
 /**
@@ -85,6 +86,10 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_SQL_COMMITS = "grid.sql.tx_commits";
 	public static final String METRIC_SQL_ROLLBACKS = "grid.sql.tx_rollbacks";
 	public static final String METRIC_SQL_SESSION_OPENS = "grid.sql.session_opens";
+	public static final String METRIC_SQL_AUTH_FAILURES = "grid.sql.auth_failures";
+	public static final String METRIC_SQL_PRIVILEGE_USERS = "grid.sql.privilege_users";
+	public static final String METRIC_SQL_AUTH_OPEN = "grid.sql.auth_open";
+	public static final String METRIC_CATALOG_APPLY_LAG = "grid.replication.catalog_apply_lag";
 	public static final String METRIC_SQL_FAN_IN_CALLS = "grid.sql.distributed.fan_in_calls";
 	public static final String METRIC_SQL_FAN_IN_SOURCES = "grid.sql.distributed.fan_in_sources";
 	public static final String METRIC_SQL_FAN_IN_ROWS = "grid.sql.distributed.fan_in_rows";
@@ -112,9 +117,14 @@ public final class GridMetricsBinder implements MeterBinder {
 	private static final double ONE = 1.0d;
 
 	private final ObjectProvider<ReplicationCoordinator> coordinatorProvider;
+	private final ObjectProvider<SqlServerRuntime> sqlRuntimeProvider;
 
-	public GridMetricsBinder(ObjectProvider<ReplicationCoordinator> coordinatorProvider) {
+	public GridMetricsBinder(
+			ObjectProvider<ReplicationCoordinator> coordinatorProvider,
+			ObjectProvider<SqlServerRuntime> sqlRuntimeProvider
+	) {
 		this.coordinatorProvider = coordinatorProvider;
+		this.sqlRuntimeProvider = sqlRuntimeProvider;
 	}
 
 	@Override
@@ -220,6 +230,18 @@ public final class GridMetricsBinder implements MeterBinder {
 		FunctionCounter.builder(METRIC_SQL_ROLLBACKS, SqlTxMetrics.class, m -> SqlTxMetrics.rollbacks())
 				.register(registry);
 		FunctionCounter.builder(METRIC_SQL_SESSION_OPENS, SqlTxMetrics.class, m -> SqlTxMetrics.sessionOpens())
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_AUTH_FAILURES, SqlTxMetrics.class, m -> SqlTxMetrics.authFailures())
+				.description("SQL AUTH frame failures")
+				.register(registry);
+		Gauge.builder(METRIC_SQL_PRIVILEGE_USERS, this, GridMetricsBinder::samplePrivilegeUsers)
+				.description("Privilege catalog user count")
+				.register(registry);
+		Gauge.builder(METRIC_SQL_AUTH_OPEN, this, GridMetricsBinder::sampleAuthOpen)
+				.description("1 when privilege catalog is open (no users yet)")
+				.register(registry);
+		Gauge.builder(METRIC_CATALOG_APPLY_LAG, this, GridMetricsBinder::sampleCatalogApplyLag)
+				.description("_catalog OpLog tip minus applied watermark")
 				.register(registry);
 		FunctionCounter.builder(METRIC_SQL_FAN_IN_CALLS, DistributedQueryMetrics.class,
 						m -> DistributedQueryMetrics.fanInCalls())
@@ -417,6 +439,37 @@ public final class GridMetricsBinder implements MeterBinder {
 			return ZERO;
 		}
 		return coordinator.hydrateShardsTotal();
+	}
+
+	private double samplePrivilegeUsers() {
+		final SqlServerRuntime runtime = sqlRuntimeOrNull();
+		if (runtime == null || runtime.engine() == null || runtime.engine().privileges() == null) {
+			return ZERO;
+		}
+		return runtime.engine().privileges().userNames().size();
+	}
+
+	private double sampleAuthOpen() {
+		final SqlServerRuntime runtime = sqlRuntimeOrNull();
+		if (runtime == null || runtime.engine() == null || runtime.engine().privileges() == null) {
+			return ZERO;
+		}
+		return runtime.engine().privileges().isOpen() ? ONE : ZERO;
+	}
+
+	private double sampleCatalogApplyLag() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return (double) coordinator.catalogApplyLag();
+	}
+
+	private SqlServerRuntime sqlRuntimeOrNull() {
+		if (sqlRuntimeProvider == null) {
+			return null;
+		}
+		return sqlRuntimeProvider.getIfAvailable();
 	}
 
 	private HomologousRepair homologousRepairOrNull() {

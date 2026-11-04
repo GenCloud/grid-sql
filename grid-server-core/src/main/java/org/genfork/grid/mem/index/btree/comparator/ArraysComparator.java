@@ -15,21 +15,23 @@
  */
 package org.genfork.grid.mem.index.btree.comparator;
 
-import jodd.util.Bits;
-
+import java.nio.ByteBuffer;
 import java.util.Comparator;
 
+import jodd.util.Bits;
+
 /**
- * Wire-key ordering for BPTree / residual compare.
+ * Wire-key ordering for BPTree / residual / sealed compare.
  * <p>
- * Fixed-width INT (4) and LONG (8) keys use <strong>signed</strong>
- * {@link Integer#compare} / {@link Long#compare} so SQL predicates such as
- * {@code WHERE id > -1} match two's-complement semantics (unsigned order treated
- * {@code -1} as {@code 0xFFFFFFFF} and returned empty ranges). Variable-length
- * keys stay unsigned byte order.
+ * Fixed-width INT ({@link WireUtf8KeyOrderUtil#LEN_INT}) and LONG
+ * ({@link WireUtf8KeyOrderUtil#LEN_LONG}) use <strong>signed</strong>
+ * {@link Integer#compare} / {@link Long#compare}. Length-prefixed UTF-8 string
+ * wires (total length &gt; 4, or utf8Len==4 occupying 8 bytes) use payload-lex
+ * via {@link WireUtf8KeyOrderUtil}. Other variable-length keys use unsigned
+ * lexicographic byte order (common prefix, then length).
  * <p>
- * Trees already containing negative INT/LONG keys that were built under the old
- * unsigned order need an index rebuild / reseal after upgrade.
+ * Trees / {@code .sbpt} built under prior length-first varlen order need
+ * reseal ({@code VERSION 3}).
  *
  * @author: GenCloud
  * @date: 2025/04
@@ -51,7 +53,7 @@ public class ArraysComparator implements Comparator<byte[]> {
 	}
 
 	/**
-	 * Same signed INT/LONG / unsigned variable rules as {@link #compare(byte[], byte[])},
+	 * Same signed INT/LONG / UTF-8 / unsigned-lex rules as {@link #compare(byte[], byte[])},
 	 * over {@code a[aOff .. aOff+aLen)} vs {@code b[bOff .. bOff+bLen)}.
 	 */
 	public int compare(byte[] a, int aOff, int aLen, byte[] b, int bOff, int bLen) {
@@ -61,24 +63,49 @@ public class ArraysComparator implements Comparator<byte[]> {
 		if (b == null) {
 			return -1;
 		}
-		if (aLen == 4 && bLen == 4) {
+		if (aLen == WireUtf8KeyOrderUtil.LEN_INT && bLen == WireUtf8KeyOrderUtil.LEN_INT) {
 			return Integer.compare(Bits.getInt(a, aOff), Bits.getInt(b, bOff));
 		}
-		if (aLen == 8 && bLen == 8) {
+		if (aLen == WireUtf8KeyOrderUtil.LEN_LONG && bLen == WireUtf8KeyOrderUtil.LEN_LONG) {
+			if (WireUtf8KeyOrderUtil.isUtf8PrefixedShape(a, aOff, aLen)
+					&& WireUtf8KeyOrderUtil.isUtf8PrefixedShape(b, bOff, bLen)) {
+				return WireUtf8KeyOrderUtil.compareUtf8Prefixed(a, aOff, aLen, b, bOff, bLen);
+			}
 			return Long.compare(Bits.getLong(a, aOff), Bits.getLong(b, bOff));
 		}
-
-		final int lenDiff = aLen - bLen;
-		if (lenDiff != 0) {
-			return lenDiff;
+		if (WireUtf8KeyOrderUtil.isUtf8PrefixedShape(a, aOff, aLen)
+				&& WireUtf8KeyOrderUtil.isUtf8PrefixedShape(b, bOff, bLen)) {
+			return WireUtf8KeyOrderUtil.compareUtf8Prefixed(a, aOff, aLen, b, bOff, bLen);
 		}
+		return WireUtf8KeyOrderUtil.compareUnsignedLex(a, aOff, aLen, b, bOff, bLen);
+	}
 
-		for (int i = 0; i < aLen; i++) {
-			final int diff = (a[aOff + i] & 0xFF) - (b[bOff + i] & 0xFF);
-			if (diff != 0) {
-				return diff;
+	/**
+	 * Mapped sealed page key vs heap key — identical contract to
+	 * {@link #compare(byte[], int, int, byte[], int, int)}.
+	 */
+	public int compareMapped(ByteBuffer buffer, int offset, int length, byte[] key) {
+		if (key == null) {
+			return -1;
+		}
+		final int keyLen = key.length;
+		if (length == WireUtf8KeyOrderUtil.LEN_INT && keyLen == WireUtf8KeyOrderUtil.LEN_INT) {
+			final int a = buffer.getInt(offset);
+			final int b = Bits.getInt(key, 0);
+			return Integer.compare(a, b);
+		}
+		if (length == WireUtf8KeyOrderUtil.LEN_LONG && keyLen == WireUtf8KeyOrderUtil.LEN_LONG) {
+			if (WireUtf8KeyOrderUtil.isUtf8PrefixedShape(buffer, offset, length)
+					&& WireUtf8KeyOrderUtil.isUtf8PrefixedShape(key, 0, keyLen)) {
+				return WireUtf8KeyOrderUtil.compareUtf8PrefixedMapped(buffer, offset, length, key, 0, keyLen);
 			}
+			final long a = buffer.getLong(offset);
+			return Long.compare(a, Bits.getLong(key, 0));
 		}
-		return 0;
+		if (WireUtf8KeyOrderUtil.isUtf8PrefixedShape(buffer, offset, length)
+				&& WireUtf8KeyOrderUtil.isUtf8PrefixedShape(key, 0, keyLen)) {
+			return WireUtf8KeyOrderUtil.compareUtf8PrefixedMapped(buffer, offset, length, key, 0, keyLen);
+		}
+		return WireUtf8KeyOrderUtil.compareUnsignedLexMapped(buffer, offset, length, key, 0, keyLen);
 	}
 }

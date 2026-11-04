@@ -99,7 +99,7 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 
 	@Override
 	public ResultSet executeQuery() throws SQLException {
-		final ExecOutcome outcome = run(boundSpi(), sql);
+		final ExecOutcome outcome = runBound(this::boundSpiUnchecked, sql);
 		if (outcome.resultSet() == null) {
 			throw new SQLException("SQL did not produce a result set", "HY000");
 		}
@@ -108,12 +108,20 @@ public final class GridPreparedStatement extends GridStatement implements Prepar
 
 	@Override
 	public int executeUpdate() throws SQLException {
-		return acceptUpdateOrReturning(run(boundSpi(), sql));
+		return acceptUpdateOrReturning(runBound(this::boundSpiUnchecked, sql));
 	}
 
 	@Override
 	public boolean execute() throws SQLException {
-		return run(boundSpi(), sql).resultSet() != null;
+		return runBound(this::boundSpiUnchecked, sql).resultSet() != null;
+	}
+
+	private SyncStatement boundSpiUnchecked() {
+		try {
+			return boundSpi();
+		} catch (SQLException e) {
+			throw new IllegalStateException(e.getMessage(), e);
+		}
 	}
 
 	@Override

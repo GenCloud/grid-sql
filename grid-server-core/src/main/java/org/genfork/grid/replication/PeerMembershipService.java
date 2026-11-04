@@ -181,6 +181,29 @@ public final class PeerMembershipService {
 		onPeerHello(discovered.id());
 	}
 
+	/**
+	 * Ship OpLog catch-up (and sealed baseline when behind truncate) to one peer/stream.
+	 */
+	public void shipCatchUpToPeer(String peerId, String domain, int shard, long peerWm) {
+		if (!enabled || peerId == null || domain == null || opLog == null) {
+			return;
+		}
+		if (HelloSealedCatchUpUtil.needsSealedBaseline(opLog, domain, shard, peerWm)) {
+			HelloSealedCatchUpUtil.shipSealedBaseline(
+					sealedGridMapService, nettyTransport, peerId, domain, shard);
+		}
+		sparseCatchUp.catchUpAndShip(domain, shard, peerWm, (pid, ops) -> {
+			if (ops.isEmpty()) {
+				return;
+			}
+			final OpLogSegment segment = new OpLogSegment(
+					domain, shard, ops.getFirst().opSeq(), ops.getLast().opSeq(), ops,
+					OpLogCodec.segmentChecksum(ops)
+			);
+			nettyTransport.pushSegment(pid, segment);
+		}, peerId);
+	}
+
 	private void onPeerHello(String peerId) {
 		sparseCatchUp.onLearnerJoin(peerId);
 		for (String streamKey : opLog.streamKeys()) {
@@ -191,21 +214,7 @@ public final class PeerMembershipService {
 			final String domain = parsed.domain();
 			final int shard = parsed.shard();
 			final long peerWm = nodeState.peerAck(peerId, domain, shard);
-			// Past truncate: OpLog cannot ship retired seqs — push sealed baseline first.
-			if (HelloSealedCatchUpUtil.needsSealedBaseline(opLog, domain, shard, peerWm)) {
-				HelloSealedCatchUpUtil.shipSealedBaseline(
-						sealedGridMapService, nettyTransport, peerId, domain, shard);
-			}
-			sparseCatchUp.catchUpAndShip(domain, shard, peerWm, (pid, ops) -> {
-				if (ops.isEmpty()) {
-					return;
-				}
-				final OpLogSegment segment = new OpLogSegment(
-						domain, shard, ops.getFirst().opSeq(), ops.getLast().opSeq(), ops,
-						OpLogCodec.segmentChecksum(ops)
-				);
-				nettyTransport.pushSegment(pid, segment);
-			}, peerId);
+			shipCatchUpToPeer(peerId, domain, shard, peerWm);
 		}
 		if (publisher != null) {
 			publisher.flushAll();

@@ -69,9 +69,10 @@ import org.genfork.grid.sql.client.transport.TransportConnection.PreparedExec;
  * Convenience ctors that take {@code maxConnections} + {@code warmup=true} also set
  * {@code minConnections=maxConnections} so warmup opens N sockets.
  * <p>
- * READ_REPLICA factory-global {@link #lastServerMeta()} publishes only accepted (non-stale) peer
- * meta via {@link FactoryServerMetaPublish}; async min-pool refill is suppressed while a fill
- * coalescer is already in flight (no dual AUTH race).
+ * Factory-global {@link #lastServerMeta()} publishes only non-{@code applyLagStale} peer meta via
+ * {@link FactoryServerMetaPublish} (PRIMARY and READ_REPLICA). AUTH lag → rotate / FAIL_STALE
+ * ({@link FactoryAuthRedirectUtil}). Async min-pool refill is suppressed while a fill coalescer
+ * is already in flight (no dual AUTH race).
  *
  * @author: GenCloud
  * @date: 2026/08
@@ -82,9 +83,6 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	private static final Duration REDISCOVER_FALLBACK_TIMEOUT = Duration.ofSeconds(10);
 	private static final String ERR_READ_ENDPOINTS_REQUIRED =
 			"createReadFactory requires readEndpoints=host:port,...";
-	private static final String ERR_REPLICA_APPLY_LAG_STALE = "replica apply lag stale";
-	/** Writer promote-hint AUTH redirect: one hop to sticky target. */
-	private static final int WRITER_AUTH_REDIRECT_BUDGET = 1;
 	/** Floor capacity for per-channel requestId → exchange correlator. */
 	private static final int PENDING_MAP_MIN_CAPACITY = 16;
 	/** Extra correlator slots per maxTxContexts (EXEC + FETCH + CANCEL headroom). */
@@ -678,13 +676,10 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	}
 
 	/**
-	 * AUTH redirect budget: READ_REPLICA walks the full ring; writer gets one promote hop.
+	 * AUTH redirect budget: READ_REPLICA / writer walk the ring; writer keeps ≥1 promote hop.
 	 */
 	private int authRedirectBudget() {
-		if (factoryRole.isReadReplica()) {
-			return Math.max(0, endpoints.size() - 1);
-		}
-		return WRITER_AUTH_REDIRECT_BUDGET;
+		return FactoryAuthRedirectUtil.authRedirectBudget(factoryRole.isReadReplica(), endpoints.size());
 	}
 
 	/**
@@ -862,10 +857,12 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			int connectedIndex,
 			int remainingAuthRedirects
 	) {
-		final AuthRedirectPlan plan = planAuthRedirect(connection, connectedIndex, remainingAuthRedirects);
+		final FactoryAuthRedirectUtil.Outcome plan =
+				planAuthRedirect(connection, connectedIndex, remainingAuthRedirects);
 		return switch (plan.kind()) {
 			case ACCEPT -> Mono.just(connection);
-			case FAIL_STALE -> Mono.error(new IllegalStateException(ERR_REPLICA_APPLY_LAG_STALE));
+			case FAIL_STALE -> Mono.error(
+					new IllegalStateException(FactoryAuthRedirectUtil.ERR_APPLY_LAG_STALE));
 			case RETRY -> openNewOnce(plan.retryBudget());
 		};
 	}
@@ -875,88 +872,70 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 			int connectedIndex,
 			int remainingAuthRedirects
 	) {
-		final AuthRedirectPlan plan = planAuthRedirect(connection, connectedIndex, remainingAuthRedirects);
+		final FactoryAuthRedirectUtil.Outcome plan =
+				planAuthRedirect(connection, connectedIndex, remainingAuthRedirects);
 		return switch (plan.kind()) {
 			case ACCEPT -> CompletableFuture.completedFuture(connection);
 			case FAIL_STALE -> CompletableFuture.failedFuture(
-					new IllegalStateException(ERR_REPLICA_APPLY_LAG_STALE));
+					new IllegalStateException(FactoryAuthRedirectUtil.ERR_APPLY_LAG_STALE));
 			case RETRY -> openNewOnceStage(plan.retryBudget());
 		};
 	}
 
 	/**
 	 * Shared AUTH redirect policy for Mono and CompletionStage obtain paths (fail-closed stale,
-	 * writer pin, one promote hop). Side effects (markStale / sticky / destroy) applied here once.
+	 * writer pin, promote hop). Side effects (markStale / sticky / destroy) applied here once.
 	 */
-	private AuthRedirectPlan planAuthRedirect(
+	private FactoryAuthRedirectUtil.Outcome planAuthRedirect(
 			RemoteConnection connection,
 			int connectedIndex,
 			int remainingAuthRedirects
 	) {
 		final ServerMeta meta = connection.serverMeta();
 
-		if (factoryRole.isReadReplica()) {
-			if (meta.applyLagStale()) {
-				// Do not publish stale meta onto factory-global lastServerMeta (rotate away).
-				if (readSelector != null && connectedIndex >= 0 && connectedIndex < endpoints.size()) {
-					readSelector.markStale(endpoints.get(connectedIndex), true);
-				}
-				advanceStickyPastFailed();
-				destroy(connection);
-				if (remainingAuthRedirects <= 0) {
-					return AuthRedirectPlan.failStale();
-				}
-				return AuthRedirectPlan.retry(remainingAuthRedirects - 1);
+		if (meta.applyLagStale()) {
+			if (factoryRole.isReadReplica()
+					&& readSelector != null
+					&& connectedIndex >= 0
+					&& connectedIndex < endpoints.size()) {
+				readSelector.markStale(endpoints.get(connectedIndex), true);
 			}
+			preferHintEndpoint(meta);
+			if (!meta.hasPromoteHint()) {
+				advanceStickyPastFailed();
+			}
+			destroy(connection);
+			if (factoryRole.isReadReplica()) {
+				return FactoryAuthRedirectUtil.decideAfterApplyLagStale(remainingAuthRedirects);
+			}
+			return FactoryAuthRedirectUtil.decideAfterApplyLagStalePrimary(
+					meta.writerEligible(), remainingAuthRedirects);
+		}
 
+		if (factoryRole.isReadReplica()) {
 			if (readSelector != null && connectedIndex >= 0 && connectedIndex < endpoints.size()) {
 				readSelector.markStale(endpoints.get(connectedIndex), false);
 			}
-
 			publishFactoryServerMeta(meta);
 			stickyIndex.set(connectedIndex);
-			return AuthRedirectPlan.accept();
+			return FactoryAuthRedirectUtil.Outcome.accept();
 		}
 
 		publishFactoryServerMeta(meta);
-
-		if (meta.writerEligible()) {
-			pinSticky(connectedIndex, meta);
-			return AuthRedirectPlan.accept();
+		final int promoteHintIndex = meta.hasPromoteHint()
+				? endpointIndexForHint(meta.promoteHint())
+				: -1;
+		final FactoryAuthRedirectUtil.Outcome outcome = FactoryAuthRedirectUtil.decidePrimaryFresh(
+				meta, remainingAuthRedirects, connectedIndex, promoteHintIndex);
+		if (outcome.kind() == FactoryAuthRedirectUtil.Kind.ACCEPT) {
+			if (meta.writerEligible()) {
+				pinSticky(connectedIndex, meta);
+			}
+			return outcome;
 		}
-
-		if (remainingAuthRedirects <= 0 || !meta.hasPromoteHint()) {
-			return AuthRedirectPlan.accept();
-		}
-
-		final int targetIndex = endpointIndexForHint(meta.promoteHint());
-		if (targetIndex < 0 || targetIndex == connectedIndex) {
-			return AuthRedirectPlan.accept();
-		}
-
-		stickyIndex.set(targetIndex);
+		stickyIndex.set(promoteHintIndex);
 		destroy(connection);
-		return AuthRedirectPlan.retry(remainingAuthRedirects - 1);
-	}
-
-	private enum AuthRedirectKind {
-		ACCEPT,
-		FAIL_STALE,
-		RETRY
-	}
-
-	private record AuthRedirectPlan(AuthRedirectKind kind, int retryBudget) {
-		private static AuthRedirectPlan accept() {
-			return new AuthRedirectPlan(AuthRedirectKind.ACCEPT, 0);
-		}
-
-		private static AuthRedirectPlan failStale() {
-			return new AuthRedirectPlan(AuthRedirectKind.FAIL_STALE, 0);
-		}
-
-		private static AuthRedirectPlan retry(int remaining) {
-			return new AuthRedirectPlan(AuthRedirectKind.RETRY, remaining);
-		}
+		return outcome;
 	}
 
 	private void pinSticky(int endpointIndex, ServerMeta meta) {

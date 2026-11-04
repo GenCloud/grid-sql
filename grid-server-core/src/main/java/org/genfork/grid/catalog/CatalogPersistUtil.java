@@ -98,11 +98,4 @@ public final class CatalogPersistUtil {
 		final String schema = schemaKey.toLowerCase(Locale.ROOT);
 		return schema.equals(schemaPartOf(objectKey));
 	}
-
-	/**
-	 * Meta file name for a table key ({@code schema.table.meta} or {@code table.meta}).
-	 */
-	public static String metaFileName(String tableKey) {
-		return tableKey.toLowerCase(Locale.ROOT) + META_SUFFIX;
-	}
 }

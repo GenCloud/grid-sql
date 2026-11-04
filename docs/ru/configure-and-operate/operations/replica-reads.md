@@ -113,17 +113,23 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 
 `SESSION_OPEN` передаёт роль сессии (`SessionRoleWire` v2). `PROMOTE_NOTIFY` роль сессии не меняет.
 
-## Отставание и отказы
+## Отставание, полнота данных и отказы
+
+Одного serving-stream `applyLagStale` для допуска чтения **недостаточно**. Клиентский SQL на реплике fail-closed также при **неполных** данных:
 
 | Условие | Поведение |
 |---------|-----------|
-| `applyLagStale` | `REPLICA_READ_STALE` → смена адреса на следующем `obtain()` / границе оператора |
+| `applyLagStale` (serving streams) | `REPLICA_READ_STALE` → AUTH-ротация по кольцу чтения |
+| Непроигранный LAZY tip / неполный apply | Тот же клиентский сигнал incomplete — не тихий пустой SELECT |
+| Несовпадение `catalogFingerprint` с пирами | Отказ: неполный object-set каталога (дыра VIEW/TABLE) |
 | `replicaReadsEnabled=false` | `REPLICA_READ_DISABLED` |
 | Узел только подтягивания / learner | отказ клиентского SQL |
 | Witness | отказ чтения с реплики |
 | DML / BEGIN на `READ_REPLICA` | `READ_REPLICA_DML_DENIED` (после тега ANTLR) |
 
-В v1 нет политики `ALLOW_STALE` (только отказ при устаревших данных). После своей записи читайте с пишущего узла или смиритесь с возможным отставанием на реплике.
+**Авто-fallback на пишущий:** при `readPreference=REPLICA`, если кольцо чтения исчерпано с сигналом incomplete/stale (`ReplicaReadFallbackUtil`), `RoutingConnection` / Sync resume на **writer**, а не отдают тихий пустой результат. Явный `forcePrimary` по-прежнему пинит writer. В wire `ServerMeta` может быть `catalogFingerprint` (HELLO/AUTH).
+
+В v1 нет политики `ALLOW_STALE`. После своей записи читайте с пишущего или смиритесь с возможным отставанием на реплике.
 
 ## Плюсы и риски
 
@@ -144,7 +150,7 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 | `createReadStatement` / `executeRead` | готово (явный API) |
 | `RemoteConnectionFactory.createReadFactory` | готово (каналы к репликам) |
 | `staleReadPolicy` | v1: только отказ при устаревших данных |
-| N `readEndpoints` + ротация на `applyLagStale` | готово (`ReplicaReadEndpointsRotateIT`) |
+| N `readEndpoints` + ротация на incomplete/stale + fallback на writer | готово (product `RoutingConnection` / `ReplicaReadFallbackUtil`) |
 | Баланс по незавершённым запросам на не устаревшем кольце (N≥3) | готово (`ReadEndpointSelector` + IT баланса) |
 
 Дальше: [отказы](failures.md), [повышение роли узла](ha-promote.md), [сеть репликации](../../understand/replication-network.md).

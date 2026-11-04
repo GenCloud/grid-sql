@@ -21,9 +21,9 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
-import org.genfork.grid.common.WriterFenceSignals;
 import org.genfork.grid.sql.client.GridSqlUri;
 import org.genfork.grid.sql.client.ServerMeta;
+import org.genfork.grid.sql.client.WriterFenceRetryUtil;
 
 /**
  * Sticky sync session: held {@link SyncConnection} + writer meta / rediscover helpers.
@@ -138,16 +138,8 @@ public final class SyncSession implements AutoCloseable {
 	 */
 	public <T> T callWithWriterRediscover(Supplier<T> operation) {
 		Objects.requireNonNull(operation, "operation");
-		try {
-			ensureOpen();
-			return operation.get();
-		} catch (RuntimeException ex) {
-			if (!WriterFenceSignals.requiresWriterRediscover(ex)) {
-				throw ex;
-			}
-			rediscoverWriter();
-			return operation.get();
-		}
+		ensureOpen();
+		return WriterFenceRetryUtil.callWithOneRediscover(this::rediscoverWriter, operation);
 	}
 
 	public List<Object[]> query(String sql) {

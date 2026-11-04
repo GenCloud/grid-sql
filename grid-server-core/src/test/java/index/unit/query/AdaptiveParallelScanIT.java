@@ -60,12 +60,10 @@ public class AdaptiveParallelScanIT {
 	void setUp() {
 		ThreadService.ensureRunning();
 		admission = new HeavyQueryAdmission(SATURATED_MAX_CONCURRENT, WORKERS);
-		admission.resetInflightForTests();
 	}
 
 	@AfterEach
 	void tearDown() {
-		admission.resetInflightForTests();
 	}
 
 	@Test

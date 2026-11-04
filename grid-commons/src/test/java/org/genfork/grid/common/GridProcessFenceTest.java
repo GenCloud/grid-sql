@@ -15,39 +15,33 @@
  */
 package org.genfork.grid.common;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
- * Unit checks for {@link GridProcessFence}.
+ * Unit checks for {@link GridProcessFence} (process-global; no reset hook).
  *
  * @author: GenCloud
  * @date: 2025/02
  * @since: 1.0
  */
+@ResourceLock(value = "grid-process-fence", mode = ResourceAccessMode.READ_WRITE)
 class GridProcessFenceTest {
 
-	@AfterEach
-	void reset() {
-		GridProcessFence.resetForTests();
-	}
-
 	@Test
-	void tripOnceKeepsFirstReason() {
+	void tripOnceKeepsFirstReasonAndBlocksAdmit() {
+		assumeFalse(GridProcessFence.isTripped(), "fence already tripped in this JVM");
 		assertTrue(GridProcessFence.trip("first"));
 		assertFalse(GridProcessFence.trip("second"));
 		assertTrue(GridProcessFence.isTripped());
 		assertEquals("first", GridProcessFence.reasonOrEmpty());
-	}
-
-	@Test
-	void checkAdmitThrowsWhenTripped() {
-		GridProcessFence.trip("boom");
 		assertThrows(IllegalStateException.class, () -> GridProcessFence.checkAdmit("test"));
 	}
 }

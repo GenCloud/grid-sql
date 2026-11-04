@@ -56,12 +56,12 @@ import org.genfork.grid.store.TableStore;
  * @since: 1.0
  */
 public final class TableCatalog {
-	public static final String COMPOSITE_FOREIGN_KEY_UNSUPPORTED =
-			"composite FOREIGN KEY parent must match a UNIQUE index (or all PK columns) on the parent table";
 	public static final String COMPOSITE_FOREIGN_KEY_NO_UNIQUE =
 			"composite FOREIGN KEY parent columns do not match a UNIQUE index on parent";
 	private static final String DDL_FILE = "ddl.sql";
 	private static final String SCHEMAS_FILE = "schemas.list";
+	/** Durable proposer floor only — never pre-mark applied before OpLog hydrate. */
+	private static final String DDL_EPOCH_FLOOR_FILE = "ddl-epoch.floor";
 	private static final String META_SUFFIX = CatalogPersistUtil.META_SUFFIX;
 	private static final String SCHEMA_PUBLIC = CatalogPersistUtil.SCHEMA_PUBLIC;
 	private static final String ERR_DROP_PUBLIC = "cannot DROP SCHEMA public";
@@ -127,13 +127,6 @@ public final class TableCatalog {
 		}
 	}
 
-	/**
-	 * Catalog {@code CREATE FUNCTION} SPI binding (class/method, no string eval).
-	 *
-	 * @author: GenCloud
-	 * @date: 2025/07
-	 * @since: 1.0
-	 */
 	/**
 	 * Catalog UDF: scalar expression or table-valued FROM source.
 	 *
@@ -241,6 +234,7 @@ public final class TableCatalog {
 	}
 
 	public long nextEpoch() {
+		ensureEpochAtLeast(maxAppliedDdlEpoch.get());
 		return epochSequence.getAndIncrement();
 	}
 
@@ -256,12 +250,63 @@ public final class TableCatalog {
 
 	/**
 	 * Record that catalog DDL with {@code epoch} was applied. Monotonic.
+	 * Persists proposer floor file (ensureAtLeast seed) — not a hydrate skip mark.
 	 */
 	public void noteAppliedDdlEpoch(long epoch) {
 		if (epoch <= 0L) {
 			return;
 		}
-		maxAppliedDdlEpoch.updateAndGet(cur -> Math.max(cur, epoch));
+		final long applied = maxAppliedDdlEpoch.updateAndGet(cur -> Math.max(cur, epoch));
+		persistEpochFloor(applied);
+	}
+
+	/**
+	 * Raise {@link #epochSequence} from durable floor + caller hints without
+	 * {@link #noteAppliedDdlEpoch} (avoids silent-skip of unapplied tip DDL).
+	 */
+	public void seedProposerEpochFloor(long durableOrOpLogOrMetaMax) {
+		if (durableOrOpLogOrMetaMax > 0L) {
+			ensureEpochAtLeast(durableOrOpLogOrMetaMax);
+		}
+		ensureEpochAtLeast(maxAppliedDdlEpoch.get());
+		final long fromDisk = loadDurableEpochFloor();
+		if (fromDisk > 0L) {
+			ensureEpochAtLeast(fromDisk);
+		}
+	}
+
+	public long loadDurableEpochFloor() {
+		if (catalogDir == null) {
+			return 0L;
+		}
+		final Path file = catalogDir.resolve(DDL_EPOCH_FLOOR_FILE);
+		if (!GridFs.isRegularFile(file)) {
+			return 0L;
+		}
+		try {
+			final String body = GridFs.readString(file, StandardCharsets.UTF_8).trim();
+			if (body.isEmpty()) {
+				return 0L;
+			}
+			return Long.parseLong(body);
+		} catch (IOException | NumberFormatException ignored) {
+			return 0L;
+		}
+	}
+
+	private void persistEpochFloor(long floor) {
+		if (catalogDir == null || floor <= 0L) {
+			return;
+		}
+		try {
+			GridFs.createDirs(catalogDir);
+			GridFs.writeAtomic(
+					catalogDir.resolve(DDL_EPOCH_FLOOR_FILE),
+					Long.toString(floor),
+					StandardCharsets.UTF_8);
+		} catch (IOException ignored) {
+			// Floor is acceleration; OpLog + maxApplied remain SoT after hydrate.
+		}
 	}
 
 	/**
@@ -334,15 +379,9 @@ public final class TableCatalog {
 		return Set.copyOf(views.keySet());
 	}
 
-	/**
-	 * Drop a named schema namespace ({@code DROP SCHEMA … RESTRICT}).
-	 * Fails if any table / view / sequence / function is keyed under that schema;
-	 * {@code public} cannot be dropped.
-	 *
-	 * @return {@code true} if removed, {@code false} if missing and {@code ifExists}
-	 */
-	public boolean dropSchema(String schemaName, boolean ifExists) {
-		return dropSchema(schemaName, ifExists, false);
+	/** Snapshot of registered UDF names (lower keys as stored). */
+	public Set<String> functionNames() {
+		return Set.copyOf(functions.keySet());
 	}
 
 	/**
@@ -350,7 +389,7 @@ public final class TableCatalog {
 	 *                            objects first so append-only {@code DROP SCHEMA} after
 	 *                            {@code CREATE TABLE} remains recoverable
 	 */
-	public boolean dropSchema(String schemaName, boolean ifExists, boolean emptyFirstForReplay) {
+	public void dropSchema(String schemaName, boolean ifExists, boolean emptyFirstForReplay) {
 		Objects.requireNonNull(schemaName, "schemaName");
 		final String k = key(schemaName);
 		if (SCHEMA_PUBLIC.equals(k)) {
@@ -364,14 +403,13 @@ public final class TableCatalog {
 		if (!namedSchemas.remove(k)) {
 			if (ifExists) {
 				deletePersistedMetaForSchema(k);
-				return false;
+				return;
 			}
 			throw new IllegalStateException(ERR_SCHEMA_NOT_FOUND_PREFIX + schemaName);
 		}
 		deletePersistedMetaForSchema(k);
 		persistNamedSchemas();
-		return true;
-	}
+    }
 
 	/**
 	 * Disk hygiene for {@code DROP TABLE IF EXISTS} when the table is already gone in RAM.
@@ -607,6 +645,33 @@ public final class TableCatalog {
 		return true;
 	}
 
+	/**
+	 * Register missing IDENTITY backing sequences for a live table (meta hydrate / IF NOT EXISTS).
+	 * Compact journal omits owned sequences — peers must still allocate nextVal after recover.
+	 */
+	public void ensureIdentitySequences(TableSchema schema) {
+		if (schema == null) {
+			return;
+		}
+		final String table = schema.catalogKey();
+		for (ColumnDef col : schema.columns()) {
+			if (col == null || !col.identity()) {
+				continue;
+			}
+			final String seqName = col.identitySequence() == null || col.identitySequence().isBlank()
+					? SequenceDef.identityName(table, col.name())
+					: col.identitySequence();
+			createSequence(
+					SequenceDef.of(
+									seqName,
+									SequenceDef.DEFAULT_START,
+									SequenceDef.DEFAULT_INCREMENT,
+									false)
+							.withOwner(table, col.name()),
+					true);
+		}
+	}
+
 	public boolean dropSequence(String name, boolean ifExists) {
 		final String k = key(name);
 		final SequenceAllocator removed = sequences.remove(k);
@@ -676,10 +741,10 @@ public final class TableCatalog {
 		}
 		final Map<String, List<String>> edges = new HashMap<>();
 		for (TableSchema existing : schemas.values()) {
-			addFkEdges(edges, existing);
+			CatalogFkGraphUtil.addFkEdges(edges, existing);
 		}
-		addFkEdges(edges, schema);
-		if (hasCycleFrom(edges, self, new LinkedHashSet<>())) {
+		CatalogFkGraphUtil.addFkEdges(edges, schema);
+		if (CatalogFkGraphUtil.hasCycleFrom(edges, self, new LinkedHashSet<>())) {
 			throw new IllegalArgumentException(
 					"cyclic FOREIGN KEY rejected for table " + schema.catalogKey());
 		}
@@ -725,7 +790,7 @@ public final class TableCatalog {
 			if (idx.kind() != IndexType.STRICT) {
 				continue;
 			}
-			if (columnsEqualIgnoreCaseOrdered(idx.columns(), parentColumns)) {
+			if (ColumnListEqualUtil.columnsEqualIgnoreCaseOrdered(idx.columns(), parentColumns)) {
 				return true;
 			}
 		}
@@ -735,48 +800,7 @@ public final class TableCatalog {
 				pkCols.add(col.name());
 			}
 		}
-		return pkCols.size() > 1 && columnsEqualIgnoreCaseOrdered(pkCols, parentColumns);
-	}
-
-	private static boolean columnsEqualIgnoreCaseOrdered(List<String> left, List<String> right) {
-		if (left.size() != right.size()) {
-			return false;
-		}
-		for (int i = 0; i < left.size(); i++) {
-			if (!left.get(i).equalsIgnoreCase(right.get(i))) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	private static void addFkEdges(Map<String, List<String>> edges, TableSchema schema) {
-		final String from = key(schema.catalogKey());
-		for (FkDef fk : schema.foreignKeys()) {
-			final String parent = key(fk.parentCatalogKey());
-			if (parent.equals(from)) {
-				continue;
-			}
-			edges.computeIfAbsent(from, _ -> new ArrayList<>()).add(parent);
-		}
-	}
-
-	private static boolean hasCycleFrom(
-			Map<String, List<String>> edges,
-			String node,
-			LinkedHashSet<String> stack
-	) {
-		if (!stack.add(node)) {
-			return true;
-		}
-		final List<String> next = edges.getOrDefault(node, List.of());
-		for (String child : next) {
-			if (hasCycleFrom(edges, child, stack)) {
-				return true;
-			}
-		}
-		stack.remove(node);
-		return false;
+		return pkCols.size() > 1 && ColumnListEqualUtil.columnsEqualIgnoreCaseOrdered(pkCols, parentColumns);
 	}
 
 	/** True when any registered table references {@code parentTable} via FK. */
@@ -893,7 +917,7 @@ public final class TableCatalog {
 			return;
 		}
 		final String k = key(tableName);
-		final Path file = statsDir().resolve(safeFileName(k) + TableAnalyzeStats.FILE_SUFFIX);
+		final Path file = statsDir().resolve(CatalogFkGraphUtil.safeFileName(k) + TableAnalyzeStats.FILE_SUFFIX);
 		if (!GridFs.isRegularFile(file)) {
 			return;
 		}
@@ -912,7 +936,7 @@ public final class TableCatalog {
 		try {
 			final Path dir = statsDir();
 			GridFs.createDirs(dir);
-			final Path file = dir.resolve(safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX);
+			final Path file = dir.resolve(CatalogFkGraphUtil.safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX);
 			GridFs.writeAtomic(file, stats.toFileBody(), StandardCharsets.UTF_8);
 		} catch (IOException ex) {
 			throw new IllegalStateException("Failed to persist ANALYZE stats for " + tableKey, ex);
@@ -928,14 +952,10 @@ public final class TableCatalog {
 			return;
 		}
 		try {
-			GridFs.deleteIfExists(statsDir().resolve(safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX));
+			GridFs.deleteIfExists(statsDir().resolve(CatalogFkGraphUtil.safeFileName(tableKey) + TableAnalyzeStats.FILE_SUFFIX));
 		} catch (IOException ignored) {
 			// best-effort
 		}
-	}
-
-	private static String safeFileName(String tableKey) {
-		return tableKey.replace('.', '_').replace('/', '_');
 	}
 
 	public boolean exists(String tableName) {
@@ -1283,14 +1303,6 @@ public final class TableCatalog {
 		return List.copyOf(out);
 	}
 
-	public Map<String, TableSchema> schemaMap() {
-		final HashMap<String, TableSchema> out = new HashMap<>(schemas.size() * 2);
-		for (Map.Entry<String, TableSchema> e : schemas.entrySet()) {
-			out.put(e.getKey(), schemaViaCache(e.getKey(), e.getValue()));
-		}
-		return Map.copyOf(out);
-	}
-
 	private TableSchema schemaViaCache(String tableKey, TableSchema registered) {
 		final CatalogMetaCache.CachedMeta cached = metaCache.get(tableKey);
 		if (cached != null) {
@@ -1313,7 +1325,7 @@ public final class TableCatalog {
 		}
 		try {
 			final byte[] bytes = GridFs.readAll(meta);
-			return parseMetaBytes(bytes, meta.toString());
+			return CatalogMetaParseUtil.parseMetaBytes(bytes, meta.toString());
 		} catch (IOException e) {
 			throw new IllegalStateException("Failed to read catalog meta " + meta, e);
 		}
@@ -1321,7 +1333,7 @@ public final class TableCatalog {
 
 	/** Reload schemas from catalog snapshot files (DDL text lines). */
 	public List<String> loadPersistedDdl() {
-		if (catalogDir == null || !GridFs.isDirectory(catalogDir)) {
+		if (!GridFs.isDirectory(catalogDir)) {
 			return List.of();
 		}
 		final Path ddl = catalogDir.resolve(DDL_FILE);
@@ -1340,7 +1352,7 @@ public final class TableCatalog {
 	 * (survives even if CREATE SCHEMA lines were truncated).
 	 */
 	public List<String> loadPersistedNamedSchemas() {
-		if (catalogDir == null || !GridFs.isDirectory(catalogDir)) {
+		if (!GridFs.isDirectory(catalogDir)) {
 			return List.of();
 		}
 		final Path file = catalogDir.resolve(SCHEMAS_FILE);
@@ -1362,7 +1374,7 @@ public final class TableCatalog {
 	 * (or when {@code ddl.sql} is absent).
 	 */
 	public List<TableSchema> loadPersistedMetaSchemas() {
-		if (catalogDir == null || !GridFs.isDirectory(catalogDir)) {
+		if (!GridFs.isDirectory(catalogDir)) {
 			return List.of();
 		}
 		final List<TableSchema> out = new ArrayList<>();
@@ -1373,7 +1385,7 @@ public final class TableCatalog {
 						&& PrivilegeCatalog.META_FILE_NAME.equalsIgnoreCase(fileName.toString())) {
 					continue;
 				}
-				out.add(parseMeta(meta));
+				out.add(CatalogMetaParseUtil.parseMeta(meta));
 			}
 		} catch (IOException e) {
 			throw new IllegalStateException("Failed to scan catalog meta under " + catalogDir, e);
@@ -1498,110 +1510,4 @@ public final class TableCatalog {
 		return tableName.toLowerCase(Locale.ROOT);
 	}
 
-	/** Reconstruct schema from persisted meta file (used by recovery). */
-	public static TableSchema parseMeta(Path metaFile) throws IOException {
-		final byte[] bytes = GridFs.readAll(metaFile);
-		return parseMetaBytes(bytes, metaFile.toString());
-	}
-
-	/**
-	 * Reconstruct schema from raw {@code *.meta} bytes (catalog miss path / GridFs).
-	 */
-	public static TableSchema parseMetaBytes(byte[] metaBytes, String sourceLabel) {
-		Objects.requireNonNull(metaBytes, "metaBytes");
-		final String body = new String(metaBytes, StandardCharsets.UTF_8);
-		final String[] lines = body.split("\\R", -1);
-		String table = null;
-		String schemaPart = null;
-		long epoch = 1L;
-		final List<ColumnDef> cols = new ArrayList<>();
-		final List<IndexDef> idxs = new ArrayList<>();
-		final List<FkDef> fks = new ArrayList<>();
-		final List<CheckDef> checks = new ArrayList<>();
-		for (String line : lines) {
-			if (line.isEmpty()) {
-				continue;
-			}
-			if (line.startsWith("schema=")) {
-				schemaPart = line.substring("schema=".length()).trim();
-			} else if (line.startsWith("table=")) {
-				table = line.substring(6);
-			} else if (line.startsWith("epoch=")) {
-				epoch = Long.parseLong(line.substring(6));
-			} else if (line.startsWith("col=")) {
-				final String[] p = line.substring(4).split(",", -1);
-				final boolean identity = p.length > 5 && Boolean.parseBoolean(p[5]);
-				final String seq = p.length > 6 && !p[6].isEmpty() ? p[6] : null;
-				final String defaultExpr = p.length > 7 && !p[7].isEmpty()
-						? new String(Base64.getUrlDecoder().decode(p[7]), StandardCharsets.UTF_8)
-						: null;
-				cols.add(new ColumnDef(
-						p[0],
-						SqlType.valueOf(p[1]),
-						Boolean.parseBoolean(p[2]),
-						cols.size(),
-						Boolean.parseBoolean(p[3]),
-						Boolean.parseBoolean(p[4]),
-						identity,
-						seq,
-						defaultExpr
-				));
-			} else if (line.startsWith("idx=")) {
-				final String[] p = line.substring(4).split(",", 3);
-				idxs.add(new IndexDef(
-						CatalogPersistUtil.sanitizeIndexName(p[0]),
-						List.of(p[2].split("\\+")),
-						IndexType.valueOf(p[1])
-				));
-			} else if (line.startsWith("fk=")) {
-				final String[] p = line.substring(3).split(",", -1);
-				final String parentSchema;
-				final String parentTable;
-				final String parentCols;
-				final String onDelete;
-				final String onUpdate;
-				if (p.length >= 8) {
-					parentSchema = p[3];
-					parentTable = p[4];
-					parentCols = p[5];
-					onDelete = p[6];
-					onUpdate = p[7];
-				} else {
-					// Legacy: fk=name,child,cols,parentKey,parentCols,onDelete,onUpdate
-					final CatalogQualifiedName parentQn = CatalogQualifiedName.parse(
-							p[3], CatalogPersistUtil.SCHEMA_PUBLIC);
-					parentSchema = parentQn.schemaName();
-					parentTable = parentQn.objectName();
-					parentCols = p[4];
-					onDelete = p[5];
-					onUpdate = p[6];
-				}
-				fks.add(new FkDef(
-						p[0],
-						p[1],
-						List.of(p[2].split("\\+")),
-						parentSchema,
-						parentTable,
-						List.of(parentCols.split("\\+")),
-						FkAction.valueOf(onDelete),
-						FkAction.valueOf(onUpdate)
-				));
-			} else if (line.startsWith("check=")) {
-				final String[] p = line.substring("check=".length()).split(",", 2);
-				checks.add(new CheckDef(
-						p[0],
-						new String(Base64.getUrlDecoder().decode(p[1]), StandardCharsets.UTF_8)));
-			}
-		}
-		if (table == null || cols.isEmpty()) {
-			throw new IllegalArgumentException("Invalid catalog meta: " + sourceLabel);
-		}
-		final String catalogTable;
-		if (schemaPart != null && !schemaPart.isBlank() && table.indexOf('.') < 0) {
-			catalogTable = CatalogQualifiedName.of(schemaPart, table).catalogKey();
-		} else {
-			catalogTable = table;
-		}
-		return new TableSchema(catalogTable, cols, idxs, fks, checks, epoch);
-	}
 }

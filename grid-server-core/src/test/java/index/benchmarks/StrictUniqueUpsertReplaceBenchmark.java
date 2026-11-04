@@ -16,11 +16,8 @@
 package index.benchmarks;
 
 import index.sql.SqlBenchHelper;
-import org.genfork.grid.mem.stage.GridEntriesProcessor;
-import org.genfork.grid.serial.PrimaryKeyCodec;
-import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.sql.SqlEngine;
-import org.genfork.grid.store.TableStore;
+import org.genfork.grid.sql.SqlResult;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -58,53 +55,66 @@ public class StrictUniqueUpsertReplaceBenchmark extends AbstractLatencyBenchmark
 	private static final int BASE_PK = 1000;
 	private static final String EVENT = "benchEvent";
 	private static final String SCHEDULER = "benchSched";
+	private static final String TABLE = "uniq_upsert_bench";
 
 	private SqlEngine engine;
-	private TableStore store;
-	private byte[] keyStable;
-	private byte[] valStable;
 	private final AtomicInteger nextGhostPk = new AtomicInteger(BASE_PK + 1);
 
 	@Setup(Level.Trial)
 	public void setupBenchmark() {
 		engine = SqlBenchHelper.createEngine(SHARDS);
 		engine.execute(
-				"CREATE TABLE uniq_upsert_bench ("
+				"CREATE TABLE " + TABLE + " ("
 						+ "id INT PRIMARY KEY, "
 						+ "event_name VARCHAR NOT NULL, "
 						+ "scheduler_name VARCHAR NOT NULL)");
 		engine.execute(
 				"CREATE UNIQUE INDEX uniq_upsert_bench_u "
-						+ "ON uniq_upsert_bench (event_name, scheduler_name)");
-		store = SqlBenchHelper.store(engine, "uniq_upsert_bench");
-		keyStable = PrimaryKeyCodec.encodeArgument(store.schema(), BASE_PK);
-		valStable = RowEncoder.encode(store.schema(), new Object[]{BASE_PK, EVENT, SCHEDULER});
-		store.processorForTest(keyStable).installCommitted(keyStable, valStable, false);
+						+ "ON " + TABLE + " (event_name, scheduler_name)");
+		engine.execute(
+				"INSERT INTO " + TABLE + " (id, event_name, scheduler_name) VALUES ("
+						+ BASE_PK + ", '" + EVENT + "', '" + SCHEDULER + "')");
 	}
 
 	@TearDown(Level.Trial)
 	public void tearDownBenchmark() {
-		if (engine != null && engine.catalog().exists("uniq_upsert_bench")) {
-			engine.catalog().dropTable("uniq_upsert_bench");
+		if (engine != null && engine.catalog().exists(TABLE)) {
+			engine.catalog().dropTable(TABLE);
 		}
 	}
 
 	@Benchmark
-	public void samePkIdempotentIndexNow(Blackhole bh) {
-		final GridEntriesProcessor processor = store.processorForTest(keyStable);
-		processor.installCommitted(keyStable, valStable, false);
-		bh.consume(processor.getCommitted(keyStable));
+	public void samePkIdempotentUpsert(Blackhole bh) {
+		final SqlResult result = engine.execute(
+				"INSERT INTO " + TABLE + " (id, event_name, scheduler_name) VALUES ("
+						+ BASE_PK + ", '" + EVENT + "', '" + SCHEDULER + "') "
+						+ "ON CONFLICT (event_name, scheduler_name) DO UPDATE SET id = " + BASE_PK);
+		bh.consume(result.rows().size());
 	}
 
 	@Benchmark
 	public void ownerReplaceGhostPk(Blackhole bh) {
 		final int ghostId = nextGhostPk.getAndIncrement();
-		final byte[] keyGhost = PrimaryKeyCodec.encodeArgument(store.schema(), ghostId);
-		final byte[] valGhost = RowEncoder.encode(
-				store.schema(),
-				new Object[]{Integer.valueOf(ghostId), EVENT, SCHEDULER});
-		final GridEntriesProcessor processor = store.processorForTest(keyGhost);
-		processor.installCommitted(keyGhost, valGhost, false);
-		bh.consume(processor.getCommitted(keyGhost));
+		final SqlResult result = engine.execute(
+				"INSERT INTO " + TABLE + " (id, event_name, scheduler_name) VALUES ("
+						+ ghostId + ", '" + EVENT + "', '" + SCHEDULER + "') "
+						+ "ON CONFLICT (event_name, scheduler_name) DO UPDATE SET id = " + ghostId);
+		bh.consume(result.rows().size());
+	}
+
+	/**
+	 * Happy-path STRICT replace after apply×index defer (map under shardLocks, index after unlock).
+	 */
+	@Benchmark
+	public void ownerReplaceThenSelect(Blackhole bh) {
+		final int ghostId = nextGhostPk.getAndIncrement();
+		engine.execute(
+				"INSERT INTO " + TABLE + " (id, event_name, scheduler_name) VALUES ("
+						+ ghostId + ", '" + EVENT + "', '" + SCHEDULER + "') "
+						+ "ON CONFLICT (event_name, scheduler_name) DO UPDATE SET id = " + ghostId);
+		final SqlResult rows = engine.execute(
+				"SELECT id FROM " + TABLE
+						+ " WHERE event_name = '" + EVENT + "' AND scheduler_name = '" + SCHEDULER + "'");
+		bh.consume(rows.rows().size());
 	}
 }

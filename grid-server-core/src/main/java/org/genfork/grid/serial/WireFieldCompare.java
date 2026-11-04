@@ -170,22 +170,6 @@ public final class WireFieldCompare {
 		return sb.toString();
 	}
 
-	/** Skip 4-byte length prefix when present; otherwise treat whole span as UTF-8 (owned copy). */
-	private static byte[] utf8Payload(byte[] fieldWire) {
-		if (fieldWire.length >= 4) {
-			final int len = SerialUtil.readI32(fieldWire, 0);
-			if (len == SerialUtil.STRING_NULL) {
-				return null;
-			}
-			if (len >= 0 && 4 + len <= fieldWire.length) {
-				final byte[] out = new byte[len];
-				System.arraycopy(fieldWire, 4, out, 0, len);
-				return out;
-			}
-		}
-		return fieldWire;
-	}
-
 	private static int indexOfRange(byte[] haystack, int hayOff, int hayLen, byte[] needle) {
 		if (needle.length == 0) {
 			return 0;
@@ -203,9 +187,5 @@ public final class WireFieldCompare {
 			return i;
 		}
 		return -1;
-	}
-
-	private static int indexOf(byte[] haystack, byte[] needle) {
-		return indexOfRange(haystack, 0, haystack.length, needle);
 	}
 }

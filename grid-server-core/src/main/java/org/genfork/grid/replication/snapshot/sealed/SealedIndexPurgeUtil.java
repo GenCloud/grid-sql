@@ -23,7 +23,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
@@ -32,6 +31,8 @@ import java.util.Set;
  * <p>
  * DROP INDEX must remove both catalog-named and composite-column sealed names so LAZY
  * hydrate cannot resurrect a STRICT tree after schema/meta no longer list the index.
+ * Callers must {@link SealedIndexLifecycleUtil#detachQuerySealedIndexes} before
+ * {@link #purge} so query-path fallbacks do not retain closed readers.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -39,7 +40,6 @@ import java.util.Set;
  */
 public final class SealedIndexPurgeUtil {
 	private static final char NAME_SEP = '_';
-	private static final String IDX_INFIX = "_idx_";
 
 	private SealedIndexPurgeUtil() {
 	}
@@ -79,14 +79,16 @@ public final class SealedIndexPurgeUtil {
 					bptreeService.deleteIndex(domainType, shard, logicalName);
 					attempts++;
 				} else {
-					GridFs.deleteQuietly(indexPath(sealedRoot, domainType, shard, logicalName, true));
+					GridFs.deleteQuietly(
+							SealedIndexPathUtil.indexFile(sealedRoot, domainType, shard, logicalName, ".sbpt"));
 					attempts++;
 				}
 				if (bitmapService != null) {
 					bitmapService.deleteIndex(domainType, shard, logicalName);
 					attempts++;
 				} else {
-					GridFs.deleteQuietly(indexPath(sealedRoot, domainType, shard, logicalName, false));
+					GridFs.deleteQuietly(
+							SealedIndexPathUtil.indexFile(sealedRoot, domainType, shard, logicalName, ".sbm"));
 					attempts++;
 				}
 			}
@@ -162,10 +164,4 @@ public final class SealedIndexPurgeUtil {
 		}
 	}
 
-	private static Path indexPath(Path sealedRoot, String domain, int shard, String indexName, boolean sbpt) {
-		final String hex = SealedShardPack.domainHex(domain);
-		final String safe = indexName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._+-]", "_");
-		final String ext = sbpt ? ".sbpt" : ".sbm";
-		return sealedRoot.resolve(hex + NAME_SEP + shard + IDX_INFIX + safe + ext);
-	}
 }

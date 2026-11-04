@@ -17,7 +17,6 @@ package org.genfork.grid.replication.pitr;
 
 import java.util.Objects;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.replication.region.RegionRole;
 
@@ -58,7 +57,6 @@ public final class PitrActiveFence {
 	/**
 	 * {@code true} when peer wire role is Active (dual-writer signal).
 	 */
-	@VisibleForTesting
 	public static boolean isActiveWire(byte regionRoleWire) {
 		return regionRoleWire == RegionRole.ACTIVE.wireCode();
 	}

@@ -26,8 +26,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.genfork.grid.metrics.SqlLockMetrics;
 import org.genfork.grid.threading.ThreadService;
 
@@ -85,19 +83,12 @@ public final class ForUpdatePeerHeldKeys {
 		}
 	}
 
-	@VisibleForTesting
-	public void setLeaseTtlMs(long ttlMs) {
+	void setLeaseTtlMs(long ttlMs) {
 		leaseTtlMs.set(Math.max(MIN_LEASE_TTL_MS, ttlMs));
 	}
 
-	@VisibleForTesting
-	public void setNanoClock(LongSupplier nanoClock) {
+	void setNanoClock(LongSupplier nanoClock) {
 		this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
-	}
-
-	@VisibleForTesting
-	public void sweepExpiredForTest() {
-		sweepExpired();
 	}
 
 	public void remember(long txId, String table, byte[] key) {
@@ -107,7 +98,7 @@ public final class ForUpdatePeerHeldKeys {
 		final long expireAt = nanoClock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(leaseTtlMs.get());
 		byTx.computeIfAbsent(txId, ignored -> new ConcurrentHashMap<>())
 				.computeIfAbsent(table, ignored -> new ConcurrentHashMap<>())
-				.put(new KeyWrapper(key), Long.valueOf(expireAt));
+				.put(new KeyWrapper(key), expireAt);
 	}
 
 	public void forget(long txId, String table, byte[] key) {
@@ -192,7 +183,8 @@ public final class ForUpdatePeerHeldKeys {
 		byTx.clear();
 	}
 
-	private void sweepExpired() {
+	/** Package-private for same-package product tests (lease TTL). */
+	void sweepExpired() {
 		final long now = nanoClock.getAsLong();
 		final SqlRecordLockManager lockManager = locks;
 		final ArrayList<Long> expiredTx = new ArrayList<>();
@@ -204,7 +196,7 @@ public final class ForUpdatePeerHeldKeys {
 				final ConcurrentHashMap<KeyWrapper, Long> keys = te.getValue();
 				for (Map.Entry<KeyWrapper, Long> ke : keys.entrySet()) {
 					final Long expireAt = ke.getValue();
-					if (expireAt != null && expireAt.longValue() <= now) {
+					if (expireAt != null && expireAt <= now) {
 						keys.remove(ke.getKey(), expireAt);
 						if (lockManager != null) {
 							try {

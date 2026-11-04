@@ -110,13 +110,16 @@ public final class RoutingConnection implements Connection {
 		if (readFactory != null
 				&& !SqlClientRouteContext.suppressReplicaReads()
 				&& SqlClientRouteUtil.routeFor(prepareRouteCache, sql) == SqlRouteClassifier.Route.READ) {
-			return new RoutingReadStatement(readFactory, sql);
+			return new RoutingReadStatement(readFactory, writer, sql);
 		}
 		return writer.createStatement(sql);
 	}
 
 	/**
 	 * Autocommit read statement on the READ_REPLICA pool (forced; ignores auto-route).
+	 * <p>
+	 * No writer fallback — caller explicitly asked for the replica pool; incomplete ring fails
+	 * closed with apply-lag stale.
 	 */
 	public Statement createReadStatement(String sql) {
 		RoutingConnectionFactory.requireReadPool(readFactory);
@@ -153,7 +156,8 @@ public final class RoutingConnection implements Connection {
 		if (!SqlClientRouteUtil.allRead(prepareRouteCache, sqls)) {
 			return writer.executeBatch(sqls);
 		}
-		return Flux.fromIterable(sqls).concatMap(sql -> createReadStatement(sql).execute());
+		return Flux.fromIterable(sqls).concatMap(sql ->
+				new RoutingReadStatement(readFactory, writer, sql).execute());
 	}
 
 	@Override
@@ -178,7 +182,12 @@ public final class RoutingConnection implements Connection {
 				Connection::close,
 				(conn, _) -> conn.close(),
 				Connection::close
-		);
+		).onErrorResume(ex -> {
+			if (!ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
+				return Flux.error(ex);
+			}
+			return writer.executeBatchBound(list);
+		});
 	}
 
 	@Override

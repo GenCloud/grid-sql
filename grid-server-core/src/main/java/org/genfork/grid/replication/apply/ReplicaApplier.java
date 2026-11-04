@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.apply;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.codec.duplex.DuplexBlob;
 import org.genfork.grid.codec.duplex.DuplexCodecSupport;
 import org.genfork.grid.diag.VisibilityDiag;
@@ -29,6 +28,7 @@ import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.transport.ApplyAckSender;
 import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -57,6 +57,11 @@ import java.util.function.Function;
  * LAZY OpLog hydrate ({@link #beginHydrateMapOnly}) binds index delta to the current logic VT via
  * {@link ReplicaApplierHydrateSession} so parallel sealed-pack hydrates of one domain do not share
  * {@link ArrayList} iterators.
+ * <p>
+ * <b>Lock invariant:</b> under {@code shardLocks[domain#shard]} only map-only install / staging /
+ * watermark / ack are allowed. Sync {@code indexNow*} / envelope index flush /
+ * {@code discardOpenTxStaging} must run <em>after</em> unlock — otherwise apply×index mailbox
+ * AB-BA deadlocks bootstrap ({@code markCatalogBootstrapComplete}).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -99,6 +104,10 @@ public class ReplicaApplier {
 	private final ThreadLocal<ReplicaApplierHydrateSession> hydrateSession = new ThreadLocal<>();
 
 	private record StagedMutation(ReplicationOpType type, byte[] key, byte[] value) {
+	}
+
+	/** Index work deferred until after {@code shardLocks} unlock. */
+	private record PendingIndex(int shard, ReplicationOpType type, byte[] key, byte[] value) {
 	}
 
 	public ReplicaApplier(
@@ -216,250 +225,255 @@ public class ReplicaApplier {
 		if (journalRemote) {
 			journalRemoteConsensusOp(op);
 		}
-		final String lockKey = op.domainType() + "#" + op.shard();
+		final String lockKey = OpLogStreamKeyUtil.format(op.domainType(), op.shard());
+		final ApplyDefer defer = new ApplyDefer();
 		synchronized (shardLocks.computeIfAbsent(lockKey, _ -> new Object())) {
 			final long applied = nodeState.appliedWatermark(op.domainType(), op.shard());
 			if (op.opSeq() <= applied) {
 				// Watermark already past must not skip TX_COMMIT/ABORT close — otherwise staged
 				// UPSERTs stay invisible forever (Jepsen Elle G-single / HAS≈0 after :ok append).
-				if (closeOpenTxIfPresent(lockKey, op)) {
+				if (closeOpenTxIfPresent(lockKey, op, defer)) {
 					if (VisibilityDiag.enabled()) {
 						VisibilityDiag.debugf("applier.watermark",
 								"closeOpenTx stream=%s type=%s opSeq=%d applied=%d",
 								lockKey, op.type(), op.opSeq(), applied);
 					}
-					return;
-				}
-				if (!forceInstall) {
+				} else if (!forceInstall) {
 					if (VisibilityDiag.enabled()) {
 						VisibilityDiag.debugf("applier.watermark",
 								"skip stream=%s type=%s opSeq=%d applied=%d",
 								lockKey, op.type(), op.opSeq(), applied);
 					}
-					return;
+				} else if (op.opSeq() < applied) {
+					// Stale REPAIR_REPLY must not clobber a newer primary watermark.
+				} else if (op.type() == ReplicationOpType.UPSERT || op.type() == ReplicationOpType.DELETE) {
+					forceReinstall(op, defer.pendingIndex);
 				}
-				// Same-seq checksum heal only. Stale REPAIR_REPLY (opSeq < applied) must not
-				// clobber a newer primary watermark — ASYNC learners lag and FETCH_ROW/RESHIP
-				// can return pre-catch-up row bytes (Elle lost-append / G0 under dc-link heal).
-				if (op.opSeq() < applied) {
-					return;
-				}
-				// Never force-reinstall TX markers (no map payload); UPSERT/DELETE only.
-				if (op.type() != ReplicationOpType.UPSERT && op.type() != ReplicationOpType.DELETE) {
-					return;
-				}
-				forceReinstall(op);
-				return;
+			} else {
+				applyAboveWatermark(op, fromConsensus, lockKey, defer);
 			}
-			// Global orchid seq: other shards consume intervening numbers; do not require applied+1.
-			if (op.type() == ReplicationOpType.DDL) {
-				applyCatalogDdl(op, fromConsensus);
-				return;
-			}
+		}
+		flushPendingIndex(defer.pendingIndex);
+		if (defer.envelopeFlush != null) {
+			flushEnvelopeStagingByOwningDomain(defer.envelopeFlush);
+		}
+	}
 
-			if (op.schemaEpoch() != nodeState.getSchemaEpoch()) {
-				if (ackSender != null) {
-					ackSender.sendNack(op, "schemaEpoch mismatch");
-				}
-				throw new IllegalStateException("schemaEpoch mismatch for opSeq=" + op.opSeq());
-			}
+	/** Work deferred until after {@code shardLocks} unlock (index + envelope flush). */
+	private static final class ApplyDefer {
+		private final List<PendingIndex> pendingIndex = new ArrayList<>();
+		private Map<TxEnvelopeCodec.StreamRef, List<TxEnvelopeCoordinator.StagedMutation>> envelopeFlush;
+	}
 
-			if (op.type() == ReplicationOpType.BARRIER
-					|| op.type() == ReplicationOpType.SNAPSHOT_MARKER) {
-				persistAndAck(op, fromConsensus);
-				return;
-			}
+	private void applyAboveWatermark(
+			ReplicationOp op,
+			boolean fromConsensus,
+			String lockKey,
+			ApplyDefer defer
+	) {
+		if (op.type() == ReplicationOpType.DDL) {
+			applyCatalogDdl(op, fromConsensus);
+			return;
+		}
 
-			if (op.type() == ReplicationOpType.TX_BEGIN) {
-				// Contiguous TX admits (MutationRecorder stream lock) prevent interleave; this
-				// guard is fail-closed defense in depth. Reject any second TX_BEGIN while an
-				// open TX id is present — including empty staging (BEGIN before first UPSERT).
-				final List<StagedMutation> priorStaging = txStaging.get(lockKey);
-				if (priorStaging != null && !priorStaging.isEmpty()) {
-					throw new IllegalStateException(
-							ERR_TX_BEGIN_NONEMPTY_STAGING + lockKey
-									+ ERR_TX_BEGIN_STAGED_MID + priorStaging.size()
-									+ ERR_TX_BEGIN_INTERLEAVE_SUFFIX);
-				}
-				if (openTxIdByStream.containsKey(lockKey)) {
-					throw new IllegalStateException(
-							ERR_TX_BEGIN_OPEN_TX + lockKey + ERR_TX_BEGIN_INTERLEAVE_SUFFIX);
-				}
-				txStaging.put(lockKey, new ArrayList<>());
-				final long txId = TxEnvelopeCodec.txIdFromKey(op.key());
-				openTxIdByStream.put(lockKey, txId);
-				boolean multi = false;
-				final TxEnvelopeCoordinator gate = envelopeCoordinator;
-				if (gate != null) {
-					final TxEnvelopeCodec.Membership membership =
-							TxEnvelopeCodec.decode(txId, op.value());
-					if (membership != null && membership.isMultiStream()) {
-						gate.registerApply(membership);
-						multi = true;
-					}
-				}
-				if (VisibilityDiag.enabled()) {
-					VisibilityDiag.debugf("applier.TX_BEGIN",
-							"stream=%s txId=%d multi=%s fromConsensus=%s opSeq=%d",
-							lockKey, txId, multi, fromConsensus, op.opSeq());
-				}
-				persistAndAck(op, fromConsensus);
-				return;
+		if (op.schemaEpoch() != nodeState.getSchemaEpoch()) {
+			if (ackSender != null) {
+				ackSender.sendNack(op, "schemaEpoch mismatch");
 			}
+			throw new IllegalStateException("schemaEpoch mismatch for opSeq=" + op.opSeq());
+		}
 
-			if (op.type() == ReplicationOpType.TX_COMMIT) {
-				final long txId = openTxIdByStream.getOrDefault(
-						lockKey, TxEnvelopeCodec.txIdFromKey(op.key()));
-				final TxEnvelopeCoordinator gate = envelopeCoordinator;
-				final TxEnvelopeCodec.StreamRef stream =
-						new TxEnvelopeCodec.StreamRef(op.domainType(), op.shard());
-				if (gate != null && gate.isMultiApplyOpen(txId)) {
-					final List<StagedMutation> dropped = txStaging.get(lockKey);
-					final int droppedN = dropped == null ? 0 : dropped.size();
-					if (VisibilityDiag.enabled()) {
-						VisibilityDiag.debugf("applier.TX_COMMIT",
-								"multi stream=%s txId=%d localStaging=%d opSeq=%d",
-								lockKey, txId, droppedN, op.opSeq());
-					}
-					persistAndAck(op, fromConsensus);
-					openTxIdByStream.remove(lockKey);
-					txStaging.remove(lockKey);
-					if (gate.noteApplyCommit(txId, stream)) {
-						if (VisibilityDiag.enabled()) {
-							VisibilityDiag.debugf("applier.TX_COMMIT",
-									"multi COMPLETE flushEnvelope txId=%d stream=%s", txId, lockKey);
-						}
-						flushEnvelopeStagingByOwningDomain(gate.takeApplyStagingByStream(txId));
-					}
-					return;
+		if (op.type() == ReplicationOpType.BARRIER
+				|| op.type() == ReplicationOpType.SNAPSHOT_MARKER) {
+			persistAndAck(op, fromConsensus);
+			return;
+		}
+
+		if (op.type() == ReplicationOpType.TX_BEGIN) {
+			final List<StagedMutation> priorStaging = txStaging.get(lockKey);
+			if (priorStaging != null && !priorStaging.isEmpty()) {
+				throw new IllegalStateException(
+						ERR_TX_BEGIN_NONEMPTY_STAGING + lockKey
+								+ ERR_TX_BEGIN_STAGED_MID + priorStaging.size()
+								+ ERR_TX_BEGIN_INTERLEAVE_SUFFIX);
+			}
+			if (openTxIdByStream.containsKey(lockKey)) {
+				throw new IllegalStateException(
+						ERR_TX_BEGIN_OPEN_TX + lockKey + ERR_TX_BEGIN_INTERLEAVE_SUFFIX);
+			}
+			txStaging.put(lockKey, new ArrayList<>());
+			final long txId = TxEnvelopeCodec.txIdFromKey(op.key());
+			openTxIdByStream.put(lockKey, txId);
+			boolean multi = false;
+			final TxEnvelopeCoordinator gate = envelopeCoordinator;
+			if (gate != null) {
+				final TxEnvelopeCodec.Membership membership =
+						TxEnvelopeCodec.decode(txId, op.value());
+				if (membership != null && membership.isMultiStream()) {
+					gate.registerApply(membership);
+					multi = true;
 				}
-				final List<StagedMutation> staged = txStaging.get(lockKey);
-				final int stagedN = staged == null ? 0 : staged.size();
+			}
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf("applier.TX_BEGIN",
+						"stream=%s txId=%d multi=%s fromConsensus=%s opSeq=%d",
+						lockKey, txId, multi, fromConsensus, op.opSeq());
+			}
+			persistAndAck(op, fromConsensus);
+			return;
+		}
+
+		if (op.type() == ReplicationOpType.TX_COMMIT) {
+			final long txId = openTxIdByStream.getOrDefault(
+					lockKey, TxEnvelopeCodec.txIdFromKey(op.key()));
+			final TxEnvelopeCoordinator gate = envelopeCoordinator;
+			final TxEnvelopeCodec.StreamRef stream =
+					new TxEnvelopeCodec.StreamRef(op.domainType(), op.shard());
+			if (gate != null && gate.isMultiApplyOpen(txId)) {
+				final List<StagedMutation> dropped = txStaging.get(lockKey);
+				final int droppedN = dropped == null ? 0 : dropped.size();
 				if (VisibilityDiag.enabled()) {
 					VisibilityDiag.debugf("applier.TX_COMMIT",
-							"single stream=%s txId=%d staged=%d opSeq=%d",
-							lockKey, txId, stagedN, op.opSeq());
+							"multi stream=%s txId=%d localStaging=%d opSeq=%d",
+							lockKey, txId, droppedN, op.opSeq());
 				}
-				flushStaging(lockKey, op.shard());
-				txStaging.remove(lockKey);
-				openTxIdByStream.remove(lockKey);
 				persistAndAck(op, fromConsensus);
-				return;
-			}
-
-			if (op.type() == ReplicationOpType.TX_ABORT) {
-				final long txId = openTxIdByStream.getOrDefault(
-						lockKey, TxEnvelopeCodec.txIdFromKey(op.key()));
-				final List<StagedMutation> aborted = txStaging.get(lockKey);
-				final int abortedN = aborted == null ? 0 : aborted.size();
-				final TxEnvelopeCoordinator gate = envelopeCoordinator;
-				if (gate != null && gate.isMultiApplyOpen(txId)) {
-					gate.discardApply(txId);
-				}
-				if (VisibilityDiag.enabled()) {
-					VisibilityDiag.debugf("applier.TX_ABORT",
-							"stream=%s txId=%d droppedStaging=%d opSeq=%d",
-							lockKey, txId, abortedN, op.opSeq());
-				}
-				txStaging.remove(lockKey);
 				openTxIdByStream.remove(lockKey);
-				persistAndAck(op, fromConsensus);
-				return;
-			}
-
-			byte[] value = op.value();
-			if (value != null && DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
-				try {
-					final DuplexBlob blob = DuplexBlob.fromWireBytes(value);
-					final DuplexBlob verified = DuplexCodecSupport.getCodec().getVerifier().verifyOrRepair(blob);
-					value = verified.toWireBytes();
-				} catch (RuntimeException ex) {
-					if (ackSender != null) {
-						ackSender.sendNack(op, "duplex verify failed: " + ex.getMessage());
+				txStaging.remove(lockKey);
+				if (gate.noteApplyCommit(txId, stream)) {
+					if (VisibilityDiag.enabled()) {
+						VisibilityDiag.debugf("applier.TX_COMMIT",
+								"multi COMPLETE flushEnvelope txId=%d stream=%s", txId, lockKey);
 					}
-					throw ex;
-				}
-			}
-
-			if (!fromConsensus) {
-				final OrchidNode orchid = nodeState.getOrchidNode();
-				// Live peer commit journals via journalRemote; skip ship OpLog+tip when tip already covers seq.
-				final boolean tipCovers = orchid != null && op.opSeq() <= orchid.getLastCommittedSeq();
-				if (!tipCovers) {
-					opLog.tryAppendDeferred(op);
-					if (orchid != null) {
-						orchid.advanceCommittedTip(op.opSeq());
-					}
-				} else if (VisibilityDiag.enabled()
-						&& (op.type() == ReplicationOpType.UPSERT || op.type() == ReplicationOpType.DELETE)) {
-					VisibilityDiag.debugf(VisibilityDiag.WHERE_APPLIER_SHIP_TIP_COVERS,
-							"stream=%s type=%s opSeq=%d localTip=%d %s",
-							lockKey,
-							op.type(),
-							op.opSeq(),
-							orchid.getLastCommittedSeq(),
-							VisibilityDiag.keyTag(op.key()));
-				}
-			}
-
-			final Long openTxId = openTxIdByStream.get(lockKey);
-			final TxEnvelopeCoordinator gate = envelopeCoordinator;
-			if (openTxId != null
-					&& gate != null
-					&& gate.isMultiApplyOpen(openTxId)
-					&& (op.type() == ReplicationOpType.UPSERT
-					|| op.type() == ReplicationOpType.DELETE)) {
-				gate.stageApply(
-						openTxId,
-						new TxEnvelopeCodec.StreamRef(op.domainType(), op.shard()),
-						new TxEnvelopeCoordinator.StagedMutation(op.type(), op.key(), value, op.shard())
-				);
-				if (VisibilityDiag.enabled()) {
-					VisibilityDiag.debugf("applier.stageEnvelope",
-							"stream=%s txId=%d type=%s %s %s opSeq=%d",
-							lockKey, openTxId, op.type(), VisibilityDiag.keyTag(op.key()),
-							VisibilityDiag.valTag(value), op.opSeq());
-				}
-				nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());
-				completeWaiters(op.domainType(), op.shard(), op.opSeq());
-				if (ackSender != null) {
-					ackSender.sendAck(op);
+					defer.envelopeFlush = gate.takeApplyStagingByStream(txId);
 				}
 				return;
 			}
-
-			final List<StagedMutation> staging = txStaging.get(lockKey);
-			if (staging != null
-					&& (op.type() == ReplicationOpType.UPSERT
-					|| op.type() == ReplicationOpType.DELETE)) {
-				staging.add(new StagedMutation(op.type(), op.key(), value));
-				if (VisibilityDiag.enabled()) {
-					VisibilityDiag.debugf("applier.stageLocal",
-							"stream=%s type=%s stagedNow=%d %s %s opSeq=%d",
-							lockKey, op.type(), staging.size(), VisibilityDiag.keyTag(op.key()),
-							VisibilityDiag.valTag(value), op.opSeq());
-				}
-				nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());
-				completeWaiters(op.domainType(), op.shard(), op.opSeq());
-				if (ackSender != null) {
-					ackSender.sendAck(op);
-				}
-				return;
-			}
-
+			final List<StagedMutation> staged = txStaging.get(lockKey);
+			final int stagedN = staged == null ? 0 : staged.size();
 			if (VisibilityDiag.enabled()) {
-				VisibilityDiag.debugf("applier.installDirect",
-						"stream=%s type=%s %s %s opSeq=%d",
-						lockKey, op.type(), VisibilityDiag.keyTag(op.key()),
+				VisibilityDiag.debugf("applier.TX_COMMIT",
+						"single stream=%s txId=%d staged=%d opSeq=%d",
+						lockKey, txId, stagedN, op.opSeq());
+			}
+			flushStaging(lockKey, op.shard(), defer.pendingIndex);
+			txStaging.remove(lockKey);
+			openTxIdByStream.remove(lockKey);
+			persistAndAck(op, fromConsensus);
+			return;
+		}
+
+		if (op.type() == ReplicationOpType.TX_ABORT) {
+			final long txId = openTxIdByStream.getOrDefault(
+					lockKey, TxEnvelopeCodec.txIdFromKey(op.key()));
+			final List<StagedMutation> aborted = txStaging.get(lockKey);
+			final int abortedN = aborted == null ? 0 : aborted.size();
+			final TxEnvelopeCoordinator gate = envelopeCoordinator;
+			if (gate != null && gate.isMultiApplyOpen(txId)) {
+				gate.discardApply(txId);
+			}
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf("applier.TX_ABORT",
+						"stream=%s txId=%d droppedStaging=%d opSeq=%d",
+						lockKey, txId, abortedN, op.opSeq());
+			}
+			txStaging.remove(lockKey);
+			openTxIdByStream.remove(lockKey);
+			persistAndAck(op, fromConsensus);
+			return;
+		}
+
+		byte[] value = op.value();
+		if (value != null && DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
+			try {
+				final DuplexBlob blob = DuplexBlob.fromWireBytes(value);
+				final DuplexBlob verified = DuplexCodecSupport.getCodec().getVerifier().verifyOrRepair(blob);
+				value = verified.toWireBytes();
+			} catch (RuntimeException ex) {
+				if (ackSender != null) {
+					ackSender.sendNack(op, "duplex verify failed: " + ex.getMessage());
+				}
+				throw ex;
+			}
+		}
+
+		if (!fromConsensus) {
+			final OrchidNode orchid = nodeState.getOrchidNode();
+			final boolean tipCovers = orchid != null && op.opSeq() <= orchid.getLastCommittedSeq();
+			if (!tipCovers) {
+				opLog.tryAppendDeferred(op);
+				if (orchid != null) {
+					orchid.advanceCommittedTip(op.opSeq());
+				}
+			} else if (VisibilityDiag.enabled()
+					&& (op.type() == ReplicationOpType.UPSERT || op.type() == ReplicationOpType.DELETE)) {
+				VisibilityDiag.debugf(VisibilityDiag.WHERE_APPLIER_SHIP_TIP_COVERS,
+						"stream=%s type=%s opSeq=%d localTip=%d %s",
+						lockKey,
+						op.type(),
+						op.opSeq(),
+						orchid.getLastCommittedSeq(),
+						VisibilityDiag.keyTag(op.key()));
+			}
+		}
+
+		final Long openTxId = openTxIdByStream.get(lockKey);
+		final TxEnvelopeCoordinator gate = envelopeCoordinator;
+		if (openTxId != null
+				&& gate != null
+				&& gate.isMultiApplyOpen(openTxId)
+				&& (op.type() == ReplicationOpType.UPSERT
+				|| op.type() == ReplicationOpType.DELETE)) {
+			gate.stageApply(
+					openTxId,
+					new TxEnvelopeCodec.StreamRef(op.domainType(), op.shard()),
+					new TxEnvelopeCoordinator.StagedMutation(op.type(), op.key(), value, op.shard())
+			);
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf("applier.stageEnvelope",
+						"stream=%s txId=%d type=%s %s %s opSeq=%d",
+						lockKey, openTxId, op.type(), VisibilityDiag.keyTag(op.key()),
 						VisibilityDiag.valTag(value), op.opSeq());
 			}
-			installToMap(op.shard(), op.type(), op.key(), value);
-
 			nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());
 			completeWaiters(op.domainType(), op.shard(), op.opSeq());
 			if (ackSender != null) {
 				ackSender.sendAck(op);
 			}
+			return;
+		}
+
+		final List<StagedMutation> staging = txStaging.get(lockKey);
+		if (staging != null
+				&& (op.type() == ReplicationOpType.UPSERT
+				|| op.type() == ReplicationOpType.DELETE)) {
+			staging.add(new StagedMutation(op.type(), op.key(), value));
+			if (VisibilityDiag.enabled()) {
+				VisibilityDiag.debugf("applier.stageLocal",
+						"stream=%s type=%s stagedNow=%d %s %s opSeq=%d",
+						lockKey, op.type(), staging.size(), VisibilityDiag.keyTag(op.key()),
+						VisibilityDiag.valTag(value), op.opSeq());
+			}
+			nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());
+			completeWaiters(op.domainType(), op.shard(), op.opSeq());
+			if (ackSender != null) {
+				ackSender.sendAck(op);
+			}
+			return;
+		}
+
+		if (VisibilityDiag.enabled()) {
+			VisibilityDiag.debugf("applier.installDirect",
+					"stream=%s type=%s %s %s opSeq=%d",
+					lockKey, op.type(), VisibilityDiag.keyTag(op.key()),
+					VisibilityDiag.valTag(value), op.opSeq());
+		}
+		installToMap(op.shard(), op.type(), op.key(), value, defer.pendingIndex);
+
+		nodeState.advanceApplied(op.domainType(), op.shard(), op.opSeq());
+		completeWaiters(op.domainType(), op.shard(), op.opSeq());
+		if (ackSender != null) {
+			ackSender.sendAck(op);
 		}
 	}
 
@@ -496,7 +510,7 @@ public class ReplicaApplier {
 	 * Discard open TX staging for one {@code domain#shard} stream only.
 	 */
 	public void discardOpenTxStaging(String domainType, int shard) {
-		final String lockKey = domainType + "#" + shard;
+		final String lockKey = OpLogStreamKeyUtil.format(domainType, shard);
 		synchronized (shardLocks.computeIfAbsent(lockKey, _ -> new Object())) {
 			final Long txId = openTxIdByStream.remove(lockKey);
 			txStaging.remove(lockKey);
@@ -510,8 +524,9 @@ public class ReplicaApplier {
 	/**
 	 * Close open TX staging when {@code TX_COMMIT}/{@code TX_ABORT} is applied at or behind
 	 * the watermark (duplicate / repair / tip race). Returns {@code true} when handled.
+	 * Envelope / index flush is deferred onto {@code defer} (run after shard lock unlock).
 	 */
-	private boolean closeOpenTxIfPresent(String lockKey, ReplicationOp op) {
+	private boolean closeOpenTxIfPresent(String lockKey, ReplicationOp op, ApplyDefer defer) {
 		if (op.type() == ReplicationOpType.TX_COMMIT) {
 			if (!hasOpenStaging(lockKey)) {
 				return false;
@@ -531,7 +546,7 @@ public class ReplicaApplier {
 							lockKey, txId, complete, op.opSeq());
 				}
 				if (complete) {
-					flushEnvelopeStagingByOwningDomain(gate.takeApplyStagingByStream(txId));
+					defer.envelopeFlush = gate.takeApplyStagingByStream(txId);
 				}
 				return true;
 			}
@@ -539,7 +554,7 @@ public class ReplicaApplier {
 				VisibilityDiag.debugf("applier.watermark.closeTx",
 						"single stream=%s txId=%d opSeq=%d", lockKey, txId, op.opSeq());
 			}
-			flushStaging(lockKey, op.shard());
+			flushStaging(lockKey, op.shard(), defer.pendingIndex);
 			txStaging.remove(lockKey);
 			openTxIdByStream.remove(lockKey);
 			return true;
@@ -569,10 +584,9 @@ public class ReplicaApplier {
 		return staging != null;
 	}
 
-	/** Test helper: whether a stream currently buffers an open TX. */
-	@VisibleForTesting
+	/** Whether a stream currently buffers an open TX. */
 	public boolean hasOpenTx(String domainType, int shard) {
-		final String lockKey = domainType + "#" + shard;
+		final String lockKey = OpLogStreamKeyUtil.format(domainType, shard);
 		if (openTxIdByStream.containsKey(lockKey)) {
 			return true;
 		}
@@ -580,24 +594,11 @@ public class ReplicaApplier {
 		return staging != null;
 	}
 
-	/** Test helper: staged mutation count for open TX (local + envelope). */
-	@VisibleForTesting
-	public int openTxStagedCount(String domainType, int shard) {
-		final String lockKey = domainType + "#" + shard;
-		final Long txId = openTxIdByStream.get(lockKey);
-		final TxEnvelopeCoordinator gate = envelopeCoordinator;
-		if (txId != null && gate != null && gate.isMultiApplyOpen(txId)) {
-			return gate.applyStagedCount(txId);
-		}
-		final List<StagedMutation> staging = txStaging.get(lockKey);
-		return staging == null ? 0 : staging.size();
-	}
-
 	public CompletableFuture<Void> awaitApplied(String domainType, int shard, long seq) {
 		if (nodeState.appliedWatermark(domainType, shard) >= seq) {
 			return CompletableFuture.completedFuture(null);
 		}
-		final String key = domainType + "#" + shard + "@" + seq;
+		final String key = OpLogStreamKeyUtil.format(domainType, shard) + "@" + seq;
 		return waiters.computeIfAbsent(key, _ -> new CompletableFuture<>());
 	}
 
@@ -646,7 +647,7 @@ public class ReplicaApplier {
 		}
 	}
 
-	private void flushStaging(String lockKey, int shard) {
+	private void flushStaging(String lockKey, int shard, List<PendingIndex> pendingIndex) {
 		final List<StagedMutation> staging = txStaging.get(lockKey);
 		if (staging == null || staging.isEmpty()) {
 			if (VisibilityDiag.enabled()) {
@@ -664,13 +665,15 @@ public class ReplicaApplier {
 						"stream=%s type=%s %s %s",
 						lockKey, m.type(), VisibilityDiag.keyTag(m.key()), VisibilityDiag.valTag(m.value()));
 			}
-			installToMap(shard, m.type(), m.key(), m.value());
+			installToMap(shard, m.type(), m.key(), m.value(), pendingIndex);
 		}
 	}
 
 	/**
 	 * Install each stream's staged mutations via that stream's domain applier.
 	 * Never fall back to {@code this} for a foreign domain (cross-table TX / Elle G2).
+	 * <p>
+	 * Must run <em>outside</em> any {@code shardLocks} (index + cross-shard install).
 	 */
 	private void flushEnvelopeStagingByOwningDomain(
 			Map<TxEnvelopeCodec.StreamRef, List<TxEnvelopeCoordinator.StagedMutation>> byStream
@@ -707,25 +710,29 @@ public class ReplicaApplier {
 		}
 	}
 
-	/** Map+index install for envelope staging owned by this domain applier. */
+	/**
+	 * Map then index for envelope staging owned by this domain applier (no caller shard lock held).
+	 */
 	private void installOwnedEnvelopeStaging(List<TxEnvelopeCoordinator.StagedMutation> staging) {
 		if (VisibilityDiag.enabled()) {
 			VisibilityDiag.debugf("applier.flushEnvelope.item", "install count=%d", staging.size());
 		}
+		final List<PendingIndex> pendingIndex = new ArrayList<>(staging.size());
 		for (TxEnvelopeCoordinator.StagedMutation m : staging) {
 			if (VisibilityDiag.enabled()) {
 				VisibilityDiag.debugf("applier.flushEnvelope.item",
 						"type=%s shard=%d %s %s", m.type(), m.shard(),
 						VisibilityDiag.keyTag(m.key()), VisibilityDiag.valTag(m.value()));
 			}
-			installToMap(m.shard(), m.type(), m.key(), m.value());
+			installToMap(m.shard(), m.type(), m.key(), m.value(), pendingIndex);
 		}
+		flushPendingIndex(pendingIndex);
 	}
 
 	/**
 	 * Repair path: overwrite local map for an already-applied seq (no OpLog re-append).
 	 */
-	private void forceReinstall(ReplicationOp op) {
+	private void forceReinstall(ReplicationOp op, List<PendingIndex> pendingIndex) {
 		byte[] value = op.value();
 		if (value != null && DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
 			final DuplexBlob blob = DuplexBlob.fromWireBytes(value);
@@ -740,14 +747,24 @@ public class ReplicaApplier {
 						op.domainType(), op.shard(), op.type(), op.opSeq(),
 						VisibilityDiag.keyTag(op.key()), VisibilityDiag.valTag(value));
 			}
-			installToMap(op.shard(), op.type(), op.key(), value);
+			installToMap(op.shard(), op.type(), op.key(), value, pendingIndex);
 		}
 		if (ackSender != null) {
 			ackSender.sendAck(op);
 		}
 	}
 
-	private void installToMap(int shard, ReplicationOpType type, byte[] key, byte[] value) {
+	/**
+	 * Map-only install under shard lock; queues sync index onto {@code pendingIndex} for after unlock.
+	 * Hydrate-session path still collects delta for {@link #flushHydrateIndexDelta}.
+	 */
+	private void installToMap(
+			int shard,
+			ReplicationOpType type,
+			byte[] key,
+			byte[] value,
+			List<PendingIndex> pendingIndex
+	) {
 		if (!applyToLocalMap || processorByShard == null) {
 			if (VisibilityDiag.enabled()) {
 				VisibilityDiag.debugf("applier.installToMap",
@@ -780,16 +797,41 @@ public class ReplicaApplier {
 			return;
 		}
 		if (type == ReplicationOpType.DELETE) {
-			processor.installCommitted(key, null, true);
+			processor.installMapOnly(key, null, true);
+			if (pendingIndex != null && key != null) {
+				pendingIndex.add(new PendingIndex(shard, type, key, null));
+			}
 		} else if (type == ReplicationOpType.UPSERT) {
-			processor.installCommitted(key, value, false);
+			processor.installMapOnly(key, value, false);
+			if (pendingIndex != null && key != null && value != null) {
+				pendingIndex.add(new PendingIndex(shard, type, key, value));
+			}
+		}
+	}
+
+	/** Sync index after shard lock unlock (SELECT visibility; never under {@code shardLocks}). */
+	private void flushPendingIndex(List<PendingIndex> pendingIndex) {
+		if (pendingIndex == null || pendingIndex.isEmpty() || processorByShard == null) {
+			return;
+		}
+		for (int i = 0, n = pendingIndex.size(); i < n; i++) {
+			final PendingIndex pending = pendingIndex.get(i);
+			final GridEntriesProcessor processor = processorByShard.apply(pending.shard());
+			if (processor == null || pending.key() == null) {
+				continue;
+			}
+			if (pending.type() == ReplicationOpType.DELETE) {
+				processor.indexNowRemove(pending.key());
+			} else if (pending.type() == ReplicationOpType.UPSERT && pending.value() != null) {
+				processor.indexNow(pending.key(), pending.value());
+			}
 		}
 	}
 
 	private void completeWaiters(String domainType, int shard, long appliedSeq) {
 		waiters.entrySet().removeIf(e -> {
 			final String key = e.getKey();
-			if (!key.startsWith(domainType + "#" + shard + "@")) {
+			if (!key.startsWith(OpLogStreamKeyUtil.format(domainType, shard) + "@")) {
 				return false;
 			}
 			final long needed = Long.parseLong(key.substring(key.lastIndexOf('@') + 1));

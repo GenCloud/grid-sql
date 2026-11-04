@@ -17,8 +17,6 @@ package org.genfork.grid.sql.tx;
 
 import java.util.Objects;
 
-import com.google.common.annotations.VisibleForTesting;
-
 /**
  * In-process peer lock agent: delegates to another node's {@link SqlRecordLockManager}.
  * <p>
@@ -32,7 +30,6 @@ import com.google.common.annotations.VisibleForTesting;
 public final class InProcessDistForUpdatePeerLockAgent implements DistForUpdatePeerLockAgent {
 	private final SqlRecordLockManager locks;
 
-	@VisibleForTesting
 	public InProcessDistForUpdatePeerLockAgent(SqlRecordLockManager locks) {
 		this.locks = Objects.requireNonNull(locks, "locks");
 	}
@@ -55,8 +52,4 @@ public final class InProcessDistForUpdatePeerLockAgent implements DistForUpdateP
 		locks.unlock(table, key);
 	}
 
-	@VisibleForTesting
-	public SqlRecordLockManager lockManager() {
-		return locks;
-	}
 }

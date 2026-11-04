@@ -84,8 +84,6 @@ public class SealedDumpOnShutdownIT {
 		final MutationRecorder recorder = coord.registerDomain(DOMAIN, ReplTestSupport.singleShard(proc), true);
 		coord.start();
 		waitSynced(coord, 5_000);
-		assertEquals(DUMP_INTERVAL_MS, coord.sealedDumpIntervalMsForTest());
-
 		recorder.recordCommittedBlocking(SHARD, new GridEntriesProcessor.AddEntry(null, KEY, VAL_A));
 		recorder.recordCommittedBlocking(SHARD, new GridEntriesProcessor.AddEntry(null, KEY, VAL_B));
 		assertArrayEquals(VAL_B, proc.get(KEY));

@@ -17,23 +17,26 @@ package org.genfork.grid.query.filters;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.function.Consumer;
 
 import org.genfork.grid.mem.index.AbstractIndexOperation;
+import org.genfork.grid.mem.index.IndexColumnResolveUtil;
 import org.genfork.grid.mem.index.IndexPointerRef;
 import org.genfork.grid.mem.index.btree.AbstractBPTree;
 import org.genfork.grid.mem.index.btree.CompositeTreeKey;
 import org.genfork.grid.mem.index.btree.IndexOperationResult;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
+import org.genfork.grid.replication.snapshot.sealed.AbstractSealedBpTreeFallback;
+import org.genfork.grid.replication.snapshot.sealed.SealedFallbackCompositeIndex;
+import org.genfork.grid.replication.snapshot.sealed.SealedFallbackIndex;
 
 /**
  * Shared PRIMARY KEY tree resolve + scan for filter / maintenance paths.
  * <p>
  * Exact bind: single PK column → scalar map entry; multi → composite whose
  * columns match {@code pkColumnNames} order-insensitively (same contract as
- * {@code GridCompositeIndex.resolveCompositeIndex} / {@code resolveSingleColumnIndex}).
+ * {@link IndexColumnResolveUtil}).
  * Leading-column heuristics are not used — a secondary with the same leading
  * column must not replace the PK tree.
  *
@@ -59,9 +62,9 @@ public final class PkIndexScanUtil {
 			return null;
 		}
 		if (pkColumnNames.size() == 1) {
-			return resolveSingleColumnIndex(property2Index, pkColumnNames.getFirst());
+			return IndexColumnResolveUtil.resolveSingleColumnIndex(property2Index, pkColumnNames.getFirst());
 		}
-		return resolveCompositeIndex(compositeIndexes, pkColumnNames);
+		return IndexColumnResolveUtil.resolveCompositeIndex(compositeIndexes, pkColumnNames);
 	}
 
 	/**
@@ -146,9 +149,8 @@ public final class PkIndexScanUtil {
 	/**
 	 * Open a resumable PK leaf cursor (Portal pull / FETCH). Caller must close the cursor.
 	 *
-	 * @return cursor, or {@code null} when PK tree missing
+	 * @return cursor, or {@code null} when PK tree missing or portal-ineligible (sealed-bound)
 	 */
-	@SuppressWarnings({"rawtypes", "unchecked"})
 	public static AbstractBPTree.RowKeyCursor<?, ?> openPrimaryKeyRowCursor(
 			Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 			Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
@@ -156,13 +158,34 @@ public final class PkIndexScanUtil {
 	) {
 		final AbstractIndexOperation<?, ?> tree =
 				resolvePrimaryKeyIndex(property2Index, compositeIndexes, pkColumnNames);
+		final AbstractBPTree<?, ?> ram = portalRamBpTree(tree);
+		if (ram == null) {
+			return null;
+		}
+		return ram.openRowKeyCursor();
+	}
+
+	/**
+	 * RAM {@link AbstractBPTree} usable for Portal PK leaf cursor, or {@code null}
+	 * when missing / sealed-bound ({@link AbstractSealedBpTreeFallback#hasSealedReaders()}).
+	 */
+	@SuppressWarnings({"rawtypes", "unchecked"})
+	public static AbstractBPTree<?, ?> portalRamBpTree(AbstractIndexOperation<?, ?> tree) {
 		if (tree == null) {
 			return null;
 		}
-		if (!(tree instanceof AbstractBPTree bpTree)) {
-			return null;
+		if (tree instanceof AbstractBPTree<?, ?> bpTree) {
+			return bpTree;
 		}
-		return bpTree.openRowKeyCursor();
+		if (tree instanceof SealedFallbackIndex || tree instanceof SealedFallbackCompositeIndex) {
+			final AbstractSealedBpTreeFallback<?, ?> sealed = (AbstractSealedBpTreeFallback<?, ?>) tree;
+			if (sealed.hasSealedReaders()) {
+				return null;
+			}
+			final AbstractIndexOperation<?, ?> delegate = sealed.delegate();
+			return delegate instanceof AbstractBPTree<?, ?> bpTree ? bpTree : null;
+		}
+		return null;
 	}
 
 	/**
@@ -174,52 +197,9 @@ public final class PkIndexScanUtil {
 	}
 
 	/**
-	 * Same contract as {@code GridCompositeIndex.resolveSingleColumnIndex}.
+	 * {@code true} when PK resolves to a portal-eligible in-RAM {@link AbstractBPTree}
+	 * (plain tree, or sealed wrapper with no readers yet).
 	 */
-	static AbstractIndexOperation<byte[], SingleTreeKey> resolveSingleColumnIndex(
-			Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
-			String columnName
-	) {
-		if (columnName == null || columnName.isBlank() || property2Index == null) {
-			return null;
-		}
-		final AbstractIndexOperation<byte[], SingleTreeKey> exact = property2Index.get(columnName);
-		if (exact != null) {
-			return exact;
-		}
-		for (Entry<String, AbstractIndexOperation<byte[], SingleTreeKey>> entry : property2Index.entrySet()) {
-			if (entry.getKey().equalsIgnoreCase(columnName)) {
-				return entry.getValue();
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Same contract as {@code GridCompositeIndex.resolveCompositeIndex}.
-	 */
-	static AbstractIndexOperation<byte[][], CompositeTreeKey> resolveCompositeIndex(
-			Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
-			List<String> columns
-	) {
-		if (columns == null || columns.isEmpty() || compositeIndexes == null) {
-			return null;
-		}
-		final AbstractIndexOperation<byte[][], CompositeTreeKey> exact = compositeIndexes.get(columns);
-		if (exact != null) {
-			return exact;
-		}
-		for (Entry<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> entry
-				: compositeIndexes.entrySet()) {
-			if (columnsEqualIgnoreCaseOrdered(entry.getKey(), columns)) {
-				return entry.getValue();
-			}
-		}
-		return null;
-	}
-
-
-	/** {@code true} when PK tree is an in-RAM {@link AbstractBPTree} (not sealed fallback). */
 	public static boolean hasRamPrimaryKeyBptree(
 			Map<String, AbstractIndexOperation<byte[], SingleTreeKey>> property2Index,
 			Map<List<String>, AbstractIndexOperation<byte[][], CompositeTreeKey>> compositeIndexes,
@@ -227,18 +207,7 @@ public final class PkIndexScanUtil {
 	) {
 		final AbstractIndexOperation<?, ?> tree =
 				resolvePrimaryKeyIndex(property2Index, compositeIndexes, pkColumnNames);
-		return tree instanceof AbstractBPTree;
+		return portalRamBpTree(tree) != null;
 	}
 
-	private static boolean columnsEqualIgnoreCaseOrdered(List<String> left, List<String> right) {
-		if (left.size() != right.size()) {
-			return false;
-		}
-		for (int i = 0; i < left.size(); i++) {
-			if (!left.get(i).equalsIgnoreCase(right.get(i))) {
-				return false;
-			}
-		}
-		return true;
-	}
 }

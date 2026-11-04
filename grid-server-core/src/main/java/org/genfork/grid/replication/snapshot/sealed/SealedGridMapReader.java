@@ -37,7 +37,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.utils.ArrayUtil;
@@ -154,14 +153,6 @@ public final class SealedGridMapReader implements AutoCloseable {
 		this.nodeReaders = null;
 		this.nodePaths = nodePaths;
 		this.lazyNodes = new AtomicReferenceArray<>(SealedGridMapWriter.NODE_COUNT);
-	}
-
-	/**
-	 * Opens one physical VERSION=2 node GMAP file.
-	 */
-	@VisibleForTesting
-	public static SealedGridMapReader open(Path path) throws IOException {
-		return openPhysicalFile(path);
 	}
 
 	private static SealedGridMapReader openPhysicalFile(Path path) throws IOException {
@@ -345,6 +336,48 @@ public final class SealedGridMapReader implements AutoCloseable {
 			return new SealedGridMapReader(sealedRoot, domainType, shard, paths, watermarkHint);
 		}
 		return null;
+	}
+
+	/**
+	 * Open a shard reader from explicit node paths (publish-next staging or canonical).
+	 * <p>
+	 * Staging siblings from {@link GridFs#writeUnpublished} are valid here; discovery globs
+	 * that require a {@code *.gmap} suffix do not see {@code *.gmap.tmp.*} names.
+	 */
+	public static SealedGridMapReader openShardFromNodePaths(
+			Path sealedRoot,
+			String domainType,
+			int shard,
+			Path[] nodePaths
+	) throws IOException {
+		Objects.requireNonNull(sealedRoot, "sealedRoot");
+		Objects.requireNonNull(domainType, "domainType");
+		Objects.requireNonNull(nodePaths, "nodePaths");
+		if (nodePaths.length != SealedGridMapWriter.NODE_COUNT) {
+			throw new IOException("sealed node path arity mismatch: " + nodePaths.length);
+		}
+		boolean found = false;
+		long watermarkHint = 0L;
+		final Path[] paths = new Path[SealedGridMapWriter.NODE_COUNT];
+		for (int nodeId = 0; nodeId < SealedGridMapWriter.NODE_COUNT; nodeId++) {
+			final Path file = nodePaths[nodeId];
+			if (file == null) {
+				continue;
+			}
+			final NodeHeaderPeek peek = peekNodeHeader(file);
+			if (peek.version() != SealedGridMapWriter.VERSION_NODE
+					|| peek.shard() != shard || !domainType.equals(peek.domainType())
+					|| peek.nodeId() != nodeId) {
+				throw new IOException("sealed node metadata mismatch: " + file);
+			}
+			watermarkHint = Math.max(watermarkHint, peek.watermark());
+			paths[nodeId] = file;
+			found = true;
+		}
+		if (!found) {
+			return null;
+		}
+		return new SealedGridMapReader(sealedRoot, domainType, shard, paths, watermarkHint);
 	}
 
 	private SealedGridMapReader nodeReader(int node) {

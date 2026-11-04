@@ -15,19 +15,25 @@
  */
 package org.genfork.grid.sql.exec;
 
+import java.util.List;
+
 import org.genfork.grid.catalog.TableSchema;
 
 /**
  * Gates scalar PRIMARY KEY point-lookup fast paths.
  * <p>
  * Composite PRIMARY KEY tables must not treat EQ on the first PK column as
- * {@code getByPk(scalar)} — that path requires a full key tuple.
+ * {@code getByPk(scalar)} — that path requires a full key tuple. JOIN uses the
+ * same rule via {@link #isJoinPkPointProbe}.
  *
  * @author: GenCloud
  * @date: 2025/11
  * @since: 1.0
  */
 public final class SqlPkLookupUtil {
+	/** JOIN map point-lookup requires exactly one ON equality. */
+	private static final int JOIN_PK_PROBE_EQ_ARITY = 1;
+
 	private SqlPkLookupUtil() {
 	}
 
@@ -42,5 +48,18 @@ public final class SqlPkLookupUtil {
 			return false;
 		}
 		return schema.pkColumn().name().equalsIgnoreCase(pkColumnHint);
+	}
+
+	/**
+	 * True when JOIN ON columns allow {@code getCommittedBytes} / scalar PK probe.
+	 * <p>
+	 * Only a single-column ON against a scalar PRIMARY KEY qualifies. Partial EQ on a
+	 * composite PRIMARY KEY must use index prefix or hash JOIN instead.
+	 */
+	public static boolean isJoinPkPointProbe(TableSchema schema, List<String> onColNames) {
+		if (onColNames == null || onColNames.size() != JOIN_PK_PROBE_EQ_ARITY) {
+			return false;
+		}
+		return isScalarPkPointLookup(schema, onColNames.getFirst());
 	}
 }

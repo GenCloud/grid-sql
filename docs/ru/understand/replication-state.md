@@ -94,6 +94,7 @@
 - Предлагающий узел выбирается по фазе: `min(nodeId)` среди себя и достижимых пиров.
 - Пир возвращается в голосующие, когда его `APPLY_ACK` догонит; HELLO с тем же `clusterId` добавляет его обратно через `addPeer`.
 - `writerEligible` требует синхронизацию, допуск по фазе **и** tip не позади достижимых пиров. Tip-behind (unclean-revive / tip-fence) держит `writerEligible=false`, пока локальный `lastCommittedSeq` не догонит `maxSeenPeerCommittedSeq` — независимо от роли/epoch.
+- В wire `ServerMeta` / HELLO может быть **`catalogFingerprint`** (object-set локального каталога). Допуск SQL на реплике fail-closed при несовпадении fingerprint или непроигранном LAZY tip — не только serving-stream `applyLagStale`. Auto-route клиента может уйти на writer: [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 
 ## Готовность восстановления и размещения
 

@@ -16,6 +16,7 @@
 package org.genfork.grid.replication.log;
 
 import org.genfork.grid.replication.codec.ReplicationOp;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 import java.util.List;
 import java.util.TreeMap;
@@ -47,10 +48,6 @@ public final class StreamOpLogAppender {
 
 	public StreamOpLogAppender(OpLog opLog) {
 		this.opLog = opLog;
-	}
-
-	private static String key(String domainType, int shard) {
-		return domainType + "#" + shard;
 	}
 
 	/**
@@ -148,7 +145,9 @@ public final class StreamOpLogAppender {
 	}
 
 	private StreamState state(String domainType, int shard) {
-		return streams.computeIfAbsent(key(domainType, shard), ignored -> new StreamState());
+		return streams.computeIfAbsent(
+				OpLogStreamKeyUtil.format(domainType, shard),
+				ignored -> new StreamState());
 	}
 
 	/**

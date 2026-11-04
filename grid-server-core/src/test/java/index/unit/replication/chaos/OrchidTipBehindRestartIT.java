@@ -97,8 +97,10 @@ public class OrchidTipBehindRestartIT {
 		assertArrayEquals(value, proc2.get(key), "map must hydrate from OpLog despite wiped tip");
 		assertTrue(c2.getOpLog().lastSeq(DOMAIN, 0) >= seq, "OpLog prefix must survive");
 
-		// Catch tip up to OpLog and mint a successor — proves tip-behind does not fork the slot.
-		c2.getOrchidNode().advanceCommittedTip(c2.getOpLog().lastSeq(DOMAIN, 0));
+		// Product path: hydrate/boot journal tip catch-up (no manual advanceCommittedTip).
+		assertTrue(c2.getOrchidNode().getLastCommittedSeq() >= seq,
+				"orchid tip must catch OpLog lastSeq after hydrate; tip="
+						+ c2.getOrchidNode().getLastCommittedSeq() + " seq=" + seq);
 		final byte[] key2 = new byte[]{6, 6};
 		final byte[] value2 = new byte[]{7, 7};
 		final long seq2 = commitLocal(c2, proc2, key2, value2, seq + 1L);

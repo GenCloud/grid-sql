@@ -83,7 +83,7 @@ public class DropIndexSealedPurgeBenchmark extends AbstractLatencyBenchmark {
 		final String indexName = INDEX_PREFIX + indexSeq.incrementAndGet();
 		engine.execute("CREATE UNIQUE INDEX " + indexName + " ON " + TABLE
 				+ " (owner_id, item_id, location_data)");
-		runtime.ownedReplication().dumpDomainSnapshot(TABLE);
+		runtime.replication().dumpDomainSnapshot(TABLE);
 		engine.execute("DROP INDEX " + indexName + " ON " + TABLE);
 		return indexName;
 	}

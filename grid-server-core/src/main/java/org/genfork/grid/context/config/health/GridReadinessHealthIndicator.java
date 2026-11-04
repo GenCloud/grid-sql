@@ -72,9 +72,16 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 	public static final String DETAIL_PROMOTE_HINT = "promoteHint";
 	public static final String DETAIL_REGION_EPOCH = "regionEpoch";
 	public static final String DETAIL_REGION_ROLE = "regionRole";
+	public static final String DETAIL_PRIVILEGE_USERS = "privilegeUsers";
+	public static final String DETAIL_AUTH_OPEN = "authOpen";
+	public static final String DETAIL_CATALOG_APPLY_LAG = "catalogApplyLag";
+	public static final String DETAIL_CATALOG_LAG_STUCK = "catalogLagStuck";
+	public static final String DETAIL_CATALOG_INCOMPLETE = "catalogIncomplete";
+	public static final String DETAIL_CATALOG_FINGERPRINT = "catalogFingerprint";
 
 	private static final String REASON_SQL_TCP_DOWN = "sql_tcp_down";
 	private static final String REASON_ORCHID_NOT_SYNCED = "orchid_not_synced";
+	private static final String REASON_CATALOG_LAG_STUCK = "catalog_lag_stuck";
 	private static final String STATUS_LISTENING = "listening";
 	private static final String STATUS_DISABLED = "disabled";
 	private static final String STATUS_UP = "up";
@@ -134,12 +141,30 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 					.build();
 		}
 
+		// Stuck catalog lag only — transient lag>0 stays UP (journal-before-apply).
+		if (coordinator.isCatalogApplyLagStuck()) {
+			return withOpsDetails(Health.down()
+					.withDetail(DETAIL_SQL_TCP, tcpEnabled ? STATUS_LISTENING : STATUS_DISABLED)
+					.withDetail(DETAIL_DURABLE, STATUS_UP)
+					.withDetail(DETAIL_ORCHID_SYNCED, Boolean.TRUE)
+					.withDetail(DETAIL_APPLY_LAG_STALE, coordinator.isApplyLagStale())
+					.withDetail(DETAIL_WRITER_ELIGIBLE, coordinator.isWriterEligible())
+					.withDetail(DETAIL_CATALOG_LAG_STUCK, Boolean.TRUE)
+					.withDetail(DETAIL_CATALOG_INCOMPLETE, coordinator.isCatalogFingerprintStale())
+					.withDetail(DETAIL_CATALOG_FINGERPRINT, coordinator.catalogFingerprint())
+					.withDetail(DETAIL_REASON, REASON_CATALOG_LAG_STUCK))
+					.build();
+		}
+
 		return withOpsDetails(Health.up()
 				.withDetail(DETAIL_SQL_TCP, tcpEnabled ? STATUS_LISTENING : STATUS_DISABLED)
 				.withDetail(DETAIL_DURABLE, STATUS_UP)
 				.withDetail(DETAIL_ORCHID_SYNCED, Boolean.TRUE)
 				.withDetail(DETAIL_APPLY_LAG_STALE, coordinator.isApplyLagStale())
-				.withDetail(DETAIL_WRITER_ELIGIBLE, coordinator.isWriterEligible()))
+				.withDetail(DETAIL_WRITER_ELIGIBLE, coordinator.isWriterEligible())
+				.withDetail(DETAIL_CATALOG_LAG_STUCK, Boolean.FALSE)
+				.withDetail(DETAIL_CATALOG_INCOMPLETE, coordinator.isCatalogFingerprintStale())
+				.withDetail(DETAIL_CATALOG_FINGERPRINT, coordinator.catalogFingerprint()))
 				.build();
 	}
 
@@ -155,8 +180,26 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 				builder.withDetail(DETAIL_MAX_TX_CONTEXTS, maxTx);
 			}
 		}
+		withPrivilegeDetails(builder);
 		withReplicationDetails(builder);
 		return builder;
+	}
+
+	private void withPrivilegeDetails(Health.Builder builder) {
+		final SqlServerRuntime runtime = sqlRuntimeProvider.getIfAvailable();
+		if (runtime == null || runtime.engine() == null || runtime.engine().privileges() == null) {
+			builder.withDetail(DETAIL_PRIVILEGE_USERS, STATUS_N_A);
+			builder.withDetail(DETAIL_AUTH_OPEN, STATUS_N_A);
+		} else {
+			builder.withDetail(DETAIL_PRIVILEGE_USERS, runtime.engine().privileges().userNames().size());
+			builder.withDetail(DETAIL_AUTH_OPEN, runtime.engine().privileges().isOpen());
+		}
+		final ReplicationCoordinator coordinator = coordinatorProvider.getIfAvailable();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			builder.withDetail(DETAIL_CATALOG_APPLY_LAG, STATUS_N_A);
+		} else {
+			builder.withDetail(DETAIL_CATALOG_APPLY_LAG, coordinator.catalogApplyLag());
+		}
 	}
 
 	private void withReplicationDetails(Health.Builder builder) {

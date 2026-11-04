@@ -40,6 +40,7 @@ import org.genfork.grid.sql.ast.DdlAst.CreateTableSql;
 import org.genfork.grid.sql.ast.DmlAst.DeleteSql;
 import org.genfork.grid.sql.ast.DmlAst.InsertSql;
 import org.genfork.grid.sql.ast.SelectAst.JoinEdge;
+import org.genfork.grid.sql.ast.SelectAst.JoinKind;
 import org.genfork.grid.sql.ast.DmlAst.MergeSql;
 import org.genfork.grid.sql.ast.SelectAst.SelectSql;
 import org.genfork.grid.sql.ast.SelectAst.SetOpSql;
@@ -108,8 +109,12 @@ public final class SqlExplainService {
 			final TableStore right = domains.requireStore(rightName);
 			final ColumnDef leftCol = left.schema().requireColumn(first.leftCol());
 			final ColumnDef rightCol = right.schema().requireColumn(first.rightCol());
-			final boolean leftOnPk = leftCol.primaryKey();
-			final boolean rightOnPk = rightCol.primaryKey();
+			// Match SqlQueryExecutor: left PK probe is INNER-only; right PK probe skips RIGHT/FULL.
+			final boolean leftOnPk = first.kind() == JoinKind.INNER
+					&& SqlPkLookupUtil.isScalarPkPointLookup(left.schema(), leftCol.name());
+			final boolean rightOnPk = first.kind() != JoinKind.RIGHT
+					&& first.kind() != JoinKind.FULL
+					&& SqlPkLookupUtil.isScalarPkPointLookup(right.schema(), rightCol.name());
 			final QueryOptimizer.JoinChoice joinChoice = QueryOptimizer.chooseJoinStrategy(
 					leftOnPk,
 					rightOnPk,

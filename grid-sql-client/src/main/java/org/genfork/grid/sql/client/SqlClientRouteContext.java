@@ -16,8 +16,6 @@
 package org.genfork.grid.sql.client;
 
 import java.util.Objects;
-import java.util.concurrent.Callable;
-import java.util.function.Supplier;
 
 /**
  * Per-thread request-context override for client read routing.
@@ -66,30 +64,6 @@ public final class SqlClientRouteContext {
 		Objects.requireNonNull(action, "action");
 		try (AutoCloseable ignored = forcePrimary()) {
 			action.run();
-		} catch (RuntimeException e) {
-			throw e;
-		} catch (Exception e) {
-			throw new IllegalStateException(e);
-		}
-	}
-
-	/**
-	 * Call {@code action} with {@link #forcePrimary()} scope.
-	 */
-	public static <T> T callWithPrimary(Callable<T> action) throws Exception {
-		Objects.requireNonNull(action, "action");
-		try (AutoCloseable ignored = forcePrimary()) {
-			return action.call();
-		}
-	}
-
-	/**
-	 * Supplier form of {@link #callWithPrimary(Callable)} (unchecked).
-	 */
-	public static <T> T getWithPrimary(Supplier<T> action) {
-		Objects.requireNonNull(action, "action");
-		try (AutoCloseable ignored = forcePrimary()) {
-			return action.get();
 		} catch (RuntimeException e) {
 			throw e;
 		} catch (Exception e) {

@@ -48,7 +48,7 @@ class RegionPeerLinkClaimTest {
 	@Test
 	void claimAllowedAfterPeerLinkDownPastTimeout() throws Exception {
 		try (RegionRoleCoordinator coord = newHoldCoordinator()) {
-			coord.forcePeerLinkSilenceMs(CLAIM_TIMEOUT_MS + 50L);
+			Thread.sleep(CLAIM_TIMEOUT_MS + 50L);
 			assertTrue(coord.shouldAttemptClaim(false));
 			assertFalse(coord.shouldAttemptClaim(true));
 		}
@@ -57,12 +57,12 @@ class RegionPeerLinkClaimTest {
 	@Test
 	void claimBlockedAgainAfterBriefPeerLinkFlap() throws Exception {
 		try (RegionRoleCoordinator coord = newHoldCoordinator()) {
-			coord.forcePeerLinkSilenceMs(CLAIM_TIMEOUT_MS + 50L);
+			Thread.sleep(CLAIM_TIMEOUT_MS + 50L);
 			assertTrue(coord.shouldAttemptClaim(false));
 			// Brief recover resets silence clock — claim must wait full timeout again.
 			assertFalse(coord.shouldAttemptClaim(true));
 			assertFalse(coord.shouldAttemptClaim(false));
-			coord.forcePeerLinkSilenceMs(CLAIM_TIMEOUT_MS + 50L);
+			Thread.sleep(CLAIM_TIMEOUT_MS + 50L);
 			assertTrue(coord.shouldAttemptClaim(false));
 		}
 	}

@@ -149,14 +149,14 @@ public final class TableSchema {
 		final List<IndexDef> effectiveIndexes = new ArrayList<>(inputIndexes);
 		boolean hasPkIndex = false;
 		for (IndexDef idx : effectiveIndexes) {
-			if (columnsEqualIgnoreCaseOrdered(idx.columns(), primaryKeys.stream().map(ColumnDef::name).toList())
+			if (ColumnListEqualUtil.columnsEqualIgnoreCaseOrdered(idx.columns(), primaryKeys.stream().map(ColumnDef::name).toList())
 					&& idx.kind() == IndexType.STRICT) {
 				hasPkIndex = true;
 				break;
 			}
 		}
 		if (!hasPkIndex) {
-			effectiveIndexes.add(0, new IndexDef(
+			effectiveIndexes.addFirst(new IndexDef(
 					CatalogPersistUtil.syntheticPkIndexName(this.catalogKey),
 					primaryKeys.stream().map(ColumnDef::name).toList(),
 					IndexType.STRICT));
@@ -185,7 +185,7 @@ public final class TableSchema {
 	 */
 	private static boolean hasCoveringIndex(List<IndexDef> indexes, List<String> columns) {
 		for (IndexDef idx : indexes) {
-			if (columnsEqualIgnoreCaseOrdered(idx.columns(), columns)) {
+			if (ColumnListEqualUtil.columnsEqualIgnoreCaseOrdered(idx.columns(), columns)) {
 				return true;
 			}
 		}
@@ -211,11 +211,6 @@ public final class TableSchema {
 		return catalogKey;
 	}
 
-	/** Qualified name view of this table. */
-	public CatalogQualifiedName qualifiedName() {
-		return CatalogQualifiedName.of(schemaName, tableName);
-	}
-
 	public List<ColumnDef> columns() {
 		return columns;
 	}
@@ -239,23 +234,6 @@ public final class TableSchema {
 
 	public List<CheckDef> checks() {
 		return checks;
-	}
-
-	/** Immutable copy with an added nullable column at the end (new schema epoch). */
-	public TableSchema withColumn(String name, SqlType type, boolean nullable, long newEpoch) {
-		if (name == null || name.isBlank()) {
-			throw new IllegalArgumentException("column name required");
-		}
-		if (byName.containsKey(name.toLowerCase(Locale.ROOT))) {
-			throw new IllegalStateException("Column already exists: " + name);
-		}
-		if (type == null) {
-			throw new IllegalArgumentException("type required");
-		}
-		final List<ColumnDef> next = new ArrayList<>(columns.size() + 1);
-		next.addAll(columns);
-		next.add(new ColumnDef(name, type, nullable, columns.size(), false, false));
-		return new TableSchema(catalogKey, next, indexes, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
 	/** Immutable copy with trailing column and optional DEFAULT expression. */
@@ -330,22 +308,31 @@ public final class TableSchema {
 		return new TableSchema(catalogKey, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
 
-	/** Immutable copy without named index (not the synthetic PK index). */
+	/**
+	 * Immutable copy without a named secondary index.
+	 * <p>
+	 * Rejects the synthetic PRIMARY KEY covering index ({@code table_pk}) — dropping it would
+	 * strip the sole RAM PK tree while the ctor would re-synthesize the IndexDef (schema/RAM desync).
+	 */
 	public TableSchema withoutIndex(String indexName, long newEpoch) {
 		if (indexName == null || indexName.isBlank()) {
 			throw new IllegalArgumentException("index name required");
 		}
+		IndexDef removed = null;
 		final List<IndexDef> next = new ArrayList<>(indexes.size());
-		boolean found = false;
 		for (IndexDef existing : indexes) {
 			if (existing.name().equalsIgnoreCase(indexName)) {
-				found = true;
+				removed = existing;
 				continue;
 			}
 			next.add(existing);
 		}
-		if (!found) {
+		if (removed == null) {
 			throw new IllegalStateException("Index not found: " + indexName);
+		}
+		if (SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndex(this, removed)
+				|| SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndexName(catalogKey, indexName)) {
+			throw new IllegalStateException(SyntheticPkIndexUtil.cannotDropMessage(removed.name()));
 		}
 		return new TableSchema(catalogKey, columns, next, foreignKeys, checks, newEpoch, primaryKeyNames());
 	}
@@ -388,7 +375,7 @@ public final class TableSchema {
 		}
 		final List<IndexDef> nextIdx = new ArrayList<>(indexes.size());
 		for (IndexDef idx : indexes) {
-			if (childIndexName != null && idx.name().equalsIgnoreCase(childIndexName)) {
+			if (idx.name().equalsIgnoreCase(childIndexName)) {
 				continue;
 			}
 			nextIdx.add(idx);
@@ -436,7 +423,7 @@ public final class TableSchema {
 			next.add(new ColumnDef(
 					col.name(),
 					col.type(),
-					pk ? false : col.nullable(),
+                    !pk && col.nullable(),
 					col.ordinal(),
 					pk,
 					col.externalOrder(),
@@ -501,24 +488,6 @@ public final class TableSchema {
 
 	public FieldMetaData pkFieldMeta() {
 		return fieldMetas[pkColumn.ordinal()];
-	}
-
-	/** Ordered PRIMARY KEY field metadata. */
-	public FieldMetaData[] pkFieldMetas() {
-		final FieldMetaData[] fields = new FieldMetaData[pkColumns.size()];
-		for (int i = 0; i < pkColumns.size(); i++) {
-			fields[i] = fieldMetas[pkColumns.get(i).ordinal()];
-		}
-		return fields;
-	}
-
-	/** Catalog field meta by column name (case-insensitive); {@code null} if unknown. */
-	public FieldMetaData fieldMeta(String name) {
-		final ColumnDef col = column(name);
-		if (col == null) {
-			return null;
-		}
-		return fieldMetas[col.ordinal()];
 	}
 
 	public Map<IndexType, List<HashField[]>> indexHashFields() {
@@ -747,15 +716,4 @@ public final class TableSchema {
 		}
 	}
 
-	private static boolean columnsEqualIgnoreCaseOrdered(List<String> left, List<String> right) {
-		if (left.size() != right.size()) {
-			return false;
-		}
-		for (int i = 0; i < left.size(); i++) {
-			if (!left.get(i).equalsIgnoreCase(right.get(i))) {
-				return false;
-			}
-		}
-		return true;
-	}
 }

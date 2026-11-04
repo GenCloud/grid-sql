@@ -25,11 +25,14 @@ On **`:ok`** the value is the token list (e.g. `[:r 16 ["t14" ...]]`). Anomalies
 | K | `1dc-join-shards` → `scripts/run-jepsen-join.ps1` / `.sh` | partition + kill-proposer | **join** (Elle list-append via cross-shard `LEFT OUTER JOIN`) | Elle + honesty gate | JOIN + multi-shard parent/child under SQL TX |
 | L | `multidc-async-swarm` → `multidc/scripts/run-multidc-swarm.sh` | DC-link + kill-voter + **swarm-bounce** (Active a*); configs `multidc/configs/async-swarm/` | append multi-mop TX | Elle | Multi-DC ASYNC_SHIP + swarm auto-cutover |
 | M | `multidc-async-join` → `multidc/scripts/run-multidc-join.sh` | DC-link + kill-voter + kill/revive DC-A | **join** (Elle via cross-shard LEFT OUTER JOIN) | Elle + honesty gate | Multi-DC JOIN; Hold tip-fenced after Active loss (no `:ok` seed RPO reads) |
+| N | `1dc-unclean-ddl` → `scripts/run-jepsen-unclean-ddl.sh` | unclean kill/revive **no purge** + DDL mix | register/append + DDL | Elle + **catalog epoch honesty** | dirty revive + catalog fence (self-heal) |
+| O | `1dc-sealed-miss` → `scripts/run-jepsen-sealed-miss.sh` | chaos + sealed-miss honesty (`JEPSEN_SEALED_MISS`) | append / STRICT EQ path | Elle + honesty | sealed header/miss heal (in-process C2) |
+| P | `1dc-sparse-catalog` → `scripts/run-jepsen-sparse-catalog.sh` | catalog apply lag / sparse AUTH | AUTH + DML | Elle + catalog honesty | sticky stale rotate; no silent wrong schema |
 
-Matrix driver (1-DC A–K + Multi-DC D–G/I + L/M): `scripts/run-jepsen-all-profiles.ps1` (calm host, sequential). Failures → lab summary only (no floor cuts).
+Matrix driver (1-DC A–K + N/O/P + Multi-DC D–G/I + L/M): `scripts/run-jepsen-all-profiles.ps1` (calm host, sequential). Failures → lab summary only (no floor cuts).
 
 Each cell: fresh cluster → register → **fresh cluster** → append → stamp → non-zero exit on FAIL.
-GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) matrix **A–M**.
+GHA: [`.github/workflows/jepsen-qg.yml`](../../.github/workflows/jepsen-qg.yml) matrix **A–P**.
 Default `runs-on: ubuntu-latest`. Local runner: PR label **`self-hosted`** (optional extra PR labels `Windows` / `Linux` / `macOS` / `X64` / `ARM64`), or `workflow_dispatch` **`runner_labels`**, or repo var **`JEPSEN_RUNNER_LABELS`**. `github` / `ubuntu-latest` / `hosted` force GitHub-hosted. Push/nightly stay on `ubuntu-latest`. Jepsen still requires PR label `jepsen` to run at all.
 Script flavor follows **`runner.os`**: Linux → bash (`.sh`); Windows → Windows PowerShell 5.1 (`powershell.exe`, not `pwsh`) for `run-jepsen-gha-cell.ps1` / `jepsen-env.ps1` / `dump-jepsen-cluster-logs.ps1`.
 Triggers: `workflow_dispatch`, nightly, push main/master, PR label `jepsen`.
@@ -45,6 +48,9 @@ Triggers: `workflow_dispatch`, nightly, push main/master, PR label `jepsen`.
 | `OrchidTipBehindRestartIT` | tip vs OpLog after persist wipe |
 | `RejoinAfterSealTruncateIT` | rejoin after seal+truncate gap (OpLog retired) |
 | `RestartMidLoadIT`, `MidSealCrashIT`, `PitrRestoreIT` | seal / archive / hydrate |
+| `CatalogLagFenceChaosIT`, `ApplyNackHealStormChaosIT` | stuck catalog fence + NACK coalesce |
+| `GridFsOrphanStagingBootPurgeTest`, `SealedIntegritySensorUtilCharacterizationTest` | boot tmp GC + sealed header sensor |
+| `OpLogMidFileCorruptObserveIT` | C6 observe-only (no mid-file invent heal) |
 
 ## Critical FAIL loop
 

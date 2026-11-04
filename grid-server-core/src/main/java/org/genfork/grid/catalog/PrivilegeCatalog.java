@@ -20,12 +20,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.security.spec.InvalidKeySpecException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -37,14 +34,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
-
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.PBEKeySpec;
-
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.fs.GridFs;
 
@@ -62,12 +53,6 @@ import org.genfork.grid.fs.GridFs;
 public final class PrivilegeCatalog {
 	public static final String META_FILE_NAME = "privileges.meta";
 	private static final int SALT_BYTES = 16;
-	private static final int PBKDF2_ITERATIONS = 120_000;
-	private static final int PBKDF2_KEY_BITS = 256;
-	private static final String PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256";
-	private static final String LEGACY_HASH_ALGORITHM = "SHA-256";
-	private static final int KDF_LEGACY_SHA256 = 1;
-	private static final int KDF_PBKDF2 = 2;
 	private static final String WILDCARD = "*";
 	private static final String KEY_SEPARATOR = "\0";
 	private static final int GRANT_KEY_PARTS = 3;
@@ -88,7 +73,6 @@ public final class PrivilegeCatalog {
 	 * reconnect storms; cleared on any user/role mutation. Does not weaken first-factor KDF.
 	 */
 	private final AtomicReference<CachedAuth> authSuccessCache = new AtomicReference<>();
-	private final AtomicInteger persistInvocations = new AtomicInteger(0);
 	private final Path metaFile;
 
 	public PrivilegeCatalog() {
@@ -118,7 +102,8 @@ public final class PrivilegeCatalog {
 			final byte[] salt = new byte[SALT_BYTES];
 			random.nextBytes(salt);
 			final boolean administrator = users.isEmpty();
-			final UserRecord record = new UserRecord(salt, hashPbkdf2(password, salt), administrator, KDF_PBKDF2);
+			final UserRecord record = new UserRecord(
+					salt, PrivilegeCryptoIoUtil.hashPbkdf2(password, salt), administrator, PrivilegeCryptoIoUtil.KDF_PBKDF2);
 			if (users.putIfAbsent(normalized, record) != null) {
 				throw new IllegalStateException("User already exists: " + normalized);
 			}
@@ -140,12 +125,12 @@ public final class PrivilegeCatalog {
 		mutateAndPersist(() -> {
 			final byte[] salt = new byte[SALT_BYTES];
 			random.nextBytes(salt);
-			final byte[] hash = hashPbkdf2(password, salt);
+			final byte[] hash = PrivilegeCryptoIoUtil.hashPbkdf2(password, salt);
 			final UserRecord existing = users.get(normalized);
 			if (existing == null) {
-				users.put(normalized, new UserRecord(salt, hash, true, KDF_PBKDF2));
+				users.put(normalized, new UserRecord(salt, hash, true, PrivilegeCryptoIoUtil.KDF_PBKDF2));
 			} else {
-				users.put(normalized, new UserRecord(salt, hash, true, KDF_PBKDF2));
+				users.put(normalized, new UserRecord(salt, hash, true, PrivilegeCryptoIoUtil.KDF_PBKDF2));
 			}
 			grantAllStarStarLocked(normalized);
 		});
@@ -173,7 +158,11 @@ public final class PrivilegeCatalog {
 			}
 			final byte[] salt = new byte[SALT_BYTES];
 			random.nextBytes(salt);
-			users.put(normalized, new UserRecord(salt, hashPbkdf2(newPassword, salt), existing.administrator(), KDF_PBKDF2));
+			users.put(normalized, new UserRecord(
+					salt,
+					PrivilegeCryptoIoUtil.hashPbkdf2(newPassword, salt),
+					existing.administrator(),
+					PrivilegeCryptoIoUtil.KDF_PBKDF2));
 		});
 	}
 
@@ -265,7 +254,9 @@ public final class PrivilegeCatalog {
 		}
 		final UserRecord record = users.get(normalized);
 		final boolean ok = record != null
-				&& MessageDigest.isEqual(record.passwordHash(), hashFor(record, password));
+				&& MessageDigest.isEqual(
+						record.passwordHash(),
+						PrivilegeCryptoIoUtil.hashFor(record.kdfKind(), record.salt(), password));
 		if (ok) {
 			authSuccessCache.set(new CachedAuth(normalized, password));
 		}
@@ -478,14 +469,6 @@ public final class PrivilegeCatalog {
 	}
 
 	/**
-	 * Disk write count for {@code privileges.meta} (tests: hydrate no-op / persist-if-changed).
-	 */
-	@VisibleForTesting
-	public int persistInvocations() {
-		return persistInvocations.get();
-	}
-
-	/**
 	 * Replace catalog contents from {@link #toSnapshotBytes()} payload.
 	 */
 	public void loadSnapshotBytes(byte[] bytes) {
@@ -528,23 +511,25 @@ public final class PrivilegeCatalog {
 			final Map<String, UserRecord> loadedUsers = new ConcurrentHashMap<>();
 			final int userCount = in.readInt();
 			for (int i = 0; i < userCount; i++) {
-				final String name = readUtf(in);
+				final String name = PrivilegeCryptoIoUtil.readUtf(in);
 				final int saltLen = in.readInt();
 				final byte[] salt = in.readNBytes(saltLen);
 				final int hashLen = in.readInt();
 				final byte[] passwordHash = in.readNBytes(hashLen);
 				final boolean administrator = in.readBoolean();
-				final int kdfKind = version == SNAPSHOT_VERSION_LEGACY ? KDF_LEGACY_SHA256 : in.readInt();
+				final int kdfKind = version == SNAPSHOT_VERSION_LEGACY
+						? PrivilegeCryptoIoUtil.KDF_LEGACY_SHA256
+						: in.readInt();
 				loadedUsers.put(name, new UserRecord(salt, passwordHash, administrator, kdfKind));
 			}
 			final Map<String, Set<SqlPrivilege>> loadedGrants = new ConcurrentHashMap<>();
 			final int grantCount = in.readInt();
 			for (int i = 0; i < grantCount; i++) {
-				final String grantKey = readUtf(in);
+				final String grantKey = PrivilegeCryptoIoUtil.readUtf(in);
 				final int privilegeCount = in.readInt();
 				final Set<SqlPrivilege> assigned = ConcurrentHashMap.newKeySet();
 				for (int p = 0; p < privilegeCount; p++) {
-					assigned.add(SqlPrivilege.valueOf(readUtf(in)));
+					assigned.add(SqlPrivilege.valueOf(PrivilegeCryptoIoUtil.readUtf(in)));
 				}
 				loadedGrants.put(grantKey, assigned);
 			}
@@ -554,25 +539,25 @@ public final class PrivilegeCatalog {
 			if (version >= SNAPSHOT_VERSION) {
 				final int roleCount = in.readInt();
 				for (int i = 0; i < roleCount; i++) {
-					loadedRoles.add(readUtf(in));
+					loadedRoles.add(PrivilegeCryptoIoUtil.readUtf(in));
 				}
 				final int membershipCount = in.readInt();
 				for (int i = 0; i < membershipCount; i++) {
-					final String user = readUtf(in);
+					final String user = PrivilegeCryptoIoUtil.readUtf(in);
 					final int roleCountForUser = in.readInt();
 					final Set<String> assigned = ConcurrentHashMap.newKeySet();
 					for (int r = 0; r < roleCountForUser; r++) {
-						assigned.add(readUtf(in));
+						assigned.add(PrivilegeCryptoIoUtil.readUtf(in));
 					}
 					loadedMemberships.put(user, assigned);
 				}
 				final int roleGrantCount = in.readInt();
 				for (int i = 0; i < roleGrantCount; i++) {
-					final String grantKey = readUtf(in);
+					final String grantKey = PrivilegeCryptoIoUtil.readUtf(in);
 					final int privilegeCount = in.readInt();
 					final Set<SqlPrivilege> assigned = ConcurrentHashMap.newKeySet();
 					for (int p = 0; p < privilegeCount; p++) {
-						assigned.add(SqlPrivilege.valueOf(readUtf(in)));
+						assigned.add(SqlPrivilege.valueOf(PrivilegeCryptoIoUtil.readUtf(in)));
 					}
 					loadedRoleGrants.put(grantKey, assigned);
 				}
@@ -624,7 +609,6 @@ public final class PrivilegeCatalog {
 		}
 		try {
 			GridFs.writeAtomic(metaFile, snapshot);
-			persistInvocations.incrementAndGet();
 		} catch (IOException ex) {
 			throw new IllegalStateException("Failed to persist privilege catalog " + metaFile, ex);
 		}
@@ -638,7 +622,7 @@ public final class PrivilegeCatalog {
 			out.writeInt(SNAPSHOT_VERSION);
 			out.writeInt(users.size());
 			for (Map.Entry<String, UserRecord> entry : users.entrySet()) {
-				writeUtf(out, entry.getKey());
+				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
 				final UserRecord record = entry.getValue();
 				out.writeInt(record.salt().length);
 				out.write(record.salt());
@@ -649,30 +633,30 @@ public final class PrivilegeCatalog {
 			}
 			out.writeInt(grants.size());
 			for (Map.Entry<String, Set<SqlPrivilege>> entry : grants.entrySet()) {
-				writeUtf(out, entry.getKey());
+				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
 				out.writeInt(entry.getValue().size());
 				for (SqlPrivilege privilege : entry.getValue()) {
-					writeUtf(out, privilege.name());
+					PrivilegeCryptoIoUtil.writeUtf(out, privilege.name());
 				}
 			}
 			out.writeInt(roles.size());
 			for (String role : roles) {
-				writeUtf(out, role);
+				PrivilegeCryptoIoUtil.writeUtf(out, role);
 			}
 			out.writeInt(memberships.size());
 			for (Map.Entry<String, Set<String>> entry : memberships.entrySet()) {
-				writeUtf(out, entry.getKey());
+				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
 				out.writeInt(entry.getValue().size());
 				for (String role : entry.getValue()) {
-					writeUtf(out, role);
+					PrivilegeCryptoIoUtil.writeUtf(out, role);
 				}
 			}
 			out.writeInt(roleGrants.size());
 			for (Map.Entry<String, Set<SqlPrivilege>> entry : roleGrants.entrySet()) {
-				writeUtf(out, entry.getKey());
+				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
 				out.writeInt(entry.getValue().size());
 				for (SqlPrivilege privilege : entry.getValue()) {
-					writeUtf(out, privilege.name());
+					PrivilegeCryptoIoUtil.writeUtf(out, privilege.name());
 				}
 			}
 			out.flush();
@@ -722,45 +706,6 @@ public final class PrivilegeCatalog {
 
 	private static String normalize(String value) {
 		return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
-	}
-
-	private static byte[] hashFor(UserRecord record, String password) {
-		if (record.kdfKind() == KDF_PBKDF2) {
-			return hashPbkdf2(password, record.salt());
-		}
-		return hashLegacySha256(password, record.salt());
-	}
-
-	private static byte[] hashPbkdf2(String password, byte[] salt) {
-		try {
-			final PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, PBKDF2_KEY_BITS);
-			final SecretKeyFactory factory = SecretKeyFactory.getInstance(PBKDF2_ALGORITHM);
-			return factory.generateSecret(spec).getEncoded();
-		} catch (NoSuchAlgorithmException | InvalidKeySpecException ex) {
-			throw new IllegalStateException(PBKDF2_ALGORITHM + " unavailable", ex);
-		}
-	}
-
-	private static byte[] hashLegacySha256(String password, byte[] salt) {
-		try {
-			final MessageDigest digest = MessageDigest.getInstance(LEGACY_HASH_ALGORITHM);
-			digest.update(salt);
-			return digest.digest(password.getBytes(StandardCharsets.UTF_8));
-		} catch (NoSuchAlgorithmException ex) {
-			throw new IllegalStateException(LEGACY_HASH_ALGORITHM + " unavailable", ex);
-		}
-	}
-
-	private static void writeUtf(DataOutputStream out, String value) throws IOException {
-		final byte[] raw = value.getBytes(StandardCharsets.UTF_8);
-		out.writeInt(raw.length);
-		out.write(raw);
-	}
-
-	private static String readUtf(DataInputStream in) throws IOException {
-		final int length = in.readInt();
-		final byte[] raw = in.readNBytes(length);
-		return new String(raw, StandardCharsets.UTF_8);
 	}
 
 	/**

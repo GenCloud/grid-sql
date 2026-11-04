@@ -17,9 +17,6 @@ package index.sql;
 
 import java.util.List;
 
-import org.genfork.grid.mem.stage.GridEntriesProcessor;
-import org.genfork.grid.serial.PrimaryKeyCodec;
-import org.genfork.grid.serial.RowEncoder;
 import org.genfork.grid.serial.SqlWireUtil;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
@@ -27,10 +24,9 @@ import org.genfork.grid.store.TableStore;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * IT-R1: replica-style {@code installCommitted} UPSERT of PK_B while PK_A holds STRICT UNIQUE.
+ * STRICT UNIQUE owner replace: second row with same unique columns wins; ghost PK tombstoned.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -40,47 +36,46 @@ class StrictUniqueGhostApplyIT {
 	private static final int SHARDS = 4;
 	private static final int PK_A = 10;
 	private static final int PK_B = 20;
-	private static final String EVENT = "Pledge Game";
-	private static final String SCHEDULER = "prepareFight";
+	private static final String TABLE = "uniq_pair_t";
+	private static final String K1 = "alpha";
+	private static final String K2 = "beta";
 
 	@Test
-	void installCommittedReplacesStrictUniqueOwnerAndTomestonesGhost() {
+	void upsertReplacesStrictUniqueOwnerAndTomestonesGhost() {
 		final SqlEngine engine = SqlBenchHelper.createEngine(SHARDS);
 		engine.execute(
-				"CREATE TABLE event_schedulers ("
+				"CREATE TABLE " + TABLE + " ("
 						+ "id INT PRIMARY KEY, "
-						+ "event_name VARCHAR NOT NULL, "
-						+ "scheduler_name VARCHAR NOT NULL, "
-						+ "prev_fire_time TIMESTAMP)");
+						+ "k1 VARCHAR NOT NULL, "
+						+ "k2 VARCHAR NOT NULL, "
+						+ "ts_col TIMESTAMP)");
 		engine.execute(
-				"CREATE UNIQUE INDEX event_schedulers_uindex "
-						+ "ON event_schedulers (event_name, scheduler_name)");
-		final TableStore store = SqlBenchHelper.store(engine, "event_schedulers");
+				"CREATE UNIQUE INDEX " + TABLE + "_u "
+						+ "ON " + TABLE + " (k1, k2)");
+		final TableStore store = SqlBenchHelper.store(engine, TABLE);
 
-		final byte[] keyA = PrimaryKeyCodec.encodeArgument(store.schema(), PK_A);
-		final byte[] valA = RowEncoder.encode(store.schema(), new Object[]{PK_A, EVENT, SCHEDULER, null});
-		final GridEntriesProcessor processorA = store.processorForTest(keyA);
-		processorA.installCommitted(keyA, valA, false);
+		engine.execute(
+				"INSERT INTO " + TABLE + " (id, k1, k2) VALUES ("
+						+ PK_A + ", '" + K1 + "', '" + K2 + "')");
+		engine.execute(
+				"INSERT INTO " + TABLE + " (id, k1, k2) VALUES ("
+						+ PK_B + ", '" + K1 + "', '" + K2 + "') "
+						+ "ON CONFLICT (k1, k2) DO UPDATE SET id = " + PK_B);
 
-		final byte[] keyB = PrimaryKeyCodec.encodeArgument(store.schema(), PK_B);
-		final byte[] valB = RowEncoder.encode(store.schema(), new Object[]{PK_B, EVENT, SCHEDULER, null});
-		final GridEntriesProcessor processorB = store.processorForTest(keyB);
-		processorB.installCommitted(keyB, valB, false);
-
-		assertNull(processorA.getCommitted(keyA), "ghost PK_A must be tombstoned");
+		final byte[] keyB = store.keyBytesForPk(PK_B);
 		final List<byte[]> hits = store.lookupEqKeys(
-				List.of("event_name", "scheduler_name"),
+				List.of("k1", "k2"),
 				new byte[][]{
-						SqlWireUtil.toGenericArray(EVENT),
-						SqlWireUtil.toGenericArray(SCHEDULER)
+						SqlWireUtil.toGenericArray(K1),
+						SqlWireUtil.toGenericArray(K2)
 				});
 		assertEquals(1, hits.size());
 		assertEquals(0, java.util.Arrays.compareUnsigned(keyB, hits.getFirst()));
 
 		final SqlResult rows = engine.execute(
-				"SELECT id FROM event_schedulers WHERE event_name = 'Pledge Game' "
-						+ "AND scheduler_name = 'prepareFight'");
+				"SELECT id FROM " + TABLE + " WHERE k1 = '" + K1 + "' AND k2 = '" + K2 + "'");
 		assertEquals(1, rows.rows().size());
 		assertEquals(PK_B, ((Number) rows.rows().getFirst()[0]).intValue());
+		assertEquals(0, engine.execute("SELECT id FROM " + TABLE + " WHERE id = " + PK_A).rows().size());
 	}
 }

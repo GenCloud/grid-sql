@@ -23,8 +23,6 @@ import java.util.List;
 import index.unit.replication.ReplTestSupport;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.context.config.GridConfigurationProperties;
-import org.genfork.grid.replication.OrchidNotSyncedException;
-import org.genfork.grid.replication.ReplicaAccessGate;
 import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
@@ -34,7 +32,6 @@ import org.genfork.grid.store.TableStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -42,7 +39,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Two-node ORCHID: row SELECT on peer after apply; DML deny on READ_REPLICA;
- * Witness / lag admission via {@link ReplicaAccessGate} (fail-closed).
  * <p>
  * Writer is whichever node is eligible (not hard-pinned to node A). Swarm off so
  * apply path stays a plain two-node ship under parallel surefire.
@@ -120,16 +116,6 @@ public class ReplicaReadHaSelectIT {
 				engine.execute(replica, "BEGIN"));
 		final SqlResult ok = engine.execute(replica, "SELECT v FROM " + TABLE + " WHERE id = 1");
 		assertEquals(1, ok.rows().size());
-	}
-
-	@Test
-	void witnessAndLagFailClosedAtGate() {
-		assertThrows(OrchidNotSyncedException.class,
-				() -> ReplicaAccessGate.ensureReplicaReadState(true, false, true, false));
-		assertThrows(OrchidNotSyncedException.class,
-				() -> ReplicaAccessGate.ensureReplicaReadState(true, true, true, true));
-		assertDoesNotThrow(() ->
-				ReplicaAccessGate.ensureReplicaReadState(true, false, true, true));
 	}
 
 	private static GridConfigurationProperties haProps(

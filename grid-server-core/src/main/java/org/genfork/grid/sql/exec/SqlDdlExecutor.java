@@ -28,6 +28,7 @@ import org.genfork.grid.catalog.SequenceDef;
 import org.genfork.grid.catalog.FkDef;
 import org.genfork.grid.catalog.FkAction;
 import org.genfork.grid.catalog.IndexDef;
+import org.genfork.grid.catalog.SyntheticPkIndexUtil;
 import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableCatalog.ViewDef;
@@ -43,6 +44,7 @@ import org.genfork.grid.sql.SqlNamedQueryExpand;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.sql.SqlStatementParser;
+import org.genfork.grid.sql.util.CatalogDdlEpochUtil;
 import org.genfork.grid.sql.ast.DdlAst.AlterTableSql;
 import org.genfork.grid.sql.ast.DdlAst.CheckSpec;
 import org.genfork.grid.sql.ast.DdlAst.ColumnSpec;
@@ -103,9 +105,10 @@ public final class SqlDdlExecutor {
 		final String table = tables.resolveTable(session, s.table());
 		if (catalog.exists(table)) {
 			if (s.ifNotExists() || applyingReplicatedDdl.get()) {
-				if (catalog.getStore(table) == null) {
-					final TableSchema existing = catalog.getSchema(table);
-					if (existing != null) {
+				final TableSchema existing = catalog.getSchema(table);
+				if (existing != null) {
+					catalog.ensureIdentitySequences(existing);
+					if (catalog.getStore(table) == null) {
 						tables.ensureStore(existing);
 					}
 				}
@@ -116,7 +119,7 @@ public final class SqlDdlExecutor {
 		// Fail closed before catalog mutate: non-writer publish used to leave orphan tables
 		// (first CREATE applied locally, OpLog ship threw, remaining CREATE skipped).
 		ensureDdlWriteAdmission();
-		final TableSchema.Builder b = TableSchema.builder(table).schemaEpoch(catalog.nextEpoch());
+		final TableSchema.Builder b = TableSchema.builder(table).schemaEpoch(CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get()));
 		final List<SequenceDef> identitySequences = new ArrayList<>();
 		for (ColumnSpec col : s.columns()) {
 			final SqlType type = SqlType.fromToken(col.typeToken());
@@ -231,7 +234,7 @@ public final class SqlDdlExecutor {
 		if (created) {
 			final String persist = SqlDdlRender.createSequence(s, name);
 			catalog.appendDdl(persist);
-			publishDdl(persist, catalog.nextEpoch());
+			publishDdl(persist, CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get()));
 		}
 		return SqlResult.ddl(SqlStatementTag.CREATE_SEQUENCE);
 	}
@@ -243,7 +246,7 @@ public final class SqlDdlExecutor {
 		catalog.dropSequence(name, s.ifExists() || applyingReplicatedDdl.get());
 		final String persist = SqlDdlRender.dropSequence(s, name);
 		catalog.appendDdl(persist);
-		publishDdl(persist, catalog.nextEpoch());
+		publishDdl(persist, CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get()));
 		return SqlResult.ddl(SqlStatementTag.DROP_SEQUENCE);
 	}
 
@@ -275,7 +278,7 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("Table not found: " + table);
 		}
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		catalog.dropTable(table);
 		final String persist = SqlDdlRender.dropTable(s, table);
 		catalog.appendDdl(persist);
@@ -300,7 +303,7 @@ public final class SqlDdlExecutor {
 			throw new IllegalStateException("Index already exists: " + s.indexName());
 		}
 		final IndexDef def = IndexDef.of(s.indexName(), s.kind(), s.columns().toArray(String[]::new));
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		final boolean replay = applyingReplicatedDdl.get();
 		store.addIndex(def, epoch, !replay);
 		catalog.replaceSchema(store.schema());
@@ -329,7 +332,20 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("Index not found: " + s.indexName());
 		}
-		final long epoch = catalog.nextEpoch();
+		final IndexDef existing = store.schema().findIndex(s.indexName());
+		final IndexDef named = existing != null ? existing : store.index().findNamedIndex(s.indexName());
+		// Live DROP of synthetic PK is fail-closed. OpLog/peer apply may still carry a pre-guard
+		// DROP — skip as noop so restart does not APPLY_NACK the catalog stream.
+		if (SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndex(store.schema(), named)
+				|| SyntheticPkIndexUtil.isSyntheticPrimaryKeyIndexName(
+						store.schema().catalogKey(), s.indexName())) {
+			if (applyingReplicatedDdl.get()) {
+				return SqlResult.ddl(SqlStatementTag.DROP_INDEX);
+			}
+			throw new IllegalStateException(SyntheticPkIndexUtil.cannotDropMessage(
+					named != null ? named.name() : s.indexName()));
+		}
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		store.dropIndex(s.indexName(), epoch);
 		catalog.replaceSchema(store.schema());
 		if (!applyingReplicatedDdl.get()) {
@@ -351,7 +367,7 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("Schema already exists: " + s.schema());
 		}
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		catalog.createSchema(s.schema(), false);
 		final String persist = SqlDdlRender.createSchema(s);
 		catalog.appendDdl(persist);
@@ -371,7 +387,7 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("Schema not found: " + s.schema());
 		}
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		catalog.dropSchema(s.schema(), s.ifExists(), catalog.isDdlReplay());
 		final String persist = SqlDdlRender.dropSchema(s);
 		catalog.appendDdl(persist);
@@ -393,7 +409,7 @@ public final class SqlDdlExecutor {
 		final TableCatalog catalog = tables.catalog();
 		final String table = tables.resolveTable(session, s.table());
 		final TableStore store = tables.requireStore(table);
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		final TableSchema next;
 		FkDef resolvedAddFk = null;
 		if (s.dropConstraintName() != null) {
@@ -482,7 +498,7 @@ public final class SqlDdlExecutor {
 		// DDL edge: qualify before parse/infer; createView qualifies again (idempotent).
 		final String body = qualifyViewBody(table, s.selectSql());
 		final List<ColumnDef> viewCols = inferViewColumns(session, body);
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		final ViewDef created = catalog.createView(table, body, false, 0L, 0L, viewCols);
 		SqlNamedQueryExpand.clearCache();
 		final String persist = SqlDdlRender.createView(table, created.selectSql());
@@ -502,7 +518,7 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("View not found: " + table);
 		}
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		catalog.dropView(table, false);
 		SqlNamedQueryExpand.clearCache();
 		if (existing.materialized() && catalog.exists(table)) {
@@ -532,7 +548,7 @@ public final class SqlDdlExecutor {
 		final SelectSql schemaSelect = schemaSelectFromMvBody(body);
 		final List<ColumnDef> sourceCols = mvSourceColumns(session, schemaSelect);
 		final List<ColumnDef> mvCols = SqlMaterializedViewSchemaUtil.resolveColumns(sourceCols, schemaSelect);
-		final TableSchema.Builder b = TableSchema.builder(table).schemaEpoch(catalog.nextEpoch());
+		final TableSchema.Builder b = TableSchema.builder(table).schemaEpoch(CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get()));
 		SqlMaterializedViewSchemaUtil.applyToBuilder(b, mvCols);
 		final TableSchema schema = catalog.createTable(b.build());
 		tables.ensureStore(schema);
@@ -573,7 +589,7 @@ public final class SqlDdlExecutor {
 		for (Object[] row : data.rows()) {
 			store.putIndexed(row);
 		}
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		catalog.noteViewRefreshed(table, epoch, catalog.currentEpoch());
 		final String persist = SqlDdlRender.refreshMaterializedView(table);
 		catalog.appendDdl(persist);
@@ -644,15 +660,21 @@ public final class SqlDdlExecutor {
 	}
 
 	private void publishDdl(String sql, long schemaEpoch) {
-		tables.catalog().noteAppliedDdlEpoch(schemaEpoch);
 		if (applyingReplicatedDdl.get()) {
+			// Remote stamp already on schema; SqlEngine notes applied after execute.
 			return;
+		}
+		final TableCatalog catalog = tables.catalog();
+		final long applied = catalog.maxAppliedDdlEpoch();
+		if (schemaEpoch > 0L && schemaEpoch < applied) {
+			throw new IllegalStateException(
+					"stale schema epoch localApplied=" + applied + " remote=" + schemaEpoch);
 		}
 		final ReplicationCoordinator repl = tables.replication();
-		if (repl == null || !repl.isEnabled()) {
-			return;
+		if (repl != null && repl.isEnabled()) {
+			repl.recordDdl(sql, schemaEpoch);
 		}
-		repl.recordDdl(sql, schemaEpoch);
+		catalog.noteAppliedDdlEpoch(schemaEpoch);
 	}
 
 	/**
@@ -667,6 +689,13 @@ public final class SqlDdlExecutor {
 			return;
 		}
 		ReplicaAccessGate.ensureWrite(repl);
+		if (repl.shouldDenyCatalogDdlMint()) {
+			throw new IllegalStateException(
+					"catalog apply lag or peer catalog ahead; catch-up before DDL mint lag="
+							+ repl.catalogApplyLag()
+							+ " peerApplied=" + repl.maxPeerCatalogAppliedEpoch()
+							+ " localApplied=" + repl.catalogAppliedEpoch());
+		}
 	}
 
 	public SqlResult createTrigger(SqlSession session, CreateTriggerSql s) {
@@ -685,7 +714,7 @@ public final class SqlDdlExecutor {
 				TriggerGranularity.valueOf(s.granularityToken().toUpperCase(Locale.ROOT));
 		final TriggerDef def = SqlTriggerBodyCompiler.compile(
 				s.name(), table, timing, event, granularity, s.whenSqlOrNull(), s.bodySql());
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		catalog.createTrigger(def);
 		final String persist = SqlDdlRender.createTrigger(
 				s.name(), s.timingToken(), s.eventToken(), s.granularityToken(),
@@ -707,7 +736,7 @@ public final class SqlDdlExecutor {
 			}
 			throw new IllegalStateException("Trigger not found: " + s.name());
 		}
-		final long epoch = catalog.nextEpoch();
+		final long epoch = CatalogDdlEpochUtil.allocate(catalog, applyingReplicatedDdl.get());
 		catalog.dropTrigger(s.name(), s.ifExists(), tableOrNull);
 		final String persist = SqlDdlRender.dropTrigger(s.name(), s.ifExists(), tableOrNull);
 		catalog.appendDdl(persist);

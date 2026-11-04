@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.orchid;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -834,25 +833,6 @@ public class OrchidNode {
 	}
 
 	/**
-	 * Test hook: mark a peer seen with an advertised committed tip (tip-behind admit IT).
-	 *
-	 * @param peerId       peer node id (must be non-null)
-	 * @param committedSeq tip to advertise ({@code >} local tip triggers fail-closed admit)
-	 */
-	@VisibleForTesting
-	public void testingNotePeerCommittedSeq(String peerId, long committedSeq) {
-		if (peerId == null || peerId.isEmpty() || committedSeq < 0L) {
-			return;
-		}
-		final PeerView view = peers.computeIfAbsent(peerId, PeerView::new);
-		view.seen = true;
-		if (committedSeq > view.lastCommittedSeq) {
-			view.lastCommittedSeq = committedSeq;
-		}
-		noteObservedPeerCommittedSeq(committedSeq);
-	}
-
-	/**
 	 * Locally commit contiguous proposes we digested but never received a commit for
 	 * (proposer crashed mid-broadcast — same-DC unclean kill or cross-DC Active loss).
 	 * Prevents tip holes / silent drop of quorum-acked ops. Serializes on
@@ -1357,95 +1337,6 @@ public class OrchidNode {
 	}
 
 	/**
-	 * Test hook: run contiguous commit drain (post-admit path).
-	 */
-	@VisibleForTesting
-	public void testingRequestCommitDrain() {
-		requestCommitDrain();
-	}
-
-	/**
-	 * Test hook: record a digest ACK without triggering drain (characterization).
-	 */
-	@VisibleForTesting
-	public boolean testingPutDigestAck(String fromNodeId, long proposeId, long digest) {
-		final PendingPropose pendingPropose = pending.get(proposeId);
-		if (pendingPropose == null) {
-			return false;
-		}
-		pendingPropose.acks.put(fromNodeId, digest);
-		return true;
-	}
-
-	/**
-	 * Test hook: clear live seen bit without isolate (keeps ACK path open).
-	 */
-	@VisibleForTesting
-	public void testingMarkPeerUnseen(String peerId) {
-		if (peerId == null) {
-			return;
-		}
-		final PeerView view = peers.get(peerId);
-		if (view != null) {
-			view.seen = false;
-		}
-	}
-
-	/**
-	 * Test hook: Op digest used for quorum ACKs.
-	 */
-	@VisibleForTesting
-	public long testingDigestOf(ReplicationOp op) {
-		return digestOf(op);
-	}
-
-	/**
-	 * Test hook: backdate admit wall-clock for digest-timeout characterization.
-	 */
-	@VisibleForTesting
-	public boolean testingBackdateAdmit(long proposeId, long admittedAtMs) {
-		final PendingPropose pendingPropose = pending.get(proposeId);
-		if (pendingPropose == null) {
-			return false;
-		}
-		pendingPropose.admittedAtMs = admittedAtMs;
-		return true;
-	}
-
-	/**
-	 * Test hook: run local digest-timeout expiry (Kuramoto tick path).
-	 */
-	@VisibleForTesting
-	public void testingExpireStaleLocalProposes() {
-		expireStaleLocalProposes();
-	}
-
-	/**
-	 * Test hook: whether a remote propose is buffered (claim-seal / peer-lag path).
-	 */
-	@VisibleForTesting
-	public boolean testingRemoteInflightContains(long proposeId) {
-		return remoteInflightExpected.containsKey(proposeId);
-	}
-
-	/**
-	 * Test hook: out-of-order peer commit holdback size (contiguous drain pending).
-	 */
-	@VisibleForTesting
-	public int testingCommitHoldbackSize() {
-		return commitHoldback.size();
-	}
-
-	/**
-	 * Test hook: oldest unfinished local propose id, or {@code -1} when idle.
-	 */
-	@VisibleForTesting
-	public long testingOldestPendingProposeId() {
-		final PendingPropose oldest = oldestUnfinishedPropose();
-		return oldest == null ? -1L : oldest.proposeId;
-	}
-
-	/**
 	 * Commit one propose at tip: apply locally, complete join, broadcast.
 	 * Does not recurse into successor drain.
 	 */
@@ -1841,10 +1732,7 @@ public class OrchidNode {
 		final ReplicationOp op;
 		final CompletableFuture<Long> future;
 		final Map<String, Long> acks = new ConcurrentHashMap<>();
-		/**
-		 * Wall-clock admit time for {@link OrchidNode#expireStaleLocalProposes()}.
-		 * Tests may backdate via {@link OrchidNode#testingBackdateAdmit(long, long)}.
-		 */
+		/** Wall-clock admit time for {@link OrchidNode#expireStaleLocalProposes()}. */
 		volatile long admittedAtMs;
 		private final Runnable flightUnlock;
 		private final AtomicBoolean flightReleased = new AtomicBoolean();

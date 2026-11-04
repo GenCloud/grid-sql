@@ -19,6 +19,7 @@ import org.genfork.grid.catalog.IndexDef;
 import org.genfork.grid.catalog.SqlType;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.mem.index.GridCompositeIndex;
+import org.genfork.grid.mem.index.IndexColumnResolveUtil;
 import org.genfork.grid.mem.index.IndexType;
 import org.junit.jupiter.api.Test;
 
@@ -52,13 +53,13 @@ class DropNamedIndexCompositeRemoveTest {
 		final IndexDef def = IndexDef.of(INDEX, IndexType.STRICT, COLS.toArray(String[]::new));
 		final TableSchema withIndex = schema.withIndex(def, 1L);
 		index.addNamedIndex(def, withIndex);
-		assertNotNull(index.resolveCompositeIndex(COLS));
+		assertNotNull(IndexColumnResolveUtil.resolveCompositeIndex(index.compositeIndexMap(), COLS));
 		assertTrue(index.hasNamedIndex(INDEX));
 
 		index.dropNamedIndex(INDEX);
 
 		assertFalse(index.hasNamedIndex(INDEX));
-		assertNull(index.resolveCompositeIndex(COLS));
+		assertNull(IndexColumnResolveUtil.resolveCompositeIndex(index.compositeIndexMap(), COLS));
 		index.cancelDumpStats();
 	}
 }

@@ -26,7 +26,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -179,12 +178,10 @@ public final class OpLogArchiveStreamer {
 		}
 	}
 
-	@VisibleForTesting
 	static Path streamDir(Path streamRoot, String domain, int shard) {
 		return streamRoot.resolve(SealedShardPack.domainHex(domain) + "_" + shard);
 	}
 
-	@VisibleForTesting
 	static void writeCursor(Path streamRoot, String domain, int shard, long lastSeq) {
 		final Path dir = streamDir(streamRoot, domain, shard);
 		try {

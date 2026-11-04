@@ -15,10 +15,10 @@
  */
 package org.genfork.grid.mem.stage;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.index.GridCompositeIndex;
+import org.genfork.grid.mem.index.IndexProbeMailbox;
 import org.genfork.grid.mem.index.IndexType;
 import org.genfork.grid.mem.index.btree.BPValueHelper;
 import org.genfork.grid.mem.stage.GridEntriesProcessor.AddEntry;
@@ -45,6 +45,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -102,16 +103,6 @@ public class GridIndexWorker implements Runnable {
 
 	public void add(Entry entry) {
 		queue.addLast(entry);
-	}
-
-	/**
-	 * Pending async index entries (background {@link #run} drain). Product SQL and
-	 * {@code installCommitted} / sealed miss warm use sync {@code indexNow*}; this depth
-	 * is for remaining staged queue paths only.
-	 */
-	@VisibleForTesting
-	public int pendingQueueSize() {
-		return queue.size();
 	}
 
 	/**
@@ -301,20 +292,29 @@ public class GridIndexWorker implements Runnable {
 	}
 
 	/**
-	 * Enqueue BPTree mutation on logic VT mailbox; await completion without a monitor.
+	 * Product probe mailbox: same {@link #mutationQueue} as put/remove (VT-safe, no monitor).
 	 */
-	private void runMutationAndAwait(Runnable mutation) {
+	public IndexProbeMailbox probeMailbox() {
+		return this::callOnIndexMailbox;
+	}
+
+	/**
+	 * Enqueue work on the index mailbox; await without a monitor.
+	 * <p>
+	 * Used for BPTree mutations and RAM probes ({@link IndexProbeMailbox}).
+	 * Re-entrant when already draining the mailbox.
+	 */
+	public <T> T callOnIndexMailbox(Supplier<T> action) {
+		Objects.requireNonNull(action, "action");
 		if (Boolean.TRUE.equals(ON_INDEX_MAILBOX.get())) {
-			mutation.run();
-			return;
+			return action.get();
 		}
-		final CompletableFuture<Void> done = new CompletableFuture<>();
+		final CompletableFuture<T> done = new CompletableFuture<>();
 		final ExecutorService logic = ThreadService.getLogicExecutor();
 		mutationQueue.submit(logic, () -> {
 			ON_INDEX_MAILBOX.set(Boolean.TRUE);
 			try {
-				mutation.run();
-				done.complete(null);
+				done.complete(action.get());
 			} catch (Throwable t) {
 				done.completeExceptionally(t);
 			} finally {
@@ -322,14 +322,24 @@ public class GridIndexWorker implements Runnable {
 			}
 		});
 		try {
-			done.join();
+			return done.join();
 		} catch (CompletionException ex) {
 			final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
 			if (cause instanceof RuntimeException runtime) {
 				throw runtime;
 			}
-			throw new IllegalStateException("index mutation failed", cause);
+			throw new IllegalStateException("index mailbox work failed", cause);
 		}
+	}
+
+	/**
+	 * Enqueue BPTree mutation on logic VT mailbox; await completion without a monitor.
+	 */
+	private void runMutationAndAwait(Runnable mutation) {
+		callOnIndexMailbox(() -> {
+			mutation.run();
+			return null;
+		});
 	}
 
 	/**

@@ -40,6 +40,9 @@ declare -A CELL_SCRIPT=(
   [K]="benchmarks/jepsen/scripts/run-jepsen-join.sh"
   [L]="benchmarks/jepsen/multidc/scripts/run-multidc-swarm.sh"
   [M]="benchmarks/jepsen/multidc/scripts/run-multidc-join.sh"
+  [N]="benchmarks/jepsen/scripts/run-jepsen-unclean-ddl.sh"
+  [O]="benchmarks/jepsen/scripts/run-jepsen-sealed-miss.sh"
+  [P]="benchmarks/jepsen/scripts/run-jepsen-sparse-catalog.sh"
 )
 
 declare -A CELL_CONFIG=(
@@ -56,6 +59,9 @@ declare -A CELL_CONFIG=(
   [K]="1dc-join-shards"
   [L]="multidc-async-swarm"
   [M]="multidc-async-join"
+  [N]="1dc-unclean-ddl"
+  [O]="1dc-sealed-miss"
+  [P]="1dc-sparse-catalog"
 )
 
 require_file "$COVERAGE"
@@ -63,7 +69,7 @@ require_file "$WORKFLOW"
 require_execish "$ROOT/benchmarks/jepsen/scripts/jepsen-honesty-gate.sh"
 require_execish "$ROOT/benchmarks/jepsen/scripts/qg-gate.sh"
 
-for id in A B C D E F G H I J K L M; do
+for id in A B C D E F G H I J K L M N O P; do
   cfg="${CELL_CONFIG[$id]}"
   script="${CELL_SCRIPT[$id]}"
   require_execish "$ROOT/$script"
@@ -95,5 +101,5 @@ if [[ "$fail" -ne 0 ]]; then
   echo "Jepsen GHA matrix validation FAILED" >&2
   exit 1
 fi
-echo "Jepsen GHA matrix validation OK (A-M + honesty-gate + scripts)"
+echo "Jepsen GHA matrix validation OK (A-P + honesty-gate + scripts)"
 exit 0

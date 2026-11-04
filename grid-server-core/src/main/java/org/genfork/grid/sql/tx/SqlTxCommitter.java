@@ -23,7 +23,6 @@ import org.genfork.grid.replication.apply.ReplicaApplier;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.netty.NettyReplicationTransport;
 import org.genfork.grid.replication.tx.StreamCommitSerializer;
-import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.sql.SqlSession;
 import org.genfork.grid.store.TableStore;
@@ -86,12 +85,12 @@ public final class SqlTxCommitter {
 			return;
 		}
 		final boolean repl = replication != null && replication.isEnabled();
-		final List<Installed> installed = new ArrayList<>();
+		final List<SqlTxCommitMappingUtil.InstalledRollback> installed = new ArrayList<>();
 		final MultiShardCommitBarrier barrier = new MultiShardCommitBarrier();
 		for (SqlTxBuffer.Participation p : buf.participations()) {
 			barrier.registerStream(p.table(), p.shard());
 		}
-		final byte[] envelopeValue = encodeEnvelope(buf);
+		final byte[] envelopeValue = SqlTxCommitMappingUtil.encodeEnvelope(buf);
 		final boolean singleStream = barrier.participatingStreams().size() == 1;
 		if (VisibilityDiag.enabled()) {
 			final StringBuilder streams = new StringBuilder();
@@ -139,11 +138,11 @@ public final class SqlTxCommitter {
 					}
 					final Runnable multiCommit = () -> {
 						barrier.beginAllBatch(streams -> replication.recordTxMarkersBatch(
-								ReplicationOpType.TX_BEGIN, buf.txId(), toStreamRefs(streams), envelopeValue));
+								ReplicationOpType.TX_BEGIN, buf.txId(), SqlTxCommitMappingUtil.toStreamRefs(streams), envelopeValue));
 						barrier.markOps();
 						flushDirty(buf, installed);
 						barrier.endAllBatch(streams -> replication.recordTxMarkersBatch(
-								ReplicationOpType.TX_COMMIT, buf.txId(), toStreamRefs(streams), null));
+								ReplicationOpType.TX_COMMIT, buf.txId(), SqlTxCommitMappingUtil.toStreamRefs(streams), null));
 					};
 					if (serializer != null) {
 						serializer.runWithLocks(streamKeys, multiCommit);
@@ -167,7 +166,7 @@ public final class SqlTxCommitter {
 			}
 			finishForUpdatePrepare(session, buf, false);
 			if (!repl) {
-				restoreInstalled(installed);
+				SqlTxCommitMappingUtil.restoreInstalled(installed);
 			} else {
 				barrier.abortBegun(sk -> {
 					try {
@@ -208,39 +207,35 @@ public final class SqlTxCommitter {
 		DistForUpdatePrepareVotes.finish(session, buf, netty, commit);
 	}
 
-	private static byte[] encodeEnvelope(SqlTxBuffer buf) {
-		final List<TxEnvelopeCodec.StreamRef> streams = new ArrayList<>();
-		for (SqlTxBuffer.Participation p : buf.participations()) {
-			streams.add(new TxEnvelopeCodec.StreamRef(p.table(), p.shard()));
-		}
-		return TxEnvelopeCodec.encode(streams);
-	}
-
-	private void flushDirtyAsUnits(SqlTxBuffer buf, byte[] beginValue, List<Installed> installed) {
+	private void flushDirtyAsUnits(
+			SqlTxBuffer buf,
+			byte[] beginValue,
+			List<SqlTxCommitMappingUtil.InstalledRollback> installed
+	) {
 		final Map<MultiShardCommitBarrier.StreamKey, List<SqlTxBuffer.DirtyEntry>> byStream =
 				groupByStream(buf);
 		for (Map.Entry<MultiShardCommitBarrier.StreamKey, List<SqlTxBuffer.DirtyEntry>> se
 				: byStream.entrySet()) {
 			final TableStore store = catalog.getStore(se.getKey().table());
-			final List<TableStore.TxFlushOp> batch = toFlushOps(se.getValue());
+			final List<TableStore.TxFlushOp> batch = SqlTxCommitMappingUtil.toFlushOps(se.getValue());
 			final List<TableStore.PriorBytes> priors =
 					store.flushTxUnit(buf.txId(), beginValue, batch);
 			for (TableStore.PriorBytes prior : priors) {
-				installed.add(new Installed(store, prior));
+				installed.add(new SqlTxCommitMappingUtil.InstalledRollback(store, prior));
 			}
 		}
 	}
 
-	private void flushDirty(SqlTxBuffer buf, List<Installed> installed) {
+	private void flushDirty(SqlTxBuffer buf, List<SqlTxCommitMappingUtil.InstalledRollback> installed) {
 		final Map<MultiShardCommitBarrier.StreamKey, List<SqlTxBuffer.DirtyEntry>> byStream =
 				groupByStream(buf);
 		for (Map.Entry<MultiShardCommitBarrier.StreamKey, List<SqlTxBuffer.DirtyEntry>> se
 				: byStream.entrySet()) {
 			final TableStore store = catalog.getStore(se.getKey().table());
-			final List<TableStore.TxFlushOp> batch = toFlushOps(se.getValue());
+			final List<TableStore.TxFlushOp> batch = SqlTxCommitMappingUtil.toFlushOps(se.getValue());
 			final List<TableStore.PriorBytes> priors = store.flushTxBatch(batch);
 			for (TableStore.PriorBytes prior : priors) {
-				installed.add(new Installed(store, prior));
+				installed.add(new SqlTxCommitMappingUtil.InstalledRollback(store, prior));
 			}
 		}
 	}
@@ -264,37 +259,4 @@ public final class SqlTxCommitter {
 		return byStream;
 	}
 
-	private static List<TableStore.TxFlushOp> toFlushOps(List<SqlTxBuffer.DirtyEntry> dirty) {
-		final List<TableStore.TxFlushOp> batch = new ArrayList<>(dirty.size());
-		for (SqlTxBuffer.DirtyEntry e : dirty) {
-			batch.add(new TableStore.TxFlushOp(
-					e.keyBytes(),
-					e.valueBytesOrNull(),
-					e.op() == SqlTxBuffer.Op.DELETE));
-		}
-		return batch;
-	}
-
-	private static List<TxEnvelopeCodec.StreamRef> toStreamRefs(
-			List<MultiShardCommitBarrier.StreamKey> streams
-	) {
-		final List<TxEnvelopeCodec.StreamRef> refs = new ArrayList<>(streams.size());
-		for (MultiShardCommitBarrier.StreamKey sk : streams) {
-			refs.add(new TxEnvelopeCodec.StreamRef(sk.table(), sk.shard()));
-		}
-		return refs;
-	}
-
-	private static void restoreInstalled(List<Installed> installed) {
-		for (int i = installed.size() - 1; i >= 0; i--) {
-			final Installed one = installed.get(i);
-			try {
-				one.store().restorePrior(one.prior());
-			} catch (RuntimeException ignored) {
-			}
-		}
-	}
-
-	private record Installed(TableStore store, TableStore.PriorBytes prior) {
-	}
 }

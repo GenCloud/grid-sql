@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
 
 import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationProps;
@@ -73,6 +74,11 @@ public final class RegionClaimService {
 	 * peer is seen again and local tip catches its advertisement (prevents Hold :ok seed reads).
 	 */
 	private final AtomicBoolean regionClaimAwaitRemoteDc = new AtomicBoolean(false);
+	/**
+	 * When set, {@link #isApplyLagStale()} uses lag only on serving/hydrated streams
+	 * (excludes untouched LAZY tip debt). {@code null} = all OpLog streams.
+	 */
+	private volatile Predicate<String> servingStreamKeyPredicate;
 
 	public RegionClaimService(
 			boolean enabled,
@@ -407,6 +413,13 @@ public final class RegionClaimService {
 		return maxStaleLag;
 	}
 
+	/**
+	 * Restrict AUTH / HA apply-lag stale to admitted/serving streams (LAZY hydrated).
+	 */
+	public void setServingStreamKeyPredicate(Predicate<String> servingStreamKeyPredicate) {
+		this.servingStreamKeyPredicate = servingStreamKeyPredicate;
+	}
+
 	public boolean isApplyLagStale() {
 		if (!enabled || nodeState == null || opLog == null) {
 			return false;
@@ -414,7 +427,7 @@ public final class RegionClaimService {
 		if (maxStaleLag == Long.MAX_VALUE) {
 			return false;
 		}
-		return nodeState.maxApplyLag(opLog) > maxStaleLag;
+		return nodeState.maxApplyLag(opLog, servingStreamKeyPredicate) > maxStaleLag;
 	}
 
 	public boolean isReplicaReadsEnabled() {

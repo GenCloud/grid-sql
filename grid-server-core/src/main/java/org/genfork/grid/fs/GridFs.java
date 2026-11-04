@@ -27,12 +27,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
-
-import com.google.common.annotations.VisibleForTesting;
+import java.util.stream.Stream;
 
 import org.genfork.grid.utils.UnsafeMemory;
 
@@ -50,9 +49,9 @@ import org.genfork.grid.utils.UnsafeMemory;
  */
 public final class GridFs {
 	private static final String TMP_SUFFIX = ".tmp";
+	/** Legacy unpublished sibling suffix (pre-{@code *.tmp.*}). */
+	private static final String LEGACY_PART_SUFFIX = ".part";
 	private static final String MSG_ATOMIC_REQUIRED = "Atomic move is required for durable file ";
-	private static final String MSG_INJECTED_ACCESS_DENIED = "injected AccessDenied for GridFs moveAtomic test";
-
 	/** Bounded attempts including the first try (Windows REPLACE sharing violation). */
 	private static final int WINDOWS_REPLACE_MAX_ATTEMPTS = 16;
 
@@ -64,8 +63,6 @@ public final class GridFs {
 
 	/** Backoff growth factor per failed attempt. */
 	private static final int WINDOWS_REPLACE_BACKOFF_FACTOR = 2;
-
-	private static final AtomicInteger INJECT_ACCESS_DENIED_REMAINING = new AtomicInteger(0);
 
 	private GridFs() {
 	}
@@ -122,18 +119,60 @@ public final class GridFs {
 	public static void writeAtomic(Path target, AtomicWriter writer) throws IOException {
 		Objects.requireNonNull(target, "target");
 		Objects.requireNonNull(writer, "writer");
-		createParentDirs(target);
-		// Per-writer temp name — concurrent publishers must not share one sibling .tmp.
-		final Path temporary = target.resolveSibling(
-				target.getFileName() + TMP_SUFFIX + "." + Thread.currentThread().threadId()
-						+ "." + System.nanoTime());
+		final Path temporary = writeUnpublished(target, writer);
 		try {
-			writer.write(temporary);
 			moveAtomic(temporary, target);
 		} catch (IOException | RuntimeException e) {
 			deleteQuietly(temporary);
 			throw e;
 		}
+	}
+
+	/**
+	 * Write via {@code writer} into a unique unpublished sibling of {@code target} (no publish).
+	 * <p>
+	 * Used by sealed dump publish-next-then-drop: open/install from the sibling while the
+	 * prior generation still maps {@code target}, then {@link #publishFromMapped} after unmap.
+	 *
+	 * @return durable sibling path the caller must publish or delete
+	 */
+	public static Path writeUnpublished(Path target, AtomicWriter writer) throws IOException {
+		Objects.requireNonNull(target, "target");
+		Objects.requireNonNull(writer, "writer");
+		createParentDirs(target);
+		final Path temporary = uniqueSiblingTmp(target);
+		try {
+			writer.write(temporary);
+			return temporary;
+		} catch (IOException | RuntimeException e) {
+			deleteQuietly(temporary);
+			throw e;
+		}
+	}
+
+	/**
+	 * Publish bytes from a (possibly still-mapped) {@code source} onto unmapped {@code target}.
+	 * <p>
+	 * Reads {@code source} into a fresh unpublished sibling of {@code target}, then
+	 * {@link #moveAtomic} — safe when {@code source} remains mmap'd and {@code target} is not.
+	 */
+	public static void publishFromMapped(Path source, Path target) throws IOException {
+		Objects.requireNonNull(source, "source");
+		Objects.requireNonNull(target, "target");
+		writeAtomic(target, temporary -> Files.copy(
+				source,
+				temporary,
+				StandardCopyOption.REPLACE_EXISTING));
+	}
+
+	/**
+	 * Per-writer unique sibling temp path ({@code file.tmp.<tid>.<nano>}).
+	 */
+	public static Path uniqueSiblingTmp(Path target) {
+		Objects.requireNonNull(target, "target");
+		return target.resolveSibling(
+				target.getFileName() + TMP_SUFFIX + "." + Thread.currentThread().threadId()
+						+ "." + System.nanoTime());
 	}
 
 	/**
@@ -160,22 +199,14 @@ public final class GridFs {
 	 * non-atomic fallback). Sync FS boundary only — not Netty EL.
 	 */
 	public static void moveAtomic(Path source, Path target) throws IOException {
-		moveAtomic(source, target, Platform.isWindows());
-	}
-
-	/**
-	 * Same as {@link #moveAtomic(Path, Path)} with an explicit Windows-retry switch (tests).
-	 */
-	@VisibleForTesting
-	public static void moveAtomic(Path source, Path target, boolean windowsRetry) throws IOException {
 		Objects.requireNonNull(source, "source");
 		Objects.requireNonNull(target, "target");
+		final boolean windowsRetry = Platform.isWindows();
 		final int maxAttempts = windowsRetry ? WINDOWS_REPLACE_MAX_ATTEMPTS : 1;
 		long backoffNanos = WINDOWS_REPLACE_BACKOFF_NANOS;
 		IOException lastFailure = null;
 		for (int attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
-				maybeInjectAccessDenied();
 				Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
 				return;
 			} catch (AtomicMoveNotSupportedException unsupported) {
@@ -194,36 +225,6 @@ public final class GridFs {
 			throw lastFailure;
 		}
 		throw new IOException(MSG_ATOMIC_REQUIRED + target);
-	}
-
-	private static void maybeInjectAccessDenied() throws AccessDeniedException {
-		final int remaining = INJECT_ACCESS_DENIED_REMAINING.get();
-		if (remaining <= 0) {
-			return;
-		}
-		if (INJECT_ACCESS_DENIED_REMAINING.getAndDecrement() > 0) {
-			throw new AccessDeniedException(MSG_INJECTED_ACCESS_DENIED);
-		}
-	}
-
-	@VisibleForTesting
-	public static int windowsReplaceMaxAttempts() {
-		return WINDOWS_REPLACE_MAX_ATTEMPTS;
-	}
-
-	@VisibleForTesting
-	public static void injectAccessDeniedRemaining(int remaining) {
-		INJECT_ACCESS_DENIED_REMAINING.set(remaining);
-	}
-
-	@VisibleForTesting
-	public static int injectAccessDeniedRemaining() {
-		return INJECT_ACCESS_DENIED_REMAINING.get();
-	}
-
-	@VisibleForTesting
-	public static void clearInjectAccessDenied() {
-		INJECT_ACCESS_DENIED_REMAINING.set(0);
 	}
 
 	/**
@@ -299,6 +300,63 @@ public final class GridFs {
 		} catch (IOException ignored) {
 			// best-effort cleanup
 		}
+	}
+
+	/**
+	 * Boot-only: delete orphan publish staging under {@code root} ({@code *.tmp.*}, legacy {@code *.part}).
+	 * <p>
+	 * Call <strong>before</strong> sealed/open/publish. Never promote staging. Lock/IO failures are
+	 * skipped (Windows REPLACE races). Not for mid-runtime GC.
+	 *
+	 * @return number of files deleted
+	 */
+	public static int purgeOrphanStagingAtBoot(Path root) {
+		if (root == null || !Files.isDirectory(root)) {
+			return 0;
+		}
+		int deleted = 0;
+		try (Stream<Path> walk = Files.walk(root)) {
+			final List<Path> orphans = new ArrayList<>();
+			walk.filter(Files::isRegularFile)
+					.filter(GridFs::isOrphanStagingName)
+					.forEach(orphans::add);
+			for (Path orphan : orphans) {
+				try {
+					if (Files.deleteIfExists(orphan)) {
+						deleted++;
+					}
+				} catch (IOException ignored) {
+					// Windows lock / in-use — skip
+				}
+			}
+		} catch (IOException ignored) {
+			return deleted;
+		}
+		return deleted;
+	}
+
+	/**
+	 * {@code file.tmp.<tid>.<nano>}, plain {@code file.tmp}, or legacy {@code *.part}.
+	 */
+	public static boolean isOrphanStagingName(Path path) {
+		if (path == null) {
+			return false;
+		}
+		final Path namePath = path.getFileName();
+		if (namePath == null) {
+			return false;
+		}
+		final String name = namePath.toString();
+		if (name.endsWith(LEGACY_PART_SUFFIX)) {
+			return true;
+		}
+		final int tmpIdx = name.indexOf(TMP_SUFFIX);
+		if (tmpIdx < 0) {
+			return false;
+		}
+		// "*.tmp" or "*.tmp.*"
+		final int after = tmpIdx + TMP_SUFFIX.length();
+		return after == name.length() || name.charAt(after) == '.';
 	}
 
 	public static boolean exists(Path path) {

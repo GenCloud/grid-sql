@@ -17,12 +17,9 @@ package org.genfork.grid.replication.region;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-
-import com.google.common.annotations.VisibleForTesting;
 
 /**
  * Multi-DC Active/Hold/Witness state machine with durable epoch fencing.
@@ -238,33 +235,12 @@ public final class RegionRoleCoordinator implements AutoCloseable {
 		return true;
 	}
 
-	@VisibleForTesting
-	public void fenceToHold() {
+	private void fenceToHold() {
 		final RegionLeaseState cur = lease.get();
 		final RegionLeaseState fenced = cur.fenceToHold();
 		lease.set(fenced);
 		epochConfirmed.set(true);
 		persist(fenced);
-	}
-
-	@VisibleForTesting
-	public void confirmEpoch() {
-		epochConfirmed.set(true);
-	}
-
-	@VisibleForTesting
-	public void forceState(RegionLeaseState state) {
-		Objects.requireNonNull(state, "state");
-		lease.set(state);
-		observedClusterEpoch.set(state.epoch());
-		epochConfirmed.set(true);
-		persist(state);
-	}
-
-	@VisibleForTesting
-	public void forcePeerLinkSilenceMs(long silenceMs) {
-		final long nanos = System.nanoTime() - Math.max(0L, silenceMs) * 1_000_000L;
-		lastActivePeerLinkNanos.set(nanos);
 	}
 
 	private void persist(RegionLeaseState state) {

@@ -23,8 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.util.List;
 
+import org.genfork.grid.context.config.GridConfigurationProperties;
 import org.genfork.grid.replication.OrchidNotSyncedException;
 import org.genfork.grid.replication.ReplicaAccessGate;
+import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.replication.codec.OpLogSegment;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.netty.NettyReplicationTransport;
@@ -77,20 +79,37 @@ class SwarmUnderLoadIT {
 	void quiesceFencesWritesUntilCutover() throws Exception {
 		try (OpLog opLog = new OpLog(temp.resolve("oplog"), false)) {
 			final ShardMigrator migrator = new ShardMigrator(opLog, new RecordingTransport());
+			final ReplicationCoordinator replication = shardDrainGateCoord(temp, migrator);
 			assertEquals(0, migrator.migrateRange(PEER, DOMAIN, SHARD, FROM_SEQ, BATCH));
 			assertEquals(ShardPlacementMap.DrainState.QUIESCE,
 					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			assertTrue(migrator.getPlacementMap().isDraining(DOMAIN, SHARD));
 			assertThrows(OrchidNotSyncedException.class,
-					() -> ReplicaAccessGate.ensureShardWritableState(true));
+					() -> ReplicaAccessGate.ensureShardWritable(replication, DOMAIN, SHARD));
 
 			assertEquals(0, migrator.migrateRange(PEER, DOMAIN, SHARD, FROM_SEQ, BATCH));
 			assertEquals(ShardPlacementMap.DrainState.CUTOVER_DONE,
 					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			assertFalse(migrator.getPlacementMap().isDraining(DOMAIN, SHARD));
 			assertEquals(PEER, migrator.getPlacementMap().owner(DOMAIN, SHARD));
-			ReplicaAccessGate.ensureShardWritableState(false);
+			ReplicaAccessGate.ensureShardWritable(replication, DOMAIN, SHARD);
 		}
+	}
+
+	private static ReplicationCoordinator shardDrainGateCoord(Path temp, ShardMigrator migrator) {
+		final GridConfigurationProperties props = ReplTestSupport.props(
+				"swarm-gate", "swarm-gate-c", "dc-a", 0, temp.resolve("gate-node"), List.of());
+		return new ReplicationCoordinator(props) {
+			@Override
+			public boolean isEnabled() {
+				return true;
+			}
+
+			@Override
+			public boolean isShardDraining(String domainType, int shard) {
+				return migrator.getPlacementMap().isDraining(domainType, shard);
+			}
+		};
 	}
 
 	/**

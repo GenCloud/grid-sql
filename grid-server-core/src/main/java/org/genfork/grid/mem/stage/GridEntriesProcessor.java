@@ -38,6 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import org.genfork.grid.diag.VisibilityDiag;
 
 /**
@@ -209,6 +210,30 @@ public class GridEntriesProcessor {
 	}
 
 	/**
+	 * Seal-dump RAM overlay: live puts overwrite sealed∪OpLog; sealed-delete tombstones
+	 * <em>remove</em> the key (STRICT displace / repair must not reappear in {@code .gmap}/.sbpt).
+	 */
+	public void forEachSealDumpOverlay(
+			BiConsumer<byte[], byte[]> putLive,
+			Consumer<byte[]> removeTombstone
+	) {
+		Objects.requireNonNull(putLive, "putLive");
+		Objects.requireNonNull(removeTombstone, "removeTombstone");
+		for (Map.Entry<byte[], byte[]> e : gridScalableMap.entrySet()) {
+			final byte[] key = e.getKey();
+			final byte[] value = e.getValue();
+			if (key == null || value == null) {
+				continue;
+			}
+			if (isSealedDeleteTombstone(value)) {
+				removeTombstone.accept(key);
+			} else {
+				putLive.accept(key, value);
+			}
+		}
+	}
+
+	/**
 	 * Map put/remove without staging or index queue (LAZY OpLog hydrate delta path).
 	 */
 	public void installMapOnly(byte[] key, byte[] value, boolean delete) {
@@ -230,6 +255,16 @@ public class GridEntriesProcessor {
 			return;
 		}
 		gridIndexWorker.indexNowBatch(adds);
+	}
+
+	/**
+	 * Sync index upsert after map-only install (apply path: index after shard-lock unlock).
+	 */
+	public void indexNow(byte[] key, byte[] value) {
+		if (gridIndexWorker == null || key == null || value == null) {
+			return;
+		}
+		gridIndexWorker.indexNow(key, value);
 	}
 
 	/**

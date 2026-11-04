@@ -22,9 +22,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-
-import com.google.common.annotations.VisibleForTesting;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import org.slf4j.Logger;
@@ -59,16 +56,12 @@ import org.genfork.grid.threading.ThreadService;
 public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> {
 	private static final Logger log = LoggerFactory.getLogger(SqlExecHandler.class);
 	private static final int SERVER_PUSH_REQUEST_ID = 0;
-	private static final String STALE_OVERRIDE_NODE_ID = "stale-override";
-
 	private final SqlEngine engine;
 	private final String expectedUser;
 	private final String expectedPassword;
 	private final int maxTxContexts;
 	private final ReplicationCoordinator replication;
 	private final SqlChannelRegistry channelRegistry;
-	/** Shared with {@link SqlServer}: non-null Boolean forces applyLagStale in AUTH meta. */
-	private final AtomicReference<Boolean> applyLagStaleOverride;
 	private final AtomicBoolean authed = new AtomicBoolean(false);
 	private final AtomicInteger sessionSeq = new AtomicInteger(1);
 	private final Map<Integer, SqlSession> sessions = new ConcurrentHashMap<>();
@@ -112,25 +105,12 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 			ReplicationCoordinator replication,
 			SqlChannelRegistry channelRegistry
 	) {
-		this(engine, expectedUser, expectedPassword, maxTxContexts, replication, channelRegistry, null);
-	}
-
-	SqlExecHandler(
-			SqlEngine engine,
-			String expectedUser,
-			String expectedPassword,
-			int maxTxContexts,
-			ReplicationCoordinator replication,
-			SqlChannelRegistry channelRegistry,
-			AtomicReference<Boolean> applyLagStaleOverride
-	) {
 		this.engine = engine;
 		this.expectedUser = expectedUser == null ? "" : expectedUser;
 		this.expectedPassword = expectedPassword == null ? "" : expectedPassword;
 		this.maxTxContexts = maxTxContexts <= 0 ? Integer.MAX_VALUE : maxTxContexts;
 		this.replication = replication;
 		this.channelRegistry = channelRegistry;
-		this.applyLagStaleOverride = applyLagStaleOverride;
 	}
 
 	/** Open logical sessions on this TCP channel (cheap gauge). */
@@ -157,17 +137,11 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 	 * Whether {@link SqlIdleCloseHandler} may close this channel on reader idle.
 	 * Before AUTH always; after AUTH only when no in-flight EXEC/BATCH and no portal.
 	 */
-	@VisibleForTesting
 	boolean mayIdleClose() {
 		if (!authed.get()) {
 			return true;
 		}
 		return inFlightExec.isEmpty() && portals.isEmpty();
-	}
-
-	@VisibleForTesting
-	SqlExecInterruptRegistry interruptRegistry() {
-		return interruptRegistry;
 	}
 
 	@Override
@@ -243,6 +217,7 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 			ok = engine.privileges().authenticate(gotUser, gotPass);
 		}
 		if (!ok) {
+			SqlTxMetrics.recordAuthFailure();
 			ctx.writeAndFlush(new SqlFrame(SqlOpcode.ERROR, frame.requestId(),
 					SqlWire.error(SqlWireErrorCodes.AUTH_FAILED, "AUTH failed")));
 			return;
@@ -487,36 +462,23 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		return false;
 	}
 
-	private byte[] execError(Exception ex) {
-		return SqlExecDispatchSupport.execErrorPayload(ex, serverMeta());
-	}
-
 	private ServerMeta serverMeta() {
-		final Boolean lagOverride = applyLagStaleOverride == null ? null : applyLagStaleOverride.get();
 		if (replication == null || !replication.isEnabled() || replication.getNodeState() == null) {
 			// Solo / peer-replication off: this TCP node is the writer; EMPTY (ineligible)
 			// must not be advertised — clients treat ineligible as fence+rediscover.
-			if (Boolean.TRUE.equals(lagOverride)) {
-				return new ServerMeta(STALE_OVERRIDE_NODE_ID, false, "", true, 0L);
-			}
 			return ServerMeta.SOLO_WRITER;
 		}
 		try {
-			final boolean applyLagStale = lagOverride != null
-					? lagOverride.booleanValue()
-					: replication.isApplyLagStale();
 			return new ServerMeta(
 					replication.getNodeState().getNodeId(),
 					replication.isWriterEligible(),
 					replication.promoteHint(),
-					applyLagStale,
+					replication.isClientApplyLagStale(),
 					replication.getNodeState().getSchemaEpoch(),
 					replication.regionEpoch(),
-					replication.regionRoleWire());
+					replication.regionRoleWire(),
+					replication.catalogFingerprint());
 		} catch (RuntimeException ignored) {
-			if (Boolean.TRUE.equals(lagOverride)) {
-				return new ServerMeta(STALE_OVERRIDE_NODE_ID, false, "", true, 0L);
-			}
 			return ServerMeta.SOLO_WRITER;
 		}
 	}
@@ -527,7 +489,6 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 	 * Called by {@link SqlChannelRegistry} after a coordinator re-rank. Uses requestId {@code 0}
 	 * (server-initiated) and only notifies authenticated active channels.
 	 */
-	@VisibleForTesting
 	void pushPromoteNotify(ChannelHandlerContext ctx) {
 		if (!authed.get() || ctx == null || ctx.channel() == null || !ctx.channel().isActive()) {
 			return;

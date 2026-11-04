@@ -24,7 +24,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
@@ -147,11 +146,6 @@ public final class TxEnvelopeCoordinator {
 		commitDecisions.remove(txId);
 	}
 
-	@VisibleForTesting
-	public boolean hasOpenLockPhase(long txId) {
-		return lockPhases.containsKey(txId);
-	}
-
 	/**
 	 * Register expected peer prepare ACKs for {@code txId} (FOR UPDATE prepare votes).
 	 */
@@ -196,19 +190,9 @@ public final class TxEnvelopeCoordinator {
 		}
 	}
 
-	@VisibleForTesting
-	public Boolean commitDecision(long txId) {
-		return commitDecisions.get(txId);
-	}
-
 	/** Drop prepare-phase votes (COMMIT/ROLLBACK / failure). Decision retained until lock discard. */
 	public void discardPreparePhase(long txId) {
 		preparePhases.remove(txId);
-	}
-
-	@VisibleForTesting
-	public boolean hasOpenPreparePhase(long txId) {
-		return preparePhases.containsKey(txId);
 	}
 
 	public void registerApply(TxEnvelopeCodec.Membership membership) {
@@ -382,16 +366,16 @@ public final class TxEnvelopeCoordinator {
 		return n;
 	}
 
-	public boolean hasOpenApplyEnvelope(long txId) {
-		return applyOpen.containsKey(txId);
-	}
-
 	/**
 	 * {@code true} when a non-aborted apply envelope still lists {@code domain#shard}
-	 * in its membership (including after that stream's local {@code TX_COMMIT} while
-	 * other streams have not completed — staging not yet flushed to the map).
+	 * in its <em>membership</em> (including after that stream's local {@code TX_COMMIT}
+	 * while sibling streams have not completed — staging not yet flushed to the map).
+	 * <p>
+	 * Mid-TX this must keep sealed dump deferred ({@code ENVELOPE}).
+	 * Orphan membership after LAZY one-stream hydrate is a bug — close via sibling hydrate
+	 * or fail-closed abort ({@code EnvelopeClosureHydrateUtil}), never by skipping this gate.
 	 */
-	public boolean hasOpenApplyStagingForStream(String domain, int shard) {
+	public boolean hasOpenApplyMembershipForStream(String domain, int shard) {
 		if (domain == null) {
 			return false;
 		}
@@ -408,8 +392,76 @@ public final class TxEnvelopeCoordinator {
 		return false;
 	}
 
-	public boolean hasOpenShipEnvelope(long txId) {
-		return shipOpen.containsKey(txId);
+	/**
+	 * Incomplete (non-aborted, not fully committed) apply {@code txId}s that list {@code domain#shard}.
+	 */
+	public List<Long> incompleteApplyTxIdsListingStream(String domain, int shard) {
+		return applyTxIdsListingStream(domain, shard, false);
+	}
+
+	/**
+	 * Non-aborted apply {@code txId}s that list {@code domain#shard}, including fully-committed
+	 * entries still present in {@code applyOpen} (sticky leftover after missed take).
+	 */
+	public List<Long> applyMembershipTxIdsListingStream(String domain, int shard) {
+		return applyTxIdsListingStream(domain, shard, true);
+	}
+
+	/**
+	 * {@code true} when an open apply envelope has every expected stream noted COMMIT.
+	 */
+	public boolean isApplyFullyCommitted(long txId) {
+		final ApplyEnvelope env = applyOpen.get(txId);
+		return env != null && !env.aborted && env.committed.containsAll(env.expected);
+	}
+
+	private List<Long> applyTxIdsListingStream(String domain, int shard, boolean includeFullyCommitted) {
+		if (domain == null) {
+			return List.of();
+		}
+		final List<Long> out = new ArrayList<>();
+		for (Map.Entry<Long, ApplyEnvelope> entry : applyOpen.entrySet()) {
+			final ApplyEnvelope env = entry.getValue();
+			if (env == null || env.aborted) {
+				continue;
+			}
+			if (!includeFullyCommitted && env.committed.containsAll(env.expected)) {
+				continue;
+			}
+			boolean lists = false;
+			for (TxEnvelopeCodec.StreamRef ref : env.expected) {
+				if (domain.equals(ref.domain()) && ref.shard() == shard) {
+					lists = true;
+					break;
+				}
+			}
+			if (lists) {
+				out.add(entry.getKey());
+			}
+		}
+		return List.copyOf(out);
+	}
+
+	/**
+	 * Expected membership streams for an open apply envelope, or empty when absent/aborted.
+	 */
+	public Set<TxEnvelopeCodec.StreamRef> applyExpectedStreams(long txId) {
+		final ApplyEnvelope env = applyOpen.get(txId);
+		if (env == null || env.aborted) {
+			return Set.of();
+		}
+		return env.expected;
+	}
+
+	/**
+	 * {@code true} when {@code stream} already noted COMMIT on an open apply envelope.
+	 */
+	public boolean isApplyStreamCommitted(long txId, TxEnvelopeCodec.StreamRef stream) {
+		final ApplyEnvelope env = applyOpen.get(txId);
+		if (env == null || env.aborted || stream == null) {
+			return false;
+		}
+		return env.committed.contains(stream);
 	}
 
 	public static Map<String, List<ReplicationOp>> groupByStream(List<ReplicationOp> ops) {

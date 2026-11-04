@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.serial;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import jodd.util.Bits;
 
 import org.genfork.grid.utils.SerialUtil;
@@ -60,7 +58,6 @@ public final class WireLikeMatcher {
 	 * When the pattern is a literal prefix followed by a single trailing {@code %},
 	 * return that literal; otherwise {@code null}. Used for fast-path starts-with checks.
 	 */
-	@VisibleForTesting
 	public static byte[] trailingPercentLiteral(byte[] patternPayload) {
 		if (patternPayload == null || patternPayload.length == 0) {
 			return null;

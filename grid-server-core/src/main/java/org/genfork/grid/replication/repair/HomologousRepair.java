@@ -15,7 +15,6 @@
  */
 package org.genfork.grid.replication.repair;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.genfork.grid.codec.duplex.DuplexBlob;
 import org.genfork.grid.codec.duplex.DuplexCodecSupport;
 import org.genfork.grid.codec.duplex.DuplexVerifier;
@@ -23,6 +22,7 @@ import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.tx.OpLogTxUnits;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -106,7 +106,7 @@ public class HomologousRepair {
 		if (op == null) {
 			return;
 		}
-		final String stream = streamKey(op.domainType(), op.shard());
+		final String stream = OpLogStreamKeyUtil.format(op.domainType(), op.shard());
 		final ReplicationOpType type = op.type();
 		// TX markers mutate openTxCounts + pending lists — short monitor OK (no VT pin across I/O).
 		if (type == ReplicationOpType.TX_BEGIN
@@ -194,7 +194,7 @@ public class HomologousRepair {
 
 	/** True while this stream has seen {@code TX_BEGIN} without matching COMMIT/ABORT. */
 	public boolean hasOpenTx(String domainType, int shard) {
-		return openTxCounts.containsKey(streamKey(domainType, shard));
+		return openTxCounts.containsKey(OpLogStreamKeyUtil.format(domainType, shard));
 	}
 
 	/** Caller transfers ownership of {@code rowBytesOrNull} (already a defensive copy). */
@@ -209,15 +209,11 @@ public class HomologousRepair {
 		schedulePersist(locus.domainType(), locus.shard());
 	}
 
-	private static String streamKey(String domainType, int shard) {
-		return domainType + "#" + shard;
-	}
-
 	private void schedulePersist(String domainType, int shard) {
 		if (durableStore == null) {
 			return;
 		}
-		final String key = domainType + "#" + shard;
+		final String key = OpLogStreamKeyUtil.format(domainType, shard);
 		pendingPersist.add(key);
 		if (!debounceScheduled.add(key)) {
 			return;
@@ -422,34 +418,6 @@ public class HomologousRepair {
 		locusMap.put(healed);
 		schedulePersist(healed.domainType(), healed.shard());
 		repairApplied.increment();
-	}
-
-	/** Test/chaos helper: wipe or corrupt a keyHash entry so reconcile must heal. */
-	@VisibleForTesting
-	public void corruptLocus(String domainType, int shard, long keyHash) {
-		locusMap.put(new VersionLocus(domainType, shard, keyHash, 0L, 0L, 0xDEADL));
-		schedulePersist(domainType, shard);
-		flushLocusPersists();
-	}
-
-	/** Test/chaos helper: corrupt cached row bytes while keeping locus seq (triggers FETCH_ROW). */
-	@VisibleForTesting
-	public void corruptRowBytes(String domainType, int shard, long keyHash) {
-		final String rk = rowKey(domainType, shard, keyHash);
-		final byte[] prev = rowBytesByLocus.get(rk);
-		if (prev == null) {
-			rowBytesByLocus.put(rk, new byte[]{(byte) 0xDE, (byte) 0xAD});
-		} else {
-			final byte[] bad = Arrays.copyOf(prev, prev.length);
-			bad[0] ^= 0x5A;
-			rowBytesByLocus.put(rk, bad);
-		}
-		final VersionLocus cur = locusMap.snapshot(domainType, shard).get(keyHash);
-		if (cur != null) {
-			locusMap.put(new VersionLocus(domainType, shard, keyHash, cur.opSeq(), cur.schemaEpoch(), 0xDEADL));
-			schedulePersist(domainType, shard);
-			flushLocusPersists();
-		}
 	}
 
 	public byte[] cachedRowBytes(String domainType, int shard, long keyHash) {

@@ -22,6 +22,7 @@ import org.genfork.grid.catalog.TableCatalog;
 import org.genfork.grid.catalog.TableCatalog.FunctionDef;
 import org.genfork.grid.catalog.TableCatalog.ViewDef;
 import org.genfork.grid.catalog.TableSchema;
+import org.genfork.grid.exceptions.PrimaryKeyPortalUnavailableException;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.query.distributed.DistributedKeyFanOut;
 import org.genfork.grid.query.filters.FilterCondition;
@@ -217,7 +218,13 @@ public final class SqlQueryExecutor {
 				raw = selectLockedKeys(session, table, store, lockBatch.selectedKeys(), metas, projection);
 			} else if (!session.inTransaction()
 					&& canUsePortalPullCursor(session, store, s)) {
-				return SqlResult.resultSetPull(metas, new PkLeafSelectRowWindowSource(store, projection, s.offset(), s.limitOrNull()));
+				// Eligibility hydrates first; sealed bind mid-flight can still flip portal→searchAll.
+				try {
+					return SqlResult.resultSetPull(metas,
+							new PkLeafSelectRowWindowSource(store, projection, s.offset(), s.limitOrNull()));
+				} catch (PrimaryKeyPortalUnavailableException ignored) {
+					raw = selectCommitted(store, s, metas, projection);
+				}
 			} else if (!session.inTransaction()) {
 				raw = selectCommitted(store, s, metas, projection);
 			} else {
@@ -971,19 +978,19 @@ public final class SqlQueryExecutor {
 			final int eqCount = edge.eqs().size();
 			final int[] leftOrds = new int[eqCount];
 			final int[] rightOrds = new int[eqCount];
+			final List<String> leftColNames = new ArrayList<>(eqCount);
 			final List<String> rightColNames = new ArrayList<>(eqCount);
-			boolean leftOnPk = true;
-			boolean rightOnPk = true;
 			for (int ei = 0; ei < eqCount; ei++) {
 				final ColumnDef leftCol = SqlProjectionOps.requireWorkingColumn(
 						workingCols, edge.eqs().get(ei).leftCol());
 				final ColumnDef rightCol = right.schema().requireColumn(edge.eqs().get(ei).rightCol());
 				leftOrds[ei] = SqlProjectionOps.indexOfColumn(workingCols, leftCol.name());
 				rightOrds[ei] = rightCol.ordinal();
+				leftColNames.add(leftCol.name());
 				rightColNames.add(rightCol.name());
-				leftOnPk = leftOnPk && leftCol.primaryKey();
-				rightOnPk = rightOnPk && rightCol.primaryKey();
 			}
+			final boolean leftOnPk = SqlPkLookupUtil.isJoinPkPointProbe(left.schema(), leftColNames);
+			final boolean rightOnPk = SqlPkLookupUtil.isJoinPkPointProbe(right.schema(), rightColNames);
 			final int leftOrd = leftOrds[0];
 			final int rightOrd = rightOrds[0];
 
@@ -1009,9 +1016,7 @@ public final class SqlQueryExecutor {
 				continue;
 			}
 
-			final boolean rightIndexed = eqCount == 1
-					? right.hasColumnIndex(rightColNames.getFirst())
-					: right.hasEqIndex(rightColNames);
+			final boolean rightIndexed = right.hasEqIndex(rightColNames);
 			if (!whereAppliedOnWire && working == null && eqCount == 1) {
 				final FilterCondition remapped = SqlJoinFilterPush.remapJoinColToLeft(
 						joinWhereFilter, edge.leftCol(), edge.rightCol(), left.schema());
@@ -1032,7 +1037,7 @@ public final class SqlQueryExecutor {
 							working, sideSchemas, right, leftOrd, false, earlyLimit);
 				} else {
 					working = SqlJoinOps.joinProbeRightIndexStore(
-							working, sideSchemas, right, leftOrds, rightColNames);
+							working, sideSchemas, right, leftOrds, rightColNames, false);
 				}
 				workingCols = SqlJoinOps.concatColumns(left.schema().columns(), right.schema().columns());
 				sideSchemas = List.of(left.schema(), right.schema());
@@ -1055,14 +1060,15 @@ public final class SqlQueryExecutor {
 			if (working == null) {
 				working = SqlJoinOps.toJoinRows(snapshotBlobs(session, left, leftName, leftPushFilter));
 			}
+			final boolean leftOuter = edge.kind() == JoinKind.LEFT || edge.kind() == JoinKind.FULL;
 			if (rightOnPk && eqCount == 1 && edge.kind() != JoinKind.RIGHT && edge.kind() != JoinKind.FULL) {
 				working = SqlJoinOps.joinProbeRightPkStore(
 						working, sideSchemas, right, leftOrd,
-						edge.kind() == JoinKind.LEFT || edge.kind() == JoinKind.FULL,
+						leftOuter,
 						earlyLimit);
-			} else if (rightIndexed && edge.kind() == JoinKind.INNER) {
+			} else if (rightIndexed && edge.kind() != JoinKind.RIGHT && edge.kind() != JoinKind.FULL) {
 				working = SqlJoinOps.joinProbeRightIndexStore(
-						working, sideSchemas, right, leftOrds, rightColNames);
+						working, sideSchemas, right, leftOrds, rightColNames, leftOuter);
 			} else {
 				final List<byte[]> rightBlobs = snapshotBlobs(
 						session, right, rightName, AlwaysTrueCondition.getInstance());

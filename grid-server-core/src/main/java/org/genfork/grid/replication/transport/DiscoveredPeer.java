@@ -17,6 +17,10 @@ package org.genfork.grid.replication.transport;
 
 /**
  * Peer discovered via HELLO (same clusterId); used for dynamic membership and region epoch observe.
+ * <p>
+ * {@code catalogAppliedEpoch} is the peer {@code _catalog} OpLog applied watermark (catch-up fence;
+ * never mixed with duplex HELLO {@code schemaEpoch}).
+ * {@code catalogFingerprint} is the peer live object-set hash (replica-read / reconcile fence).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -28,6 +32,36 @@ public record DiscoveredPeer(
 		int port,
 		String dc,
 		long regionEpoch,
-		byte regionRole
+		byte regionRole,
+		long catalogAppliedEpoch,
+		long catalogFingerprint
 ) {
+	/**
+	 * Legacy ctor without catalog fingerprint.
+	 */
+	public DiscoveredPeer(
+			String id,
+			String host,
+			int port,
+			String dc,
+			long regionEpoch,
+			byte regionRole,
+			long catalogAppliedEpoch
+	) {
+		this(id, host, port, dc, regionEpoch, regionRole, catalogAppliedEpoch, 0L);
+	}
+
+	/**
+	 * Legacy ctor without catalog applied watermark.
+	 */
+	public DiscoveredPeer(
+			String id,
+			String host,
+			int port,
+			String dc,
+			long regionEpoch,
+			byte regionRole
+	) {
+		this(id, host, port, dc, regionEpoch, regionRole, 0L, 0L);
+	}
 }

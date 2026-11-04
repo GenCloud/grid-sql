@@ -18,6 +18,7 @@ package org.genfork.grid.replication.log;
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.OpLogSegment;
 import org.genfork.grid.replication.codec.ReplicationOp;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -60,10 +61,6 @@ public class OpLog implements AutoCloseable {
 		}
 	}
 
-	private static String key(String domainType, int shard) {
-		return domainType + "#" + shard;
-	}
-
 	private static String streamId(String domainType, int shard) {
 		return Integer.toHexString(domainType.hashCode()) + "_" + shard;
 	}
@@ -92,7 +89,7 @@ public class OpLog implements AutoCloseable {
 	 * {@code (domain, shard)} stream — numbers need not be dense (other shards consume seqs).
 	 */
 	public void append(ReplicationOp op) {
-		final String k = key(op.domainType(), op.shard());
+		final String k = OpLogStreamKeyUtil.format(op.domainType(), op.shard());
 		final NavigableMap<Long, Long> offsets = offsetIndex.computeIfAbsent(k, ignored -> new ConcurrentSkipListMap<>());
 		if (offsets.containsKey(op.opSeq())) {
 			return;
@@ -117,7 +114,7 @@ public class OpLog implements AutoCloseable {
 	 */
 	public void appendDeferred(ReplicationOp op) {
 		if (!tryAppendDeferred(op)) {
-			final String k = key(op.domainType(), op.shard());
+			final String k = OpLogStreamKeyUtil.format(op.domainType(), op.shard());
 			final NavigableMap<Long, Long> offsets = offsetIndex.get(k);
 			if (offsets != null && offsets.containsKey(op.opSeq())) {
 				return;
@@ -135,7 +132,7 @@ public class OpLog implements AutoCloseable {
 	 * @return true if bytes were written
 	 */
 	public boolean tryAppendDeferred(ReplicationOp op) {
-		final String k = key(op.domainType(), op.shard());
+		final String k = OpLogStreamKeyUtil.format(op.domainType(), op.shard());
 		final NavigableMap<Long, Long> offsets = offsetIndex.computeIfAbsent(k, ignored -> new ConcurrentSkipListMap<>());
 		if (offsets.containsKey(op.opSeq())) {
 			return false;
@@ -169,7 +166,7 @@ public class OpLog implements AutoCloseable {
 			return;
 		}
 		final ReplicationOp first = ops.getFirst();
-		final String k = key(first.domainType(), first.shard());
+		final String k = OpLogStreamKeyUtil.format(first.domainType(), first.shard());
 		final NavigableMap<Long, Long> offsets = offsetIndex.computeIfAbsent(k, ignored -> new ConcurrentSkipListMap<>());
 		try {
 			final long[] fileOff = storeFor(first.domainType(), first.shard()).appendBatch(ops);
@@ -190,7 +187,7 @@ public class OpLog implements AutoCloseable {
 	}
 
 	public List<ReplicationOp> readFrom(String domainType, int shard, long fromSeqInclusive, int limit) {
-		final NavigableMap<Long, Long> offsets = offsetIndex.get(key(domainType, shard));
+		final NavigableMap<Long, Long> offsets = offsetIndex.get(OpLogStreamKeyUtil.format(domainType, shard));
 		if (offsets == null || offsets.isEmpty()) {
 			return List.of();
 		}
@@ -221,7 +218,7 @@ public class OpLog implements AutoCloseable {
 	}
 
 	public void truncateTo(String domainType, int shard, long inclusiveMaxSeq) {
-		final String k = key(domainType, shard);
+		final String k = OpLogStreamKeyUtil.format(domainType, shard);
 		final NavigableMap<Long, Long> offsets = offsetIndex.get(k);
 		if (offsets != null) {
 			offsets.headMap(inclusiveMaxSeq, true).clear();
@@ -247,7 +244,7 @@ public class OpLog implements AutoCloseable {
 	}
 
 	public long lastSeq(String domainType, int shard) {
-		final String k = key(domainType, shard);
+		final String k = OpLogStreamKeyUtil.format(domainType, shard);
 		final AtomicLong tip = lastSeqByStream.get(k);
 		if (tip != null) {
 			return tip.get();
@@ -263,17 +260,17 @@ public class OpLog implements AutoCloseable {
 
 	/** True if this stream already indexed {@code seq} (for ordered-append waiters). */
 	public boolean containsSeq(String domainType, int shard, long seq) {
-		final NavigableMap<Long, Long> offsets = offsetIndex.get(key(domainType, shard));
+		final NavigableMap<Long, Long> offsets = offsetIndex.get(OpLogStreamKeyUtil.format(domainType, shard));
 		return offsets != null && offsets.containsKey(seq);
 	}
 
 	public int size(String domainType, int shard) {
-		final NavigableMap<Long, Long> offsets = offsetIndex.get(key(domainType, shard));
+		final NavigableMap<Long, Long> offsets = offsetIndex.get(OpLogStreamKeyUtil.format(domainType, shard));
 		return offsets == null ? 0 : offsets.size();
 	}
 
 	private FileDurableOpStore storeFor(String domainType, int shard) throws IOException {
-		final String k = key(domainType, shard);
+		final String k = OpLogStreamKeyUtil.format(domainType, shard);
 		FileDurableOpStore existing = stores.get(k);
 		if (existing != null) {
 			return existing;
@@ -305,7 +302,7 @@ public class OpLog implements AutoCloseable {
 							final String name = path.getFileName().toString().replace(".log", "");
 							final FileDurableOpStore store = new FileDurableOpStore(oplogDir, name, fsync);
 							for (FileDurableOpStore.Record rec : store.replayWithOffsets()) {
-								final String k = key(rec.op().domainType(), rec.op().shard());
+								final String k = OpLogStreamKeyUtil.format(rec.op().domainType(), rec.op().shard());
 								stores.put(k, store);
 								offsetIndex.computeIfAbsent(k, ignored -> new ConcurrentSkipListMap<>())
 										.put(rec.op().opSeq(), rec.offset());

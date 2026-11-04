@@ -15,8 +15,6 @@
  */
 package org.genfork.grid.replication;
 
-import com.google.common.annotations.VisibleForTesting;
-
 /**
  * Shared write / read admission for SQL paths (no duplicated checks).
  * <p>
@@ -24,7 +22,9 @@ import com.google.common.annotations.VisibleForTesting;
  * and apply lag is caught up. Learners / Hold / Witness never admit client SQL writes.
  * Linearizable SELECT is served only by the phase-ranked proposer with caught-up apply lag.
  * Opt-in replica reads ({@link #ensureReplicaRead}) allow synced voters / Hold when
- * {@code replicaReadsEnabled} and lag is within {@code maxStaleLag}.
+ * {@code replicaReadsEnabled} and the node can guarantee complete row visibility
+ * ({@link ReplicationCoordinator#isClientApplyLagStale()} — tip catch-up on all streams,
+ * including unhydrated LAZY debt; not the write-path {@code max-stale-lag} window alone).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -41,6 +41,8 @@ public final class ReplicaAccessGate {
 	private static final String READ_REQUIRES_PROPOSER = "read requires phase-ranked proposer";
 	private static final String REPLICA_READ_DISABLED = "replica reads disabled on this node";
 	private static final String REPLICA_READ_REGION_DENIED = "replica read denied: region role Witness or fenced";
+	private static final String REPLICA_READ_CATALOG_INCOMPLETE =
+			"replica read denied: catalog object-set incomplete (fingerprint mismatch)";
 
 	private ReplicaAccessGate() {
 	}
@@ -76,8 +78,7 @@ public final class ReplicaAccessGate {
 		}
 	}
 
-	@VisibleForTesting
-	public static void ensureShardWritableState(boolean draining) {
+	static void ensureShardWritableState(boolean draining) {
 		if (draining) {
 			throw new OrchidNotSyncedException(WRITE_SHARD_DRAINING);
 		}
@@ -107,8 +108,10 @@ public final class ReplicaAccessGate {
 	}
 
 	/**
-	 * Opt-in replica SELECT (READ_REPLICA session): synced voter/Hold, fail-closed on lag,
+	 * Opt-in replica SELECT (READ_REPLICA session): synced voter/Hold, fail-closed unless
+	 * row data is complete ({@link ReplicationCoordinator#isClientApplyLagStale()}),
 	 * never learners / Witness; requires {@link ReplicationCoordinator#isReplicaReadsEnabled()}.
+	 * Also fail-closed when local catalog fingerprint mismatches a peer (VIEW/TABLE hole).
 	 */
 	public static void ensureReplicaRead(ReplicationCoordinator replication) {
 		if (replication == null || !replication.isEnabled()) {
@@ -116,26 +119,24 @@ public final class ReplicaAccessGate {
 		}
 		ensureReplicaReadState(
 				replication.isWriteAdmission(),
-				replication.isApplyLagStale(),
+				replication.isClientApplyLagStale(),
 				replication.isReplicaReadsEnabled(),
-				replication.regionAllowsReplicaReads());
+				replication.regionAllowsReplicaReads(),
+				replication.isCatalogFingerprintStale());
 	}
 
-	@VisibleForTesting
-	public static void ensureWriteState(boolean writeAdmission, boolean writerEligible) {
+	static void ensureWriteState(boolean writeAdmission, boolean writerEligible) {
 		ensureWriteState(writeAdmission, writerEligible, false, true);
 	}
 
-	@VisibleForTesting
-	public static void ensureWriteState(
+	static void ensureWriteState(
 			boolean writeAdmission,
 			boolean writerEligible,
 			boolean applyLagStale) {
 		ensureWriteState(writeAdmission, writerEligible, applyLagStale, true);
 	}
 
-	@VisibleForTesting
-	public static void ensureWriteState(
+	static void ensureWriteState(
 			boolean writeAdmission,
 			boolean writerEligible,
 			boolean applyLagStale,
@@ -159,16 +160,14 @@ public final class ReplicaAccessGate {
 	 * @param applyLagStale  apply lag exceeded {@code ha.max-stale-lag}
 	 * @param writerEligible phase-ranked proposer with write-admission
 	 */
-	@VisibleForTesting
-	public static void ensureReadState(
+	static void ensureReadState(
 			boolean writeAdmission,
 			boolean applyLagStale,
 			boolean writerEligible) {
 		ensureLinearizableReadState(writeAdmission, applyLagStale, writerEligible);
 	}
 
-	@VisibleForTesting
-	public static void ensureLinearizableReadState(
+	static void ensureLinearizableReadState(
 			boolean writeAdmission,
 			boolean applyLagStale,
 			boolean writerEligible) {
@@ -179,16 +178,30 @@ public final class ReplicaAccessGate {
 		}
 	}
 
-	@VisibleForTesting
-	public static void ensureReplicaReadState(
+	static void ensureReplicaReadState(
 			boolean writeAdmission,
 			boolean applyLagStale,
 			boolean replicaReadsEnabled,
 			boolean regionAllowsReplicaRead) {
+		ensureReplicaReadState(
+				writeAdmission, applyLagStale, replicaReadsEnabled, regionAllowsReplicaRead, false);
+	}
+
+	static void ensureReplicaReadState(
+			boolean writeAdmission,
+			boolean applyLagStale,
+			boolean replicaReadsEnabled,
+			boolean regionAllowsReplicaRead,
+			boolean catalogFingerprintStale) {
 		if (!replicaReadsEnabled) {
 			throw new OrchidNotSyncedException(REPLICA_READ_DISABLED);
 		}
 		denyIfLearner(writeAdmission);
+		// Prefer catalog object-set fence message when both lag and fingerprint fire
+		// (AUTH already folds fingerprint into applyLagStale for sticky rotate).
+		if (catalogFingerprintStale) {
+			throw new OrchidNotSyncedException(REPLICA_READ_CATALOG_INCOMPLETE);
+		}
 		denyIfStale(applyLagStale);
 		if (!regionAllowsReplicaRead) {
 			throw new OrchidNotSyncedException(REPLICA_READ_REGION_DENIED);

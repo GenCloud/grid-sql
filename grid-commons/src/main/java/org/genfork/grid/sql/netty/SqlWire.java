@@ -66,13 +66,18 @@ public final class SqlWire {
 	/** Legacy AUTH_OK / ERROR meta without region epoch. */
 	private static final byte SERVER_META_VERSION_V1 = 1;
 	/** AUTH_OK / ERROR / PROMOTE_NOTIFY meta with regionEpoch + regionRole. */
-	private static final byte SERVER_META_VERSION = 2;
+	private static final byte SERVER_META_VERSION_V2 = 2;
+	/** AUTH_OK / ERROR / PROMOTE_NOTIFY meta with trailing catalogFingerprint. */
+	private static final byte SERVER_META_VERSION = 3;
 	private static final int SERVER_META_FIXED_BYTES_V1 =
 			Integer.BYTES + Byte.BYTES + Byte.BYTES
 					+ LEN_PREFIX_BYTES + LEN_PREFIX_BYTES + Long.BYTES;
 	private static final int SERVER_META_REGION_TAIL_BYTES = Long.BYTES + Byte.BYTES;
-	private static final int SERVER_META_FIXED_BYTES =
+	private static final int SERVER_META_CATALOG_FP_BYTES = Long.BYTES;
+	private static final int SERVER_META_FIXED_BYTES_V2 =
 			SERVER_META_FIXED_BYTES_V1 + SERVER_META_REGION_TAIL_BYTES;
+	private static final int SERVER_META_FIXED_BYTES =
+			SERVER_META_FIXED_BYTES_V2 + SERVER_META_CATALOG_FP_BYTES;
 	private static final int SERVER_META_FLAG_WRITER_ELIGIBLE = 1;
 	private static final int SERVER_META_FLAG_APPLY_LAG_STALE = 1 << 1;
 	private static final int CELL_INT_BYTES = CELL_TAG_BYTES + Integer.BYTES;
@@ -226,18 +231,6 @@ public final class SqlWire {
 			writeBatchStatement(buf, st);
 		}
 		return EncodeBuffers.toByteArray(buf);
-	}
-
-	/**
-	 * BATCH_EXEC payload into {@code out} (same LE layout as {@link #batchExec}).
-	 */
-	public static void batchExecInto(ByteBuf out, int sessionId, List<String> sqls) {
-		final List<String> list = sqls == null ? List.of() : sqls;
-		final List<BatchStatement> statements = new ArrayList<>(list.size());
-		for (String sql : list) {
-			statements.add(new BatchStatement(sql, new Object[0]));
-		}
-		batchExecStatementsInto(out, sessionId, statements);
 	}
 
 	/**
@@ -410,6 +403,7 @@ public final class SqlWire {
 		buf.putLong(value.schemaEpoch());
 		buf.putLong(value.regionEpoch());
 		buf.put(value.regionRole());
+		buf.putLong(value.catalogFingerprint());
 		return EncodeBuffers.toByteArray(buf);
 	}
 
@@ -434,7 +428,9 @@ public final class SqlWire {
 			return ServerMeta.EMPTY;
 		}
 		final byte version = buf.get();
-		if (version != SERVER_META_VERSION && version != SERVER_META_VERSION_V1) {
+		if (version != SERVER_META_VERSION
+				&& version != SERVER_META_VERSION_V2
+				&& version != SERVER_META_VERSION_V1) {
 			return ServerMeta.EMPTY;
 		}
 		final int flags = buf.get() & 0xff;
@@ -443,9 +439,17 @@ public final class SqlWire {
 		final long schemaEpoch = buf.getLong();
 		long regionEpoch = 0L;
 		byte regionRole = ServerMeta.REGION_ROLE_NONE;
-		if (version == SERVER_META_VERSION && buf.remaining() >= SERVER_META_REGION_TAIL_BYTES) {
+		long catalogFingerprint = 0L;
+		if ((version == SERVER_META_VERSION || version == SERVER_META_VERSION_V2)
+				&& buf.remaining() >= SERVER_META_REGION_TAIL_BYTES) {
 			regionEpoch = buf.getLong();
 			regionRole = buf.get();
+		}
+		if (version == SERVER_META_VERSION && buf.remaining() >= SERVER_META_CATALOG_FP_BYTES) {
+			catalogFingerprint = buf.getLong();
+		} else if (version == SERVER_META_VERSION_V2 && buf.remaining() >= SERVER_META_CATALOG_FP_BYTES) {
+			// Forward-compat: v2 peer may still trail fingerprint without version bump.
+			catalogFingerprint = buf.getLong();
 		}
 		return new ServerMeta(
 				nodeId,
@@ -454,7 +458,8 @@ public final class SqlWire {
 				(flags & SERVER_META_FLAG_APPLY_LAG_STALE) != 0,
 				schemaEpoch,
 				regionEpoch,
-				regionRole);
+				regionRole,
+				catalogFingerprint);
 	}
 
 	public static byte[] error(int code, String message) {

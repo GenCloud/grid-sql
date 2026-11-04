@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import com.google.common.annotations.VisibleForTesting;
 
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -192,12 +191,10 @@ public final class OpLogArchiveUtil {
 		}
 	}
 
-	@VisibleForTesting
 	static Path streamDir(Path archiveRoot, String domain, int shard) {
 		return archiveRoot.resolve(SealedShardPack.domainHex(domain) + "_" + shard);
 	}
 
-	@VisibleForTesting
 	static void writeManifest(Path path, ArchiveManifest manifest) throws IOException {
 		final StringBuilder body = new StringBuilder(128);
 		body.append(KEY_DOMAIN).append(manifest.domain()).append(MANIFEST_NL);
@@ -209,7 +206,6 @@ public final class OpLogArchiveUtil {
 		GridFs.writeAtomic(path, body.toString(), StandardCharsets.UTF_8);
 	}
 
-	@VisibleForTesting
 	static ArchiveManifest parseManifest(String body) {
 		String domain = null;
 		int shard = -1;

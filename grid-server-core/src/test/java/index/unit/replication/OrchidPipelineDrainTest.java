@@ -32,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,6 +48,7 @@ class OrchidPipelineDrainTest {
 	private static final int MAX_IN_FLIGHT = 64;
 	private static final int PIPELINE_DEPTH = 64;
 	private static final long AWAIT_MS = 15_000L;
+	private static final long POLL_MS = 20L;
 	private static final int HEAVY_APPLY_SPIN = 2_000;
 
 	private final Map<String, OrchidNode> nodes = new ConcurrentHashMap<>();
@@ -86,8 +88,9 @@ class OrchidPipelineDrainTest {
 			assertTrue(seq == prev + 1L, "contiguous opSeq expected prev=" + prev + " got=" + seq);
 			prev = seq;
 		}
-		assertEquals(PIPELINE_DEPTH, applied.get());
-		assertEquals(PIPELINE_DEPTH, solo.getLastCommittedSeq());
+		assertTrue(await(() -> applied.get() >= PIPELINE_DEPTH
+						&& solo.getLastCommittedSeq() >= PIPELINE_DEPTH),
+				"solo apply listeners must finish after tip advance");
 	}
 
 	@Test
@@ -113,7 +116,25 @@ class OrchidPipelineDrainTest {
 			maxSeq = Math.max(maxSeq, future.get(AWAIT_MS, TimeUnit.MILLISECONDS));
 		}
 		assertEquals(batch, maxSeq);
-		assertEquals(batch, appliedPrimary.get());
+		assertTrue(await(() -> appliedPrimary.get() >= batch
+						&& primary.getLastCommittedSeq() >= batch),
+				"primary apply listeners must finish after tip advance");
+	}
+
+	private static boolean await(BooleanSupplier condition) {
+		final long deadline = System.currentTimeMillis() + AWAIT_MS;
+		while (System.currentTimeMillis() < deadline) {
+			if (condition.getAsBoolean()) {
+				return true;
+			}
+			try {
+				Thread.sleep(POLL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
+		}
+		return condition.getAsBoolean();
 	}
 
 	private OrchidNode start(String id, List<String> peers, int maxInFlight) {

@@ -27,6 +27,7 @@ import org.genfork.grid.catalog.ColumnDef;
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.query.filters.FilterCondition;
 import org.genfork.grid.serial.LogicalFieldCursor;
+import org.genfork.grid.serial.WireCompositeKeys;
 import org.genfork.grid.serial.WireSpan;
 import org.genfork.grid.sql.SqlIdentParseUtil;
 import org.genfork.grid.sql.ast.SelectAst.ColumnSelectItem;
@@ -59,9 +60,6 @@ public final class SqlJoinOps {
 
 	/** Wire EQ arity for single-column right index probe. */
 	private static final int LOOKUP_EQ_WIRE_ARITY = 1;
-
-	/** Same separator as {@link SqlWireAggOps} composite GROUP BY keys. */
-	private static final byte COMPOSITE_FIELD_SEP = 0x1F;
 
 	private SqlJoinOps() {
 	}
@@ -121,9 +119,9 @@ public final class SqlJoinOps {
 		final boolean leftOuter = kind == JoinKind.LEFT || kind == JoinKind.FULL;
 		final boolean rightOuter = kind == JoinKind.RIGHT || kind == JoinKind.FULL;
 		if (leftOrds.length == LOOKUP_EQ_WIRE_ARITY && rightOrds.length == LOOKUP_EQ_WIRE_ARITY) {
-			final ColumnDef rightPk = right.schema().pkColumn();
-			final boolean rightOnPk = rightPk != null
-					&& right.schema().columns().get(rightOrds[0]).name().equalsIgnoreCase(rightPk.name());
+			final String rightColName = right.schema().columns().get(rightOrds[0]).name();
+			final boolean rightOnPk = SqlPkLookupUtil.isJoinPkPointProbe(
+					right.schema(), List.of(rightColName));
 			if (rightOnPk && !rightOuter && rightBlobs == null) {
 				return joinProbeRightPkStore(leftRows, leftSideSchemas, right, leftOrds[0], leftOuter);
 			}
@@ -241,11 +239,11 @@ public final class SqlJoinOps {
 			String rightCol
 	) {
 		return joinProbeRightIndexStore(
-				leftRows, leftSideSchemas, right, new int[]{leftOrd}, List.of(rightCol));
+				leftRows, leftSideSchemas, right, new int[]{leftOrd}, List.of(rightCol), false);
 	}
 
 	/**
-	 * Probe right covering EQ index from left wire keys (single or composite column list).
+	 * Probe right covering EQ index from left wire keys (INNER semantics).
 	 */
 	static List<JoinBlobRow> joinProbeRightIndexStore(
 			List<JoinBlobRow> leftRows,
@@ -253,6 +251,22 @@ public final class SqlJoinOps {
 			TableStore right,
 			int[] leftOrds,
 			List<String> rightCols
+	) {
+		return joinProbeRightIndexStore(leftRows, leftSideSchemas, right, leftOrds, rightCols, false);
+	}
+
+	/**
+	 * Probe right covering / left-prefix EQ index from left wire keys.
+	 *
+	 * @param leftOuter when true (LEFT/FULL), left rows with no right match are null-padded
+	 */
+	static List<JoinBlobRow> joinProbeRightIndexStore(
+			List<JoinBlobRow> leftRows,
+			List<TableSchema> leftSideSchemas,
+			TableStore right,
+			int[] leftOrds,
+			List<String> rightCols,
+			boolean leftOuter
 	) {
 		if (leftOrds == null || rightCols == null || leftOrds.length != rightCols.size() || leftOrds.length == 0) {
 			throw new IllegalArgumentException("join index probe column arity mismatch");
@@ -292,6 +306,9 @@ public final class SqlJoinOps {
 		for (JoinBlobRow lr : leftRows) {
 			final List<byte[]> matches = indexMap.get(wireKeyFromJoined(lr, leftSideSchemas, leftOrds));
 			if (matches == null || matches.isEmpty()) {
+				if (leftOuter) {
+					out.add(concatSide(lr, null));
+				}
 				continue;
 			}
 			for (byte[] rr : matches) {
@@ -421,20 +438,11 @@ public final class SqlJoinOps {
 			return wireKeyFromJoined(row, sideSchemas, globalOrds[0]);
 		}
 		final byte[][] parts = new byte[globalOrds.length][];
-		int total = 0;
 		for (int i = 0; i < globalOrds.length; i++) {
 			final WireSpan part = wireKeyFromJoined(row, sideSchemas, globalOrds[i]);
 			parts[i] = part.toOwnedBytes();
-			total += parts[i].length + 1;
 		}
-		final byte[] composite = new byte[total];
-		int pos = 0;
-		for (byte[] part : parts) {
-			System.arraycopy(part, 0, composite, pos, part.length);
-			pos += part.length;
-			composite[pos++] = COMPOSITE_FIELD_SEP;
-		}
-		return WireSpan.ofOwned(composite);
+		return WireSpan.ofOwned(WireCompositeKeys.joinOwnedParts(parts));
 	}
 
 

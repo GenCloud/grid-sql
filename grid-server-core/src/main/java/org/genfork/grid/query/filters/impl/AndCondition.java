@@ -30,8 +30,8 @@ import org.genfork.grid.mem.index.btree.CompositeTreeKey;
 import org.genfork.grid.mem.index.btree.IndexOperationResult;
 import org.genfork.grid.mem.index.btree.SingleTreeKey;
 import org.genfork.grid.query.filters.FilterCondition;
+import org.genfork.grid.query.filters.SameColumnClosedRangeAndUtil;
 import org.genfork.grid.query.plan.ExplainQuery;
-import org.genfork.grid.serial.FieldMetaData;
 
 /**
  * @author: GenCloud
@@ -104,6 +104,18 @@ public class AndCondition implements FilterCondition {
 					ExplainQuery.annotateNode(queryPlanNode, "Indexed And (residual left)");
 				}
 				return rightOnly;
+			}
+
+			// Same-column GE∧LE → one inclusive searchRange (avoids dual scan + pointer ∩).
+			final IndexOperationResult closedRange =
+					SameColumnClosedRangeAndUtil.tryClosedRange(left, right, property2Index);
+			if (closedRange != null) {
+				rowsProcessed += closedRange.getRowsProcessed();
+				rowsReturned = closedRange.getSize();
+				if (queryPlanNode != null) {
+					ExplainQuery.annotateNode(queryPlanNode, "Same-column GE∧LE → searchRange");
+				}
+				return closedRange;
 			}
 
 			final IndexOperationResult leftResult = left.execute(property2Index, compositeIndexes, primaryKeyColumns, queryPlan);

@@ -19,6 +19,7 @@ import one.nio.util.Cleaner;
 import org.genfork.grid.exceptions.NonUniqueValueException;
 import org.genfork.grid.mem.index.AbstractIndexOperation;
 import org.genfork.grid.mem.index.IndexPointerRef;
+import org.genfork.grid.mem.index.IndexProbeMailbox;
 import org.genfork.grid.mem.index.health.SimpleIndexHealthAnalyzer;
 import org.genfork.grid.mem.index.health.SimpleIndexHealthAnalyzer.IndexHealthMetrics;
 import org.genfork.grid.query.plan.ExplainQuery;
@@ -115,6 +116,21 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 				}
 			};
 		}
+	}
+
+	/**
+	 * Owned posting snapshot for exact EQ — never escape a live {@link FastOrderedSet}
+	 * past {@link IndexProbeMailbox} (CME / freed-pointer races on concurrent mutate).
+	 */
+	private static Set<IndexPointerRef> ownedPostings(Set<IndexPointerRef> live) {
+		if (live == null || live.isEmpty()) {
+			return Collections.emptySet();
+		}
+		if (live.size() == 1) {
+			final Iterator<IndexPointerRef> it = live.iterator();
+			return Collections.singleton(it.next());
+		}
+		return Set.copyOf(live);
 	}
 
 	private final String indexName;
@@ -321,7 +337,14 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 	 * Resumable left-to-right walk of row PK bytes (Portal pull / FETCH windows).
 	 */
 	public RowKeyCursor<K, T> openRowKeyCursor() {
-		return new RowKeyCursor<>(getFirstLeafNode());
+		return openRowKeyCursor(null);
+	}
+
+	/**
+	 * Portal PK leaf cursor; optional {@code mailbox} serializes leaf advances with index mutations.
+	 */
+	public RowKeyCursor<K, T> openRowKeyCursor(IndexProbeMailbox mailbox) {
+		return new RowKeyCursor<>(getFirstLeafNode(), mailbox);
 	}
 
 	/**
@@ -336,10 +359,12 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 		private Iterator<IndexPointerRef> pointerIter;
 		private byte[] nextRowKey;
 		private boolean closed;
+		private final IndexProbeMailbox mailbox;
 
-		private RowKeyCursor(LeafNode<K, T> first) {
+		private RowKeyCursor(LeafNode<K, T> first, IndexProbeMailbox mailbox) {
 			this.leaf = first;
 			this.keyIndex = 0;
+			this.mailbox = mailbox;
 			advance();
 		}
 
@@ -364,6 +389,14 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 		}
 
 		private void advance() {
+			if (mailbox != null) {
+				mailbox.run(this::advanceUnlocked);
+			} else {
+				advanceUnlocked();
+			}
+		}
+
+		private void advanceUnlocked() {
 			nextRowKey = null;
 			while (leaf != null) {
 				if (pointerIter != null && pointerIter.hasNext()) {
@@ -503,7 +536,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			joiner.add("=========================Leaf stats=========================");
 			collectTree(joiner);
 			Files.write(path, joiner.toString().getBytes(), CREATE, TRUNCATE_EXISTING);
-		} catch (Exception e) {
+		} catch (Exception _) {
 		}
 		//
 	}
@@ -879,14 +912,16 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 
 		@Override
 		IndexOperationResult searchLessThan(T key) {
-			final int idx = findIndex(key, false);
-			return children.get(idx).searchLessThan(key);
+			// Open upper bound / NE must start at the leftmost leaf. Descending to the
+			// bound leaf and walking only next skips all earlier leaves (multi-leaf hole).
+			final Node<K, T> leftmost = leftmostDescendant();
+			return leftmost == null ? emptyIndexResult() : leftmost.searchLessThan(key);
 		}
 
 		@Override
 		IndexOperationResult searchLessThanOrEqual(T key) {
-			final int idx = findIndex(key, false);
-			return children.get(idx).searchLessThanOrEqual(key);
+			final Node<K, T> leftmost = leftmostDescendant();
+			return leftmost == null ? emptyIndexResult() : leftmost.searchLessThanOrEqual(key);
 		}
 
 		@Override
@@ -897,33 +932,41 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 
 		@Override
 		IndexOperationResult searchNotEqual(T key) {
-			final int idx = findIndex(key, false);
-			return children.get(idx).searchNotEqual(key);
+			final Node<K, T> leftmost = leftmostDescendant();
+			return leftmost == null ? emptyIndexResult() : leftmost.searchNotEqual(key);
 		}
 
 		@Override
 		IndexOperationResult searchAll() {
 			// B+ full scan: one left-to-right leaf walk. Do not fan out per child
 			// (each LeafNode.searchAll follows next — that would be O(leaves^2)).
+			final Node<K, T> leftmost = leftmostDescendant();
+			return leftmost == null ? emptyIndexResult() : leftmost.searchAll();
+		}
+
+		/**
+		 * Leftmost leaf (or empty-tree sentinel) under this internal node.
+		 */
+		private Node<K, T> leftmostDescendant() {
 			if (children.isEmpty()) {
-				final IndexOperationResult empty = new IndexOperationResult();
-				empty.setRowsProcessed(0);
-				empty.setSize(0);
-				empty.setPointers(Set.of());
-				return empty;
+				return null;
 			}
 			Node<K, T> node = children.getFirst();
 			while (node instanceof InternalNode<K, T> internal) {
 				if (internal.children.isEmpty()) {
-					final IndexOperationResult empty = new IndexOperationResult();
-					empty.setRowsProcessed(0);
-					empty.setSize(0);
-					empty.setPointers(Set.of());
-					return empty;
+					return null;
 				}
 				node = internal.children.getFirst();
 			}
-			return node.searchAll();
+			return node;
+		}
+
+		private static IndexOperationResult emptyIndexResult() {
+			final IndexOperationResult empty = new IndexOperationResult();
+			empty.setRowsProcessed(0);
+			empty.setSize(0);
+			empty.setPointers(Set.of());
+			return empty;
 		}
 
 		@Override
@@ -1087,7 +1130,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			}
 			final Set<IndexPointerRef> currentPointers = values.get(idx);
 			operationResult.addSize(currentPointers.size());
-			operationResult.setPointers(currentPointers);
+			operationResult.setPointers(ownedPostings(currentPointers));
 			return operationResult;
 		}
 
@@ -1108,7 +1151,7 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 				final IndexOperationResult operationResult = new IndexOperationResult();
 				if (currentPointers.size() <= maxResults) {
 					operationResult.addSize(currentPointers.size());
-					operationResult.setPointers(currentPointers);
+					operationResult.setPointers(ownedPostings(currentPointers));
 					operationResult.incProcessed();
 					return operationResult;
 				}
@@ -1211,14 +1254,25 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			final PointerSetAccumulator acc = new PointerSetAccumulator();
 			LeafNode<K, T> current = this;
 			while (current != null) {
+				boolean pastBound = false;
 				for (int i = 0; i < current.keys.size(); i++) {
 					final T next = current.keys.get(i);
-					if (next != null && next.comparePartial(key) < 0) {
-						final Set<IndexPointerRef> currentPointers = current.values.get(i);
-						acc.addAll(currentPointers);
-						operationResult.addSize(currentPointers.size());
+					if (next == null) {
+						operationResult.incProcessed();
+						continue;
 					}
+					// Sorted leaves: first key >= bound means no further LT matches.
+					if (next.comparePartial(key) >= 0) {
+						pastBound = true;
+						break;
+					}
+					final Set<IndexPointerRef> currentPointers = current.values.get(i);
+					acc.addAll(currentPointers);
+					operationResult.addSize(currentPointers.size());
 					operationResult.incProcessed();
+				}
+				if (pastBound) {
+					break;
 				}
 				current = current.next;
 			}
@@ -1232,14 +1286,25 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			final PointerSetAccumulator acc = new PointerSetAccumulator();
 			LeafNode<K, T> current = this;
 			while (current != null) {
+				boolean pastBound = false;
 				for (int i = 0; i < current.keys.size(); i++) {
 					final T next = current.keys.get(i);
-					if (next != null && next.comparePartial(key) <= 0) {
-						final Set<IndexPointerRef> currentPointers = current.values.get(i);
-						acc.addAll(currentPointers);
-						operationResult.addSize(currentPointers.size());
+					if (next == null) {
+						operationResult.incProcessed();
+						continue;
 					}
+					// Sorted leaves: first key > bound means no further LE matches.
+					if (next.comparePartial(key) > 0) {
+						pastBound = true;
+						break;
+					}
+					final Set<IndexPointerRef> currentPointers = current.values.get(i);
+					acc.addAll(currentPointers);
+					operationResult.addSize(currentPointers.size());
 					operationResult.incProcessed();
+				}
+				if (pastBound) {
+					break;
 				}
 				current = current.next;
 			}
@@ -1253,14 +1318,26 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 			final PointerSetAccumulator acc = new PointerSetAccumulator();
 			LeafNode<K, T> current = this;
 			while (current != null) {
+				boolean pastHigh = false;
 				for (int i = 0; i < current.keys.size(); i++) {
 					final T next = current.keys.get(i);
-					if (next != null && next.comparePartial(low) >= 0 && next.comparePartial(high) <= 0) {
+					if (next == null) {
+						operationResult.incProcessed();
+						continue;
+					}
+					if (next.comparePartial(high) > 0) {
+						pastHigh = true;
+						break;
+					}
+					if (next.comparePartial(low) >= 0) {
 						final Set<IndexPointerRef> currentPointers = current.values.get(i);
 						acc.addAll(currentPointers);
 						operationResult.addSize(currentPointers.size());
 					}
 					operationResult.incProcessed();
+				}
+				if (pastHigh) {
+					break;
 				}
 				current = current.next;
 			}
@@ -1662,9 +1739,5 @@ public abstract class AbstractBPTree<K, T extends TreeKey<K>> extends AbstractIn
 
 	public String getIndexName() {
 		return this.indexName;
-	}
-
-	public IndexStat getIndexStat() {
-		return this.indexStat;
 	}
 }

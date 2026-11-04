@@ -6,6 +6,8 @@ grid:
   sql:
     default-shards: 8
     data-dir: ./data/catalog
+    # Record-lock wait for SQL TX (must stay ≤ client SyncAwait / execTimeoutMs).
+    lock-wait-timeout-ms: 30000
   sql-server:
     enabled: true
     host: 0.0.0.0

@@ -155,6 +155,22 @@ public class RejoinAfterSealTruncateIT {
 							+ " truncatedThrough=" + truncated);
 			assertArrayEquals(valEarly, procC2.get(keyEarly));
 			assertArrayEquals(valLate, procC2.get(keyLate));
+
+			final long writerTip = a.getOrchidNode().getLastCommittedSeq();
+			final long tipDeadline = System.currentTimeMillis() + CATCH_UP_TIMEOUT_MS;
+			boolean tipCaught = false;
+			while (System.currentTimeMillis() < tipDeadline) {
+				if (c.getOrchidNode().getLastCommittedSeq() >= writerTip) {
+					tipCaught = true;
+					break;
+				}
+				shipAllFrom(a, "seal-c");
+				LockSupport.parkNanos(PARK_NANOS);
+			}
+			assertTrue(tipCaught,
+					"rejoin after seal+truncate must catch orchid tip; local="
+							+ c.getOrchidNode().getLastCommittedSeq()
+							+ " writer=" + writerTip);
 		} finally {
 			stopQuietly(a);
 			stopQuietly(b);

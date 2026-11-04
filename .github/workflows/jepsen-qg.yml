@@ -1,5 +1,5 @@
 # Jepsen QG lab gate — separate from unit CI (never co-run with Load/JMH/OSS).
-# Full matrix A–M: benchmarks/jepsen/COVERAGE.md
+# Full matrix A–P: benchmarks/jepsen/COVERAGE.md
 # Default runs-on: ubuntu-latest.
 # Self-hosted (owner-only): repository owner + same-repo PR label "self-hosted",
 # or owner dispatch / JEPSEN_RUNNER_LABELS. Forks and non-owner actors stay on ubuntu-latest.
@@ -96,7 +96,7 @@ jobs:
         run: bash .github/scripts/resolve-gha-runner.sh
 
   validate-matrix:
-    name: Validate A–M matrix sync
+    name: Validate A–P matrix sync
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -161,7 +161,7 @@ jobs:
           function M([string]$v) { if ($v -and $v.Trim().Length -ge 4) { Write-Output "::add-mask::$v" } }
           M $env:USERNAME; M $env:USERPROFILE; M $env:COMPUTERNAME; M $env:RUNNER_NAME
           M $env:GITHUB_WORKSPACE; M $env:RUNNER_TEMP; M $env:HOME; M $env:USER
-      - name: Build matrix JSON (A–M) — Linux
+      - name: Build matrix JSON (A–P) — Linux
         id: set_linux
         if: runner.os == 'Linux'
         env:
@@ -183,6 +183,9 @@ jobs:
             "K|1dc-join-shards|benchmarks/jepsen/scripts/run-jepsen-join.sh|1dc|1|0|0|0|60"
             "L|multidc-async-swarm|benchmarks/jepsen/multidc/scripts/run-multidc-swarm.sh|multidc|0|1|0|0|60"
             "M|multidc-async-join|benchmarks/jepsen/multidc/scripts/run-multidc-join.sh|multidc|1|0|0|0|60"
+            "N|1dc-unclean-ddl|benchmarks/jepsen/scripts/run-jepsen-unclean-ddl.sh|1dc|0|0|1|0|60"
+            "O|1dc-sealed-miss|benchmarks/jepsen/scripts/run-jepsen-sealed-miss.sh|1dc|0|0|0|0|60"
+            "P|1dc-sparse-catalog|benchmarks/jepsen/scripts/run-jepsen-sparse-catalog.sh|1dc|0|0|0|0|60"
           )
           FILTER="$PROFILES"
           items=()
@@ -221,7 +224,7 @@ jobs:
           echo "Prepared ${#items[@]} cell(s) runner.os=$RUNNER_OS"
           echo "$matrix" | jq -r '.include[] | "\(.id) \(.config)"'
 
-      - name: Build matrix JSON (A–M) — Windows
+      - name: Build matrix JSON (A–P) — Windows
         id: set_win
         if: runner.os == 'Windows'
         shell: powershell
@@ -243,7 +246,10 @@ jobs:
             @{id='J';config='1dc-swarm-chaos';script='benchmarks/jepsen/scripts/run-jepsen-swarm.sh';scope='1dc';join='0';swarm='1';unclean='0';qg='0';min_tl=60},
             @{id='K';config='1dc-join-shards';script='benchmarks/jepsen/scripts/run-jepsen-join.sh';scope='1dc';join='1';swarm='0';unclean='0';qg='0';min_tl=60},
             @{id='L';config='multidc-async-swarm';script='benchmarks/jepsen/multidc/scripts/run-multidc-swarm.sh';scope='multidc';join='0';swarm='1';unclean='0';qg='0';min_tl=60},
-            @{id='M';config='multidc-async-join';script='benchmarks/jepsen/multidc/scripts/run-multidc-join.sh';scope='multidc';join='1';swarm='0';unclean='0';qg='0';min_tl=60}
+            @{id='M';config='multidc-async-join';script='benchmarks/jepsen/multidc/scripts/run-multidc-join.sh';scope='multidc';join='1';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='N';config='1dc-unclean-ddl';script='benchmarks/jepsen/scripts/run-jepsen-unclean-ddl.sh';scope='1dc';join='0';swarm='0';unclean='1';qg='0';min_tl=60},
+            @{id='O';config='1dc-sealed-miss';script='benchmarks/jepsen/scripts/run-jepsen-sealed-miss.sh';scope='1dc';join='0';swarm='0';unclean='0';qg='0';min_tl=60},
+            @{id='P';config='1dc-sparse-catalog';script='benchmarks/jepsen/scripts/run-jepsen-sparse-catalog.sh';scope='1dc';join='0';swarm='0';unclean='0';qg='0';min_tl=60}
           )
           $want = @()
           if ($env:PROFILES -ne 'all') {
@@ -582,7 +588,7 @@ jobs:
           retention-days: 14
 
   summary:
-    name: Matrix summary A–M
+    name: Matrix summary A–P
     needs: [prepare, matrix, resolve-runner]
     if: always() && needs.prepare.result == 'success'
     runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runs_on) }}
