@@ -304,6 +304,21 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 	}
 
 	/**
+	 * After EXEC deny (incomplete / apply-lag stale) on a READ_REPLICA sticky endpoint,
+	 * mark that endpoint stale so the next obtain rotates instead of re-pinning the same peer.
+	 * No-op when not a read-replica factory or sticky index is out of range.
+	 */
+	public void markCurrentReadEndpointStale() {
+		if (readSelector == null) {
+			return;
+		}
+		final int idx = stickyIndex.get();
+		if (idx >= 0 && idx < endpoints.size()) {
+			readSelector.markStale(endpoints.get(idx), true);
+		}
+	}
+
+	/**
 	 * Mid-op orchid / region fence reject: close live channels and AUTH-rediscover the
 	 * writer-eligible peer matching promoteHint / region epoch. Does not silent-rotate sticky.
 	 */
@@ -1212,6 +1227,13 @@ public final class RemoteConnectionFactory implements ConnectionFactory {
 
 	public Duration execTimeout() {
 		return options.execTimeout();
+	}
+
+	/**
+	 * TCP / AUTH connect budget (obtain ring hops prefer this over {@link #execTimeout()}).
+	 */
+	public Duration connectTimeout() {
+		return options.connectTimeout();
 	}
 
 	public int activeChannels() {

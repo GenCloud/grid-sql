@@ -125,4 +125,8 @@ It is not a "faster durable mode". Numbers measured with durability off — or w
 - Lock waits that scale with concurrency point at hot keys rather than at the write path: [visibility and concurrency](concurrency-and-visibility.md).
 - Metrics and health: [monitoring](../configure-and-operate/monitoring.md).
 
+## Not this path: replica SELECT admit
+
+Replica read fences (`applyLagStale`, sticky missing-stream, structural sealed hole) run **before** row I/O and do not share the write queue → ORCHID → OpLog chain above. Inventory rebuild for admit is on `helloCatchUp`, not on `GridEntriesWorker`. See [replica reads](../configure-and-operate/operations/replica-reads.md) and [architecture overview](architecture-overview.md).
+
 Next: [storage](storage-sealed-gmap.md), [ORCHID](orchid-consensus.md), [durability](../configure-and-operate/configuration/durability.md).

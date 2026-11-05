@@ -8,16 +8,12 @@ In the demo, replication listens on **5615** / **5616**, SQL on **15432** / **15
 
 ## How a change reaches other nodes
 
-```
-ORCHID admission (phase + checksum)
-      │
-OpLog: append + confirmation
-      │
-put into the map (the row becomes visible)
-      │
-ship to peers over Netty
-      │
-apply on peer → peer map
+```mermaid
+flowchart TB
+  Orchid["ORCHID admission\nphase + checksum"] --> OpLog["OpLog append + confirmation"]
+  OpLog --> Map["put into the map\nrow visible"]
+  Map --> Ship["ship to peers over Netty"]
+  Ship --> Apply["apply on peer → peer map"]
 ```
 
 *Figure 1. Shipping to peers is the last step, not the first.*
@@ -50,6 +46,26 @@ This is a private binary protocol between nodes. It is not exposed to applicatio
 ### HELLO sealed catch-up
 
 When a peer’s `APPLY_ACK` is strictly behind the OpLog truncate watermark (`peerAck < truncatedThrough`), the journal tail alone cannot fill retired seqs. On the HELLO path the node ships a sealed shard pack (`.gmap` / `.sbpt` / `.sbm` via `HelloSealedCatchUpUtil`), then the live OpLog tail. An empty sealed root is a no-op; ordinary pull/repair continues.
+
+HELLO decode / channel attrs / `onPeerAvailable` stay on the Netty event loop. Sealed inventory observe, membership catch-up, OPLOG_PULL sealed ship, and **eager admit-index rebuild** run on a dedicated `helloCatchUp` serial mailbox (logic VT) — **not** on the EL and **not** on `OrchidNode.orchidRpcQueue`.
+
+```mermaid
+flowchart TB
+  EL["Netty EL: HELLO decode\nchannel attrs / onPeerAvailable"] --> Mail["helloCatchUp mailbox\nlogic VT"]
+  Mail --> Obs["observe peer sealed inventory"]
+  Obs -->|"unchanged vs last hash"| Skip["skip disk ofShardIdentity\nobserve_skipped++"]
+  Obs -->|"changed / bypass"| Diff["compare LocalSealedInventoryIndex\nvs peer entries"]
+  Diff -->|"FP mismatch"| Heal["differential pull\nfromSeq=1 — heal only"]
+  Diff -->|"proposer has stream,\nlocal tip+sealed FP=0"| Sticky["recompute MissingStreamAdmitState\nadmit fence"]
+  Local["local seal / unpack"] --> Inv["invalidate + markNotReady\nfail-closed"]
+  Inv --> Rebuild["eager rebuild inventory index\non helloCatchUp"]
+  Rebuild --> Sticky
+  Sel["READ_REPLICA SELECT"] -.->|O(1) sticky bit| Sticky
+```
+
+*Figure 2. Dual-track HELLO: heal vs sticky admit. SELECT never directory-walks sealed packs.*
+
+Unchanged peer inventory skips the disk `ofShardIdentity` walk (invalidate on local seal/unpack). Solo / unit paths without peer transport rebuild the admit index **synchronously** once. A `local propose digest timeout` under HELLO load is an EL/mailbox isolation bug, not a reason to raise the 5s ORCHID digest timeout or weaken quorum. Replica admit policy: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 ## Inside one data centre
 

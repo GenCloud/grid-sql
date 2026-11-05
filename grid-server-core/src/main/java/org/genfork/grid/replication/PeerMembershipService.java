@@ -17,6 +17,8 @@ package org.genfork.grid.replication;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.genfork.grid.context.config.GridConfigurationProperties.ReplicationPeerProps;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -60,6 +62,11 @@ public final class PeerMembershipService {
 	private final CrossDcPublisher crossDcPublisher;
 	private final List<ReplicationPeer> peers;
 	private final RegionClaimService regionClaimService;
+	/**
+	 * Operator {@link #removePeer} ids suppressed from HELLO auto-{@link #addPeer} until explicit add.
+	 * Same peerId may return via {@link #addPeer} (not a permanent ban).
+	 */
+	private final Set<String> operatorRemovedPeerIds = ConcurrentHashMap.newKeySet();
 	/** Optional sealed source for HELLO catch-up past OpLog truncate (set after ctor). */
 	private volatile SealedGridMapService sealedGridMapService;
 
@@ -104,6 +111,7 @@ public final class PeerMembershipService {
 		if (!enabled || peer == null) {
 			return;
 		}
+		operatorRemovedPeerIds.remove(peer.id());
 		peers.removeIf(p -> peer.id().equals(p.id()));
 		peers.add(peer);
 		nettyTransport.addPeer(peer);
@@ -111,6 +119,7 @@ public final class PeerMembershipService {
 		if (peer.dc() == null || localDc == null || localDc.equals(peer.dc())) {
 			orchidNode.configureLocalPeer(peer.id());
 		} else {
+			orchidNode.healPeer(peer.id());
 			orchidNode.onPeerAvailable(peer.id());
 		}
 		publisher.setPeers(peers);
@@ -121,6 +130,7 @@ public final class PeerMembershipService {
 		if (!enabled || peerId == null) {
 			return;
 		}
+		operatorRemovedPeerIds.add(peerId);
 		peers.removeIf(p -> peerId.equals(p.id()));
 		nettyTransport.removePeer(peerId);
 		orchidNode.unconfigurePeer(peerId);
@@ -156,9 +166,14 @@ public final class PeerMembershipService {
 		if (discovered == null || discovered.id() == null) {
 			return;
 		}
+		final boolean operatorRemoved = operatorRemovedPeerIds.contains(discovered.id());
 		final boolean known = peers.stream().anyMatch(p -> discovered.id().equals(p.id()));
-		if (!known && discovered.port() > 0) {
+		if (!known && discovered.port() > 0 && !operatorRemoved) {
 			addPeer(new ReplicationPeer(discovered.id(), discovered.host(), discovered.port(), discovered.dc()));
+		}
+		if (operatorRemoved) {
+			// Operator remove: no auto-rejoin / catch-up until explicit addPeer (same id may return later).
+			return;
 		}
 		if (regionClaimService != null
 				&& regionClaimService.regionCoordinator() != null

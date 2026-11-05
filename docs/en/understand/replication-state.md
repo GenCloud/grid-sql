@@ -56,6 +56,7 @@ The first two survive a restart; the last two are rebuilt. That is why a restart
 - In-memory indexes (B+ tree, bitmap) — accelerators. Their durable form after sealing is `.sbpt` and `.sbm`.
 - The live-peer view and current phases — operational state, reassembled after a restart.
 - Changes still sitting in the write queue.
+- **`LocalSealedInventoryIndex` + `MissingStreamAdmitState`** — sticky O(1) replica-admit state rebuilt on `helloCatchUp` after seal/unpack invalidate (fail-closed while not ready). Not durable; not a substitute for sealed files. Policy: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 None of this is the only copy of data when durability is enabled. Losing the heap loses speed, not rows.
 
@@ -94,7 +95,7 @@ The rules that protect against divergence during a partition:
 - The writer is phase-ranked: `min(nodeId)` among self and seen peers.
 - A peer is promoted back to voter once its `APPLY_ACK` has caught up; a HELLO with the same `clusterId` adds it back via `addPeer`.
 - `writerEligible` requires sync, phase admission, **and** a tip that is not behind reachable peers. Tip-behind (unclean revive / tip fence) keeps `writerEligible=false` until local `lastCommittedSeq` catches `maxSeenPeerCommittedSeq` — independent of role/epoch.
-- Wire `ServerMeta` / HELLO may carry **`catalogFingerprint`** (local catalog object-set). Replica SQL admission fail-closes on fingerprint mismatch or unhydrated LAZY tip debt — not only serving-stream `applyLagStale`. Client auto-route may fall back to the writer: [replica reads](../configure-and-operate/operations/replica-reads.md).
+- Wire `ServerMeta` / HELLO may carry **`catalogFingerprint`** (local catalog object-set) and per-shard sealed identity inventory. Replica SQL admission fail-closes on catalog fingerprint hole, unhydrated LAZY tip debt, **local** structural sealed hole, or sticky proposer missing-stream — not only serving-stream `applyLagStale`. Peer inventory **mismatch** is differential heal only (not an admit fence by itself). Client auto-route may fall back to the writer: [replica reads](../configure-and-operate/operations/replica-reads.md).
 
 ## Repair and placement readiness
 

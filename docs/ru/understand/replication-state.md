@@ -56,6 +56,7 @@
 - Индексы в памяти (B+ tree, bitmap) — ускорители. Их долговременная форма после запечатывания — `.sbpt` и `.sbm`.
 - Вид живых пиров и текущие фазы — оперативное состояние, собирается после рестарта заново.
 - Изменения, ещё лежащие в очереди записи.
+- **`LocalSealedInventoryIndex` + `MissingStreamAdmitState`** — sticky O(1) состояние допуска реплики; rebuild на `helloCatchUp` после invalidate seal/unpack (fail-closed, пока не ready). Не durable и не замена sealed файлам. Политика: [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 
 Ничто из этого не является единственной копией данных при включённой записи на диск. Потеря кучи стоит скорости, а не строк.
 
@@ -94,7 +95,7 @@
 - Предлагающий узел выбирается по фазе: `min(nodeId)` среди себя и достижимых пиров.
 - Пир возвращается в голосующие, когда его `APPLY_ACK` догонит; HELLO с тем же `clusterId` добавляет его обратно через `addPeer`.
 - `writerEligible` требует синхронизацию, допуск по фазе **и** tip не позади достижимых пиров. Tip-behind (unclean-revive / tip-fence) держит `writerEligible=false`, пока локальный `lastCommittedSeq` не догонит `maxSeenPeerCommittedSeq` — независимо от роли/epoch.
-- В wire `ServerMeta` / HELLO может быть **`catalogFingerprint`** (object-set локального каталога). Допуск SQL на реплике fail-closed при несовпадении fingerprint или непроигранном LAZY tip — не только serving-stream `applyLagStale`. Auto-route клиента может уйти на writer: [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
+- В wire `ServerMeta` / HELLO могут быть **`catalogFingerprint`** (object-set каталога) и per-shard sealed identity inventory. Допуск SQL на реплике fail-closed при дыре fingerprint каталога, непроигранном LAZY tip, **локальной** structural sealed hole или sticky proposer missing-stream — не только serving-stream `applyLagStale`. **Mismatch** peer inventory — только differential heal (сам по себе не admit fence). Auto-route клиента может уйти на writer: [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 
 ## Готовность восстановления и размещения
 

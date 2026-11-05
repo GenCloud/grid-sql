@@ -29,17 +29,21 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.genfork.grid.sql.SqlEngine;
 import org.genfork.grid.sql.SqlResult;
 import org.genfork.grid.sql.SqlServerRuntime;
+import org.genfork.grid.sql.tx.LockWaitTimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Concurrent ON CONFLICT EQ vs index mutate must not throw IndexOutOfBoundsException.
  * <p>
  * Repro for off-mailbox {@code LeafNode.searchEq} racing {@code keys.add}/{@code values.add}.
+ * Same-key upserts serialize on the conflict arbiter; under load the default 8s lock wait
+ * can expire — that is product-correct, not the OOB race. This IT raises the wait budget and
+ * retries bounded lock timeouts so the assertion stays on index integrity.
  *
  * @author: GenCloud
  * @date: 2026/10
@@ -50,7 +54,10 @@ class ConcurrentOnConflictIndexRaceIT {
 	private static final int UPSERT_THREADS = 8;
 	private static final int INSERT_THREADS = 4;
 	private static final int ROUNDS = 80;
+	private static final int LOCK_TIMEOUT_RETRIES = 8;
 	private static final long AWAIT_SECONDS = 120L;
+	/** Same-key ON CONFLICT queue depth × hold time exceeds default 8s under insert stress. */
+	private static final long LOCK_WAIT_MS = 60_000L;
 	private static final String TABLE = "sched_conflict_race";
 	private static final String DDL_TABLE =
 			"CREATE TABLE " + TABLE + " ("
@@ -83,6 +90,7 @@ class ConcurrentOnConflictIndexRaceIT {
 				.dataDir(dataDir)
 				.shards(SHARDS)
 				.durability(false)
+				.lockWaitTimeoutMs(LOCK_WAIT_MS)
 				.build()) {
 			final SqlEngine engine = runtime.engine();
 			engine.execute(DDL_TABLE);
@@ -92,8 +100,9 @@ class ConcurrentOnConflictIndexRaceIT {
 			final int poolSize = UPSERT_THREADS + INSERT_THREADS;
 			final ExecutorService pool = Executors.newFixedThreadPool(poolSize);
 			final CountDownLatch go = new CountDownLatch(1);
-			final AtomicInteger fails = new AtomicInteger();
-			final AtomicReference<String> firstError = new AtomicReference<>();
+			final AtomicInteger unexpectedFails = new AtomicInteger();
+			final AtomicReference<String> firstIndexOob = new AtomicReference<>();
+			final AtomicReference<String> firstUnexpected = new AtomicReference<>();
 			final List<Future<?>> futures = new ArrayList<>(poolSize);
 			try {
 				for (int t = 0; t < UPSERT_THREADS; t++) {
@@ -101,11 +110,10 @@ class ConcurrentOnConflictIndexRaceIT {
 						try {
 							go.await();
 							for (int i = 0; i < ROUNDS; i++) {
-								engine.execute(UPSERT_SQL);
+								executeWithLockRetry(engine, UPSERT_SQL);
 							}
 						} catch (Exception ex) {
-							fails.incrementAndGet();
-							firstError.compareAndSet(null, "upsert: " + ex);
+							recordWorkerFailure("upsert", ex, firstIndexOob, firstUnexpected, unexpectedFails);
 						}
 					}));
 				}
@@ -116,15 +124,15 @@ class ConcurrentOnConflictIndexRaceIT {
 							go.await();
 							for (int i = 0; i < ROUNDS; i++) {
 								final String name = "sched-" + thread + "-" + i;
-								engine.execute(
+								executeWithLockRetry(
+										engine,
 										"INSERT INTO " + TABLE
 												+ " (event_name, scheduler_name, prev_fire_time) VALUES ('Ev-"
 												+ thread + "', '" + name
 												+ "', TIMESTAMP '2022-01-01 00:00:00')");
 							}
 						} catch (Exception ex) {
-							fails.incrementAndGet();
-							firstError.compareAndSet(null, "insert: " + ex);
+							recordWorkerFailure("insert", ex, firstIndexOob, firstUnexpected, unexpectedFails);
 						}
 					}));
 				}
@@ -137,10 +145,9 @@ class ConcurrentOnConflictIndexRaceIT {
 				assertTrue(pool.awaitTermination(AWAIT_SECONDS, TimeUnit.SECONDS));
 			}
 
-			assertEquals(0, fails.get(), "concurrent ON CONFLICT race: " + firstError.get());
-			final String err = firstError.get();
-			assertFalse(err != null && err.contains("IndexOutOfBounds"),
-					"must not IndexOutOfBounds: " + err);
+			assertNull(firstIndexOob.get(), "must not IndexOutOfBounds: " + firstIndexOob.get());
+			assertEquals(0, unexpectedFails.get(),
+					"concurrent ON CONFLICT unexpected: " + firstUnexpected.get());
 
 			final SqlResult dual = engine.execute(
 					"SELECT event_name, scheduler_name, COUNT(*) FROM " + TABLE
@@ -155,5 +162,48 @@ class ConcurrentOnConflictIndexRaceIT {
 							+ "AND scheduler_name = 'start-siege-scheduler-63'");
 			assertEquals(1, hit.rows().size());
 		}
+	}
+
+	private static void executeWithLockRetry(SqlEngine engine, String sql) {
+		for (int attempt = 1; ; attempt++) {
+			try {
+				engine.execute(sql);
+				return;
+			} catch (LockWaitTimeoutException ex) {
+				if (attempt >= LOCK_TIMEOUT_RETRIES) {
+					throw ex;
+				}
+			}
+		}
+	}
+
+	private static void recordWorkerFailure(
+			String kind,
+			Exception ex,
+			AtomicReference<String> firstIndexOob,
+			AtomicReference<String> firstUnexpected,
+			AtomicInteger unexpectedFails
+	) {
+		final String msg = kind + ": " + ex;
+		if (isIndexOutOfBounds(ex)) {
+			firstIndexOob.compareAndSet(null, msg);
+			return;
+		}
+		unexpectedFails.incrementAndGet();
+		firstUnexpected.compareAndSet(null, msg);
+	}
+
+	private static boolean isIndexOutOfBounds(Throwable ex) {
+		for (Throwable cur = ex; cur != null; cur = cur.getCause()) {
+			if (cur instanceof IndexOutOfBoundsException
+					|| cur instanceof ArrayIndexOutOfBoundsException) {
+				return true;
+			}
+			final String m = cur.getMessage();
+			if (m != null && m.contains("IndexOutOfBounds")) {
+				return true;
+			}
+		}
+		return false;
 	}
 }

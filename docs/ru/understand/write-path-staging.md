@@ -125,4 +125,8 @@ INSERT / UPDATE / DELETE
 - Ожидания блокировок, растущие вместе с конкурентностью, указывают на горячие ключи, а не на путь записи: [видимость и конкурентность](concurrency-and-visibility.md).
 - Метрики и здоровье: [мониторинг](../configure-and-operate/monitoring.md).
 
+## Не этот путь: допуск SELECT на реплике
+
+Fences чтения реплики (`applyLagStale`, sticky missing-stream, structural sealed hole) работают **до** I/O строки и не делят цепочку очередь → ORCHID → OpLog выше. Rebuild inventory для admit — на `helloCatchUp`, не на `GridEntriesWorker`. См. [чтение с реплики](../configure-and-operate/operations/replica-reads.md) и [обзор архитектуры](architecture-overview.md).
+
 Дальше: [хранение](storage-sealed-gmap.md), [ORCHID](orchid-consensus.md), [долговременное хранение](../configure-and-operate/configuration/durability.md).

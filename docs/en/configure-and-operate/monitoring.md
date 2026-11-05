@@ -53,6 +53,7 @@ The `gridReadiness` component reports the following keys. Values marked `n/a` me
 | `catalogLagStuck` | boolean, `n/a` | Stuck `_catalog` apply lag — readiness **DOWN** with `reason=catalog_lag_stuck` (transient lag>0 stays UP) |
 | `catalogIncomplete` | boolean, `n/a` | Local catalog fingerprint stale vs peers (object-set hole) |
 | `catalogFingerprint` | long, `n/a` | Local catalog object-set fingerprint (also on wire `ServerMeta` / HELLO) |
+| Sealed artifacts fingerprint (HELLO) | long, peer compare | Aggregate name+size identity for HELLO advertise / metrics — **not** an admit fence alone. Peer inventory mismatch ⇒ differential heal; local structural hole / sticky missing-stream ⇒ incomplete (Micrometer `missing_stream_incomplete`). Orthogonal to serving-stream `applyLagStale`. |
 
 Liveness (`gridLiveness`) reports `logicExecutor`, `uptimeMs`, `pid`, and the same consensus and repair gauges. It has no `reason` key: a live process with an unsynced cluster is alive but not ready.
 
@@ -76,6 +77,12 @@ Consensus and replication:
 | `grid.replication.swarm_hint` | Latest placement hint, as an ordinal |
 | `grid.replication.overlay_pinned_keys` | Live placement pins — [overlay PIN](configuration/overlay-pin.md) |
 | `grid.replication.catalog_apply_lag` | `_catalog` tip − applied watermark (privilege / schema DDL catch-up; AUTH is not gated by serving-stream `applyLagStale` alone) |
+| `grid.replication.missing_stream_incomplete` | Sticky missing-stream admit bit (0/1); should be 0 on a caught-up follower with ready inventory |
+| `grid.replication.proposer_missing_stream_hits` | Times missing-stream predicate fired at recompute |
+| `grid.replication.sealed_inventory_disk_probes` | Disk `ofShardIdentity` probes (HELLO observe / rebuild) — must stay flat on SELECT |
+| `grid.replication.sealed_inventory_observe_skipped` | Unchanged peer inventory skipped disk walk |
+| `grid.replication.sealed_inventory_observe_skip_bypassed` | Skip bypassed (force re-probe) |
+| `grid.replication.sealed_inventory_rebuild` / `_rebuild_queued` | Eager admit-index rebuild on `helloCatchUp` after invalidate |
 
 Storage and reads:
 
@@ -135,7 +142,7 @@ Stage-by-stage breakdown of the write path: [ORCHID write path](../performance/p
 
 - Readiness UP is required before traffic; DOWN at start with replication until ORCHID syncs is expected.
 - After promote: `writerEligible: true` on the new Active and client meta match — otherwise write traffic hits the old node.
-- Replica reads: if `applyLagStale: true`, do not “fix” it in the client — catch up first.
+- Replica reads: if `applyLagStale: true` or `missing_stream_incomplete=1`, do not “fix” it in the client — catch up / wait inventory rebuild first.
 - Rising `rpo_estimate_ms` across sites with no known incident — check the network and `ASYNC` / `SYNC` mode.
 
 ## Alerting
@@ -155,6 +162,8 @@ Build alerts on the fields above rather than on invented thresholds.
 | `lock.wait_timeouts` rising | Transaction contention reaching clients as errors | Ticket |
 | `ws_evictions` climbing with falling `map_hit_rate` / rising sealed miss | Working set undersized for traffic | Ticket |
 | `sticky_rejected` rising on large payloads | Expected for payloads above mmap window; watch remap churn | Info / ticket if p99 climbs |
+| `sealed_inventory_disk_probes` rising with SELECT TPS | Admit/observe regressing to per-query disk walk | Check sticky incomplete + rebuild; SELECT must stay O(1) on the bit |
+| `missing_stream_incomplete=1` while follower looks caught up | Inventory not ready or true missing-stream vs proposer | Watch rebuild metrics; heal pull if proposer has sealed streams local tip/FP are 0 |
 
 ## Typical signals
 

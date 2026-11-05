@@ -28,7 +28,8 @@ import java.io.IOException;
  * HELLO-path sealed baseline ship when a peer is behind OpLog truncate watermark.
  * <p>
  * OpLog catch-up alone cannot fill seqs retired by {@link OpLog#truncateTo}; peers need
- * sealed {@code .gmap} artifacts then the live OpLog tail.
+ * sealed {@code .gmap} artifacts then the live OpLog tail. Skip-unchanged via
+ * {@link SealedPeerShipGate} (peer + pack identity).
  *
  * @author: GenCloud
  * @date: 2026/09
@@ -37,6 +38,8 @@ import java.io.IOException;
 public final class HelloSealedCatchUpUtil {
 
 	private static final Logger log = LoggerFactory.getLogger(HelloSealedCatchUpUtil.class);
+
+	private static final SealedPeerShipGate PEER_SHIP_GATE = new SealedPeerShipGate();
 
 	private HelloSealedCatchUpUtil() {
 	}
@@ -53,9 +56,10 @@ public final class HelloSealedCatchUpUtil {
 	}
 
 	/**
-	 * Pack and push sealed shard artifacts to {@code peerId}. No-op when sealed root empty/missing.
+	 * Pack and push sealed shard artifacts to {@code peerId}.
+	 * Ships only when pack is complete (≥1 valid {@code .gmap}); rejects partial/header-only.
 	 *
-	 * @return {@code true} when a non-empty pack was pushed
+	 * @return {@code true} when a complete pack was pushed
 	 */
 	public static boolean shipSealedBaseline(
 			SealedGridMapService sealed,
@@ -69,10 +73,16 @@ public final class HelloSealedCatchUpUtil {
 		}
 		try {
 			final byte[] packed = sealed.packShardArtifacts(domainType, shard);
-			if (packed == null || packed.length == 0 || !SealedShardPack.hasArtifactFiles(packed)) {
+			if (packed == null || packed.length == 0 || !SealedShardPack.isCompleteShardArtifacts(packed)) {
+				return false;
+			}
+			final long packFp = SealedShardPack.identityFingerprintOfPacked(packed);
+			if (!PEER_SHIP_GATE.shouldShip(peerId, domainType, shard, packFp)) {
 				return false;
 			}
 			transport.pushSealedShardPack(peerId, domainType, shard, packed);
+			// Do not mark shipped on push — peer unpack may fail; mark only when peer HELLO
+			// inventory matches (see {@link #markPeerInventoryMatched}).
 			log.info("HELLO sealed catch-up shipped peer={} domain={} shard={} bytes={}",
 					peerId, domainType, shard, packed.length);
 			return true;
@@ -81,5 +91,22 @@ public final class HelloSealedCatchUpUtil {
 					peerId, domainType, shard, failure.toString());
 			return false;
 		}
+	}
+
+	/**
+	 * Peer HELLO inventory now matches local pack identity — stop reshipping this fingerprint.
+	 */
+	public static void markPeerInventoryMatched(String peerId, String domainType, int shard, long fingerprint) {
+		if (peerId == null || domainType == null || fingerprint == 0L) {
+			return;
+		}
+		PEER_SHIP_GATE.onShipped(peerId, domainType, shard, fingerprint);
+	}
+
+	/**
+	 * Allow reship of the same fingerprint (peer still incomplete after prior push).
+	 */
+	public static void clearPeerShipGate(String peerId, String domainType, int shard) {
+		PEER_SHIP_GATE.clear(peerId, domainType, shard);
 	}
 }

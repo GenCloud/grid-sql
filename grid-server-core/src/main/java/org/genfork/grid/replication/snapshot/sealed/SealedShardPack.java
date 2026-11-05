@@ -20,6 +20,7 @@ import org.genfork.grid.replication.durable.ChannelDurableIo;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Path;
@@ -47,6 +48,8 @@ public final class SealedShardPack {
 	public static final int VERSION = 1;
 	/** Magic + version + file-count header before per-file entries. */
 	public static final int HEADER_BYTES = Integer.BYTES * 3;
+	/** Fixed GMAP header size (must match {@code SealedIntegritySensorUtil.GMAP_FIXED_HEADER_BYTES}). */
+	private static final int GMAP_FIXED_HEADER_BYTES = 32;
 
 	private SealedShardPack() {
 	}
@@ -66,6 +69,92 @@ public final class SealedShardPack {
 			return false;
 		}
 		return buffer.getInt() > 0;
+	}
+
+	/**
+	 * {@code true} when pack has ≥1 {@code .gmap} entry each ≥ fixed header with GMAP magic.
+	 * Rejects header-only / empty / truncated-payload packs before ship or apply.
+	 */
+	public static boolean isCompleteShardArtifacts(byte[] packed) {
+		if (!hasArtifactFiles(packed)) {
+			return false;
+		}
+		try {
+			int gmapCount = 0;
+			for (PackedEntry entry : listPackedEntries(packed)) {
+				final String name = entry.name();
+				if (!name.endsWith(".gmap")) {
+					continue;
+				}
+				gmapCount++;
+				final byte[] content = entry.content();
+				if (content.length < GMAP_FIXED_HEADER_BYTES) {
+					return false;
+				}
+				final int magic = ByteBuffer.wrap(content, 0, Integer.BYTES)
+						.order(ByteOrder.LITTLE_ENDIAN)
+						.getInt();
+				if (magic != SealedGridMapWriter.MAGIC) {
+					return false;
+				}
+			}
+			return gmapCount > 0;
+		} catch (IOException ignored) {
+			return false;
+		}
+	}
+
+	/**
+	 * Name+size identity fingerprint of pack entries (cross-host compare; no mtime).
+	 */
+	public static long identityFingerprintOfPacked(byte[] packed) throws IOException {
+		long hash = 0L;
+		for (PackedEntry entry : listPackedEntries(packed)) {
+			hash = SealedPackFingerprint.mixTokens(hash, entry.name().hashCode());
+			hash = SealedPackFingerprint.mixTokens(hash, entry.content().length);
+		}
+		return hash;
+	}
+
+	/**
+	 * Entry names present in {@code packed} (relative file names only).
+	 */
+	public static Set<String> packedEntryNames(byte[] packed) throws IOException {
+		final LinkedHashSet<String> names = new LinkedHashSet<>();
+		for (PackedEntry entry : listPackedEntries(packed)) {
+			names.add(entry.name());
+		}
+		return Set.copyOf(names);
+	}
+
+	/**
+	 * Delete local {@code domain#shard} artifacts whose names are not in {@code keepNames}.
+	 *
+	 * @return number of deleted files
+	 */
+	public static int purgeOrphansNotIn(
+			Path sealedRoot,
+			String domain,
+			int shard,
+			Set<String> keepNames
+	) throws IOException {
+		Objects.requireNonNull(sealedRoot, "sealedRoot");
+		Objects.requireNonNull(domain, "domain");
+		Objects.requireNonNull(keepNames, "keepNames");
+		int deleted = 0;
+		for (Path file : listShardFiles(sealedRoot, domain, shard)) {
+			final String name = file.getFileName().toString();
+			if (keepNames.contains(name)) {
+				continue;
+			}
+			if (GridFs.isOrphanStagingName(file)) {
+				continue;
+			}
+			if (GridFs.deleteIfExists(file)) {
+				deleted++;
+			}
+		}
+		return deleted;
 	}
 
 	/** Domain directory prefix shared with {@link SealedGridMapService} / {@link SealedBPTreeService}. */
@@ -160,8 +249,20 @@ public final class SealedShardPack {
 	 * Uses {@link ChannelDurableIo#rewriteFile} so repair/ship share the same durable write helper.
 	 */
 	public static List<Path> unpack(byte[] packed, Path targetRoot) throws IOException {
-		Objects.requireNonNull(packed, "packed");
 		Objects.requireNonNull(targetRoot, "targetRoot");
+		final List<PackedEntry> entries = listPackedEntries(packed);
+		GridFs.createDirs(targetRoot);
+		final List<Path> written = new ArrayList<>(entries.size());
+		for (PackedEntry entry : entries) {
+			final Path target = targetRoot.resolve(entry.name());
+			ChannelDurableIo.rewriteFile(target, entry.content(), false);
+			written.add(target);
+		}
+		return List.copyOf(written);
+	}
+
+	private static List<PackedEntry> listPackedEntries(byte[] packed) throws IOException {
+		Objects.requireNonNull(packed, "packed");
 		if (packed.length < HEADER_BYTES) {
 			throw new IOException("sealed pack too short: " + packed.length);
 		}
@@ -178,8 +279,7 @@ public final class SealedShardPack {
 		if (count < 0) {
 			throw new IOException("negative sealed pack file count: " + count);
 		}
-		GridFs.createDirs(targetRoot);
-		final List<Path> written = new ArrayList<>(count);
+		final List<PackedEntry> entries = new ArrayList<>(count);
 		for (int i = 0; i < count; i++) {
 			if (buffer.remaining() < 4) {
 				throw new IOException("truncated sealed pack name length at file " + i);
@@ -203,16 +303,17 @@ public final class SealedShardPack {
 			}
 			final byte[] content = new byte[contentLen];
 			buffer.get(content);
-			final Path target = targetRoot.resolve(name);
-			ChannelDurableIo.rewriteFile(target, content, false);
-			written.add(target);
+			entries.add(new PackedEntry(name, content));
 		}
 		if (buffer.hasRemaining()) {
 			throw new IOException("trailing bytes in sealed pack: " + buffer.remaining());
 		}
-		return List.copyOf(written);
+		return entries;
 	}
 
 	private record PackedFile(byte[] name, byte[] content) {
+	}
+
+	private record PackedEntry(String name, byte[] content) {
 	}
 }

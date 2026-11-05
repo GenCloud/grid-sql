@@ -16,6 +16,8 @@
 package index.unit.replication;
 
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapWriter;
+import org.genfork.grid.replication.snapshot.sealed.SealedPackFingerprint;
+import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil.PackDebounce;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil.Probe;
@@ -26,19 +28,24 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Sealed header sensor: truncate / bad magic → peer pack; debounce ≤1/shard/window.
+ * Sealed structural sensor + peer per-shard FP: magic-OK undersize is TRUNCATED locally.
  *
  * @author: GenCloud
  * @date: 2026/11
  * @since: 1.3
  */
 class SealedIntegritySensorUtilCharacterizationTest {
+
+	private static final String DOMAIN = "agit_auction";
+	private static final int SHARD = 3;
 
 	@TempDir
 	Path tempDir;
@@ -58,12 +65,62 @@ class SealedIntegritySensorUtilCharacterizationTest {
 		Files.write(bad, header);
 		assertEquals(Probe.BAD_MAGIC, SealedIntegritySensorUtil.probeGmapHeader(bad));
 
-		final Path ok = tempDir.resolve("ok.gmap");
+		final Path magicOnly = tempDir.resolve("magic-only.gmap");
 		final byte[] good = new byte[SealedIntegritySensorUtil.GMAP_FIXED_HEADER_BYTES];
 		ByteBuffer.wrap(good).order(ByteOrder.LITTLE_ENDIAN).putInt(SealedGridMapWriter.MAGIC);
-		Files.write(ok, good);
-		assertEquals(Probe.OK, SealedIntegritySensorUtil.probeGmapHeader(ok));
+		Files.write(magicOnly, good);
+		final Probe magicOnlyProbe = SealedIntegritySensorUtil.probeGmapHeader(magicOnly);
+		assertTrue(SealedIntegritySensorUtil.needsPeerPack(magicOnlyProbe),
+				"magic alone is not structurally complete: " + magicOnlyProbe);
 		assertFalse(SealedIntegritySensorUtil.needsPeerPack(Probe.OK));
+	}
+
+	@Test
+	void magicOkUndersizeIsStructuralTruncated() throws Exception {
+		final Path donor = tempDir.resolve("donor");
+		final Path hole = tempDir.resolve("hole");
+		Files.createDirectories(donor);
+		Files.createDirectories(hole);
+
+		final byte[] key = new byte[]{4, 4};
+		final byte[] val = new byte[]{44};
+		SealedGridMapWriter.writeNodes(donor, DOMAIN, SHARD, 11L,
+				List.of(new SealedGridMapWriter.Kv(key, val)));
+		final byte[] packed = SealedShardPack.pack(donor, DOMAIN, SHARD);
+		assertTrue(SealedShardPack.isCompleteShardArtifacts(packed));
+		SealedShardPack.unpack(packed, hole);
+
+		final List<Path> holeFiles = SealedShardPack.listShardFiles(hole, DOMAIN, SHARD);
+		Path shrinkTarget = null;
+		for (Path file : holeFiles) {
+			final String name = file.getFileName().toString();
+			if (name.endsWith(".gmap") && Files.size(file) > SealedIntegritySensorUtil.GMAP_FIXED_HEADER_BYTES) {
+				shrinkTarget = file;
+				break;
+			}
+		}
+		assertTrue(shrinkTarget != null, "need a gmap larger than fixed header");
+		final long donorSize = Files.size(shrinkTarget);
+		final byte[] original = Files.readAllBytes(shrinkTarget);
+		final int shrinkSize = Math.max(
+				SealedIntegritySensorUtil.GMAP_FIXED_HEADER_BYTES,
+				original.length - 64);
+		Files.write(shrinkTarget, java.util.Arrays.copyOf(original, shrinkSize));
+
+		assertEquals(Probe.TRUNCATED, SealedIntegritySensorUtil.probeGmapHeader(shrinkTarget),
+				"forever: magic-OK undersize is structural TRUNCATED without peer root FP");
+		assertEquals(Probe.TRUNCATED, SealedIntegritySensorUtil.probeAllGmapHeaders(hole, DOMAIN, SHARD));
+		assertTrue(SealedIntegritySensorUtil.needsPeerPack(Probe.TRUNCATED));
+
+		final long donorFp = SealedPackFingerprint.ofShardIdentity(donor, DOMAIN, SHARD);
+		final long holeFp = SealedPackFingerprint.ofShardIdentity(hole, DOMAIN, SHARD);
+		assertNotEquals(donorFp, holeFp);
+		assertTrue(donorSize > shrinkSize);
+
+		final Probe fpProbe = SealedIntegritySensorUtil.probeFingerprintMismatch(holeFp, donorFp);
+		assertEquals(Probe.SIZE_OR_FP_MISMATCH, fpProbe);
+		assertTrue(SealedIntegritySensorUtil.needsPeerPack(
+				SealedIntegritySensorUtil.combine(Probe.TRUNCATED, fpProbe)));
 	}
 
 	@Test

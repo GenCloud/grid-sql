@@ -305,13 +305,17 @@ public class OrchidNode {
 	/**
 	 * Intentional membership shrink (operator removePeer): drop from configured local quorum.
 	 * Distinct from {@link #forgetPeer} which only clears the live view (anti-solo after partition).
+	 * <p>
+	 * Holds {@link #isolatedPeers} until {@link #configureLocalPeer} / {@link #healPeer} so late
+	 * HELLO / {@code ORCHID_PHASE} cannot resurrect live view after operator remove (explicit
+	 * {@code addPeer} clears the hold). Partition {@link #isolatePeer} keeps quorum; this drops it.
 	 */
 	public void unconfigurePeer(String peerId) {
 		if (peerId == null || peerId.equals(nodeId)) {
 			return;
 		}
-		isolatedPeers.remove(peerId);
 		peerIds.remove(peerId);
+		isolatedPeers.add(peerId);
 		forgetPeer(peerId);
 	}
 

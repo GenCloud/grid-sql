@@ -35,6 +35,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class PeerLivenessIT {
 
+	private static final long JOIN_DEADLINE_MS = 5_000L;
+	private static final long CLEAR_DEADLINE_MS = 5_000L;
+	private static final long POLL_MS = 50L;
+
 	@TempDir
 	Path tempDir;
 
@@ -58,15 +62,11 @@ public class PeerLivenessIT {
 		a.start();
 		b.start();
 
-		final long deadline = System.currentTimeMillis() + 5000;
-		while (System.currentTimeMillis() < deadline && a.getOrchidNode().livePeerCount() < 1) {
-			Thread.sleep(50);
-		}
-		assertTrue(a.getOrchidNode().livePeerCount() >= 1);
+		awaitLiveAtLeast(a, 1, JOIN_DEADLINE_MS);
 
 		a.removePeer("live-b");
 		b.stop();
-		Thread.sleep(200);
+		awaitLiveEquals(a, 0, CLEAR_DEADLINE_MS);
 
 		assertEquals(0, a.getOrchidNode().livePeerCount());
 		a.ensureOrchidSynced();
@@ -81,14 +81,29 @@ public class PeerLivenessIT {
 		b2.start();
 		a.addPeer(new ReplicationPeer("live-b", "127.0.0.1", portB2, "dc-a"));
 
-		final long deadline2 = System.currentTimeMillis() + 5000;
-		while (System.currentTimeMillis() < deadline2 && a.getOrchidNode().livePeerCount() < 1) {
-			Thread.sleep(50);
-		}
-		assertTrue(a.getOrchidNode().livePeerCount() >= 1);
+		awaitLiveAtLeast(a, 1, JOIN_DEADLINE_MS);
 
 		a.stop();
 		b2.stop();
+	}
+
+	private static void awaitLiveAtLeast(ReplicationCoordinator coord, int minLive, long deadlineMs)
+			throws InterruptedException {
+		final long deadline = System.currentTimeMillis() + deadlineMs;
+		while (System.currentTimeMillis() < deadline && coord.getOrchidNode().livePeerCount() < minLive) {
+			Thread.sleep(POLL_MS);
+		}
+		assertTrue(coord.getOrchidNode().livePeerCount() >= minLive,
+				"expected livePeerCount>=" + minLive + " but was " + coord.getOrchidNode().livePeerCount());
+	}
+
+	private static void awaitLiveEquals(ReplicationCoordinator coord, int expected, long deadlineMs)
+			throws InterruptedException {
+		final long deadline = System.currentTimeMillis() + deadlineMs;
+		while (System.currentTimeMillis() < deadline && coord.getOrchidNode().livePeerCount() != expected) {
+			Thread.sleep(POLL_MS);
+		}
+		assertEquals(expected, coord.getOrchidNode().livePeerCount());
 	}
 
 	private static int freePort() throws Exception {

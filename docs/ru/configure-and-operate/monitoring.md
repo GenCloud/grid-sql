@@ -52,6 +52,7 @@ curl -s http://127.0.0.1:7777/health/readiness | jq '.components.gridReadiness.d
 | `catalogLagStuck` | boolean, `n/a` | Застрявший lag apply `_catalog` — readiness **DOWN** с `reason=catalog_lag_stuck` (краткий lag>0 остаётся UP) |
 | `catalogIncomplete` | boolean, `n/a` | Локальный fingerprint каталога устарел относительно пиров (дыра object-set) |
 | `catalogFingerprint` | long, `n/a` | Fingerprint object-set локального каталога (также в wire `ServerMeta` / HELLO) |
+| Sealed artifacts fingerprint (HELLO) | long, сравнение с пирами | Aggregate name+size для HELLO / метрик — **сам** не admit fence. Mismatch peer inventory ⇒ differential heal; локальная structural hole / sticky missing-stream ⇒ incomplete (Micrometer `missing_stream_incomplete`). Ортогонально serving-stream `applyLagStale`. |
 
 Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и те же шкалы согласия/ремонта. Ключа `reason` нет: живой процесс с несинхронизированным кластером жив, но не готов.
 
@@ -75,6 +76,12 @@ Liveness (`gridLiveness`) отдаёт `logicExecutor`, `uptimeMs`, `pid` и т�
 | `grid.replication.swarm_hint` | Подсказка размещения (порядковый номер) |
 | `grid.replication.overlay_pinned_keys` | Живые PIN — [overlay PIN](configuration/overlay-pin.md) |
 | `grid.replication.catalog_apply_lag` | tip `_catalog` − applied watermark (catch-up privilege/schema DDL; AUTH не gated одним serving-stream `applyLagStale`) |
+| `grid.replication.missing_stream_incomplete` | Sticky missing-stream admit (0/1); на догнанном follower с ready inventory = 0 |
+| `grid.replication.proposer_missing_stream_hits` | Срабатывания предиката missing-stream при recompute |
+| `grid.replication.sealed_inventory_disk_probes` | Дисковые `ofShardIdentity` (HELLO observe / rebuild) — на SELECT должны быть плоскими |
+| `grid.replication.sealed_inventory_observe_skipped` | Неизменённый inventory пира — пропуск disk walk |
+| `grid.replication.sealed_inventory_observe_skip_bypassed` | Skip обойдён (force re-probe) |
+| `grid.replication.sealed_inventory_rebuild` / `_rebuild_queued` | Eager rebuild admit-индекса на `helloCatchUp` после invalidate |
 
 Хранение и чтение:
 
@@ -125,7 +132,7 @@ SQL и блокировки:
 
 - Готовность (`readiness`) UP — обязательное условие перед трафиком; DOWN при старте с репликацией до синхронизации — ожидаемо.
 - После повышения роли: `writerEligible: true` на новом Active и клиентская мета совпали — иначе пишущий трафик на старый узел.
-- Чтение с реплики: при `applyLagStale: true` не «лечить» клиентом — сначала подтягивание.
+- Чтение с реплики: при `applyLagStale: true` или `missing_stream_incomplete=1` не «лечить» клиентом — сначала catch-up / rebuild inventory.
 - Рост `rpo_estimate_ms` между ЦОД без инцидента — смотреть сеть и режим `ASYNC`/`SYNC`.
 
 ## Алерты
@@ -143,6 +150,8 @@ SQL и блокировки:
 | Растёт `oplog_fsync_p99_ns` / диск почти полный | Путь долговечности тормозит | Page |
 | Растёт `rpo_estimate_ms` без известного сетевого события | Растёт окно потерь между ЦОД | Ticket |
 | Растут `lock.wait_timeouts` | Клиенты получают ошибки блокировок | Ticket |
+| `sealed_inventory_disk_probes` растёт вместе с SELECT TPS | Admit/observe снова ходит на диск на запрос | Sticky incomplete + rebuild; SELECT должен оставаться O(1) по биту |
+| `missing_stream_incomplete=1` при «догоняющей» реплике | Inventory не ready или реальный missing-stream vs proposer | Метрики rebuild; heal pull, если у proposer есть sealed streams, а локально tip/FP = 0 |
 
 ## Типичные сигналы
 

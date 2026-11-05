@@ -21,6 +21,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.AttributeKey;
 import org.genfork.grid.codec.duplex.DuplexBlob;
 import org.genfork.grid.codec.duplex.DuplexCodecSupport;
+import org.genfork.grid.net.NettyClientDisconnectUtil;
 import org.genfork.grid.replication.ReplicationNodeState;
 import org.genfork.grid.replication.apply.ReplicaApplier;
 import org.genfork.grid.replication.codec.OpLogCodec;
@@ -31,14 +32,8 @@ import org.genfork.grid.replication.join.SparseCatchUp;
 import org.genfork.grid.replication.log.OpLog;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.netty.ReplicationFrameCodec.WireMessage;
-import org.genfork.grid.replication.netty.ReplicationRpcCodec.ApplyAck;
-import org.genfork.grid.replication.netty.ReplicationRpcCodec.ApplyNack;
-import org.genfork.grid.replication.netty.ReplicationRpcCodec.Hello;
-import org.genfork.grid.replication.netty.ReplicationRpcCodec.OplogPull;
-import org.genfork.grid.replication.netty.ReplicationRpcCodec.RepairReply;
-import org.genfork.grid.replication.netty.ReplicationRpcCodec.RepairRequest;
+import org.genfork.grid.replication.netty.ReplicationRpcCodec.*;
 import org.genfork.grid.replication.orchid.OrchidNode;
-import org.genfork.grid.replication.orchid.OrchidTransport.OrchidPhaseMessage;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.repair.RepairCommand;
 import org.genfork.grid.replication.repair.RepairCommandType;
@@ -46,7 +41,7 @@ import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
 import org.genfork.grid.replication.tx.OpLogTxUnits;
 import org.genfork.grid.replication.util.HelloSealedCatchUpUtil;
-import org.genfork.grid.net.NettyClientDisconnectUtil;
+import org.genfork.grid.replication.util.SealedIntegritySensorUtil;
 import org.genfork.grid.threading.ThreadService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +62,9 @@ import java.util.function.Supplier;
  * (same digest quorum semantics as single phase frames). Phase / propose / commit bodies run off
  * the event loop via OrchidNode logic mailboxes.
  * {@link ReplicationMessageType#SEALED_SHARD_PACK} is applied off the event loop.
+ * {@link ReplicationMessageType#HELLO} peer membership / sealed observe and
+ * {@link ReplicationMessageType#OPLOG_PULL} sealed ship run on
+ * {@link NettyReplicationTransport#submitHelloCatchUp} (not Netty EL, not orchidRpcQueue).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -135,7 +133,8 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 				transport.currentRegionEpoch(),
 				transport.currentRegionRoleWire(),
 				transport.currentCatalogAppliedEpoch(),
-				transport.currentCatalogFingerprint());
+				transport.currentCatalogFingerprint(),
+				transport.currentSealedArtifactsFingerprint());
 		ctx.writeAndFlush(new WireMessage(ReplicationMessageType.HELLO.opcode(), ReplicationRpcCodec.encodeHello(hello)));
 	}
 
@@ -273,8 +272,10 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			ctx.close();
 			return;
 		}
+		// EL-only: channel attrs + orchid peer-available. Sealed observe + membership catch-up
+		// must not pin Netty EL (digest ACK path) and must not share orchidRpcQueue.
 		ctx.channel().attr(REMOTE_NODE_ATTR).set(hello.nodeId());
-		remoteChannels.put(hello.nodeId(), ctx.channel());
+		transport.registerPeerChannel(hello.nodeId(), ctx.channel());
 		final OrchidNode node = orchidNode.get();
 		if (node != null) {
 			node.onPeerAvailable(hello.nodeId());
@@ -285,12 +286,16 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 			host = isa.getAddress() != null ? isa.getAddress().getHostAddress() : isa.getHostString();
 			port = isa.getPort();
 		}
-		onPeerHello.accept(new DiscoveredPeer(
+		final DiscoveredPeer discovered = new DiscoveredPeer(
 				hello.nodeId(), host, port, hello.localDc(), hello.regionEpoch(), hello.regionRole(),
-				hello.catalogAppliedEpoch(), hello.catalogFingerprint()));
-		log.info("Replication HELLO from node={} dc={} regionEpoch={} regionRole={} catalogApplied={} catalogFp={}",
+				hello.catalogAppliedEpoch(), hello.catalogFingerprint(), hello.sealedArtifactsFingerprint(),
+				hello.sealedShardInventory());
+		final int sealedShards = hello.sealedShardInventory() == null ? 0 : hello.sealedShardInventory().size();
+		log.info("Replication HELLO from node={} dc={} regionEpoch={} regionRole={} catalogApplied={} catalogFp={} sealedFp={} sealedShards={}",
 				hello.nodeId(), hello.localDc(), hello.regionEpoch(), hello.regionRole(),
-				hello.catalogAppliedEpoch(), hello.catalogFingerprint());
+				hello.catalogAppliedEpoch(), hello.catalogFingerprint(), hello.sealedArtifactsFingerprint(),
+				sealedShards);
+		transport.submitHelloCatchUp(() -> onPeerHello.accept(discovered));
 	}
 
 	private void onOplogPush(byte[] body) {
@@ -305,7 +310,7 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		for (ReplicationOp op : segment.ops()) {
 			ReplicationOp current = op;
 			byte[] value = current.value();
-			if (value != null && DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
+			if (DuplexCodecSupport.isActiveForReplication() && DuplexBlob.isWire(value)) {
 				value = homologousRepair != null
 						? homologousRepair.verifyOrRebuildValue(value)
 						: DuplexCodecSupport.getCodec().getVerifier()
@@ -328,11 +333,18 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		if (opLog == null || sparseCatchUp == null) {
 			return;
 		}
-		// Sealed baseline first when peer is behind truncate / integrity pull (HELLO path adopt).
+		// Decode on EL; sealed pack + sparse catch-up ship off EL (helloCatchUp mailbox).
+		transport.submitHelloCatchUp(() -> handleOplogPullOffEl(pull));
+	}
+
+	private void handleOplogPullOffEl(OplogPull pull) {
+		// Sealed baseline before OpLog push for the same pull (ordering preserved).
 		final long peerAckHint = Math.max(0L, pull.fromSeqInclusive() - 1L);
+		final boolean integrityPull =
+				pull.fromSeqInclusive() == SealedIntegritySensorUtil.SEALED_INTEGRITY_PULL_FROM_SEQ;
 		if (HelloSealedCatchUpUtil.needsSealedBaseline(
 				opLog, pull.domainType(), pull.shard(), peerAckHint)
-				|| peerAckHint == 0L) {
+				|| integrityPull) {
 			HelloSealedCatchUpUtil.shipSealedBaseline(
 					transport.sealedGridMapServiceOrNull(),
 					transport,
@@ -392,14 +404,8 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		ThreadService.getLogicExecutor().execute(() -> {
 			final RepairRequest req = ReplicationRpcCodec.decodeRepairRequest(body);
 			final List<RepairCommand> commands = homologousRepair.reconcile(req.domainType(), req.shard(), req.view());
-			if (commands.isEmpty()) {
-				final byte[] emptyReply = ReplicationRpcCodec.encodeRepairReply(localNodeId, commands, List.of());
-				ctx.executor().execute(() ->
-						ctx.writeAndFlush(new WireMessage(ReplicationMessageType.REPAIR_REPLY.opcode(), emptyReply)));
-				return;
-			}
 			final List<ReplicationOp> ops = new ArrayList<>();
-			if (opLog != null) {
+			if (opLog != null && !commands.isEmpty()) {
 				for (RepairCommand cmd : commands) {
 					if (cmd.type() == RepairCommandType.RESHIP_SEGMENT || cmd.type() == RepairCommandType.FETCH_OP) {
 						final long from = Math.max(1L, Math.min(cmd.localOpSeq(),
@@ -430,6 +436,18 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 						}
 					}
 				}
+			}
+			// After seal+truncate OpLog cannot fill the gap — ship sealed baseline instead of empty REPLY.
+			if (ops.isEmpty() && opLog != null
+					&& (HelloSealedCatchUpUtil.needsSealedBaseline(
+					opLog, req.domainType(), req.shard(), 0L)
+					|| opLog.truncatedThrough(req.domainType(), req.shard()) > 0L)) {
+				HelloSealedCatchUpUtil.shipSealedBaseline(
+						transport.sealedGridMapServiceOrNull(),
+						transport,
+						req.fromNodeId(),
+						req.domainType(),
+						req.shard());
 			}
 			final byte[] reply = ReplicationRpcCodec.encodeRepairReply(localNodeId, commands, ops);
 			ctx.executor().execute(() ->
