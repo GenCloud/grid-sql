@@ -114,6 +114,14 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	private final int maxFrameBytes;
 	private final List<ReplicationPeer> peers;
 	private final Map<String, Channel> channelsByPeer = new ConcurrentHashMap<>();
+	/**
+	 * All sockets ever bound for a peer (outbound + inbound HELLO overwrite).
+	 * Write path uses {@link #channelsByPeer}; {@link #removePeer} closes every entry so a
+	 * dual-channel sibling cannot keep delivering HELLO/phase after operator remove.
+	 * Do not close-on-overwrite — Multi-DC WAN proxies rely on inbound replacing the write slot
+	 * without tearing down the prior socket mid-handshake.
+	 */
+	private final ConcurrentHashMap<String, CopyOnWriteArrayList<Channel>> allChannelsByPeer = new ConcurrentHashMap<>();
 	private final Map<String, Long> lastPushEpochMs = new ConcurrentHashMap<>();
 	private final AtomicLong emaRttMs = new AtomicLong(0);
 	private final AtomicBoolean started = new AtomicBoolean();
@@ -230,10 +238,33 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 			return;
 		}
 		peers.removeIf(p -> peerId.equals(p.id()));
-		final Channel ch = channelsByPeer.remove(peerId);
-		if (ch != null) {
-			ch.close();
+		channelsByPeer.remove(peerId);
+		final CopyOnWriteArrayList<Channel> all = allChannelsByPeer.remove(peerId);
+		if (all != null) {
+			for (Channel ch : all) {
+				if (ch != null) {
+					ch.close();
+				}
+			}
 		}
+	}
+
+	/**
+	 * Bind the active write channel for {@code peerId} and remember every socket for that peer.
+	 * Overwrite does not close the previous channel (WAN dual-proxy / HELLO replace contract);
+	 * {@link #removePeer} closes the full set.
+	 */
+	public void registerPeerChannel(String peerId, Channel channel) {
+		if (peerId == null || channel == null) {
+			return;
+		}
+		channelsByPeer.put(peerId, channel);
+		final CopyOnWriteArrayList<Channel> all = allChannelsByPeer.computeIfAbsent(
+				peerId, id -> new CopyOnWriteArrayList<>());
+		if (!all.contains(channel)) {
+			all.add(channel);
+		}
+		channel.closeFuture().addListener((ChannelFutureListener) future -> all.remove(channel));
 	}
 
 	public List<ReplicationPeer> peers() {
@@ -482,7 +513,18 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		});
 		bootstrap.connect(peer.host(), peer.port()).addListener((ChannelFutureListener) future -> {
 			if (future.isSuccess()) {
-				channelsByPeer.put(peer.id(), future.channel());
+				boolean stillMember = false;
+				for (ReplicationPeer configured : peers) {
+					if (peer.id().equals(configured.id())) {
+						stillMember = true;
+						break;
+					}
+				}
+				if (!stillMember) {
+					future.channel().close();
+					return;
+				}
+				registerPeerChannel(peer.id(), future.channel());
 				log.info("Connected replication peer {} at {}:{}", peer.id(), peer.host(), peer.port());
 				final OrchidNode node = orchidNode.get();
 				if (node != null) {
@@ -1080,6 +1122,14 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		forUpdateReleaseWaiters.clear();
 		channelsByPeer.values().forEach(Channel::close);
 		channelsByPeer.clear();
+		for (CopyOnWriteArrayList<Channel> all : allChannelsByPeer.values()) {
+			for (Channel ch : all) {
+				if (ch != null) {
+					ch.close();
+				}
+			}
+		}
+		allChannelsByPeer.clear();
 		if (serverChannel != null) {
 			serverChannel.close();
 		}

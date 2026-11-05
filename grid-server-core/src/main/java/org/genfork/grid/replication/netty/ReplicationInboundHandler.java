@@ -275,7 +275,7 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		// EL-only: channel attrs + orchid peer-available. Sealed observe + membership catch-up
 		// must not pin Netty EL (digest ACK path) and must not share orchidRpcQueue.
 		ctx.channel().attr(REMOTE_NODE_ATTR).set(hello.nodeId());
-		remoteChannels.put(hello.nodeId(), ctx.channel());
+		transport.registerPeerChannel(hello.nodeId(), ctx.channel());
 		final OrchidNode node = orchidNode.get();
 		if (node != null) {
 			node.onPeerAvailable(hello.nodeId());
