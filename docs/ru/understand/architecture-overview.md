@@ -6,7 +6,9 @@
 
 ## Путь одного запроса
 
-Сначала человеческая цепочка, потом имена в схеме:
+Два продуктовых пути делят движок и каталог, но **расходятся после разбора**. Запись по-прежнему идёт ORCHID → OpLog → карта. SELECT/EXPLAIN на реплике дополнительно проходят **допуск чтения**, который не должен ходить на диск на каждый SELECT.
+
+### Запись (PRIMARY / TX)
 
 1. Клиент (`grid://` или `jdbc:grid://`) → разбор SQL и каталог таблиц.
 2. Очередь записи → ORCHID (фаза + контрольная сумма) → журнал на диске.
@@ -29,6 +31,30 @@ flowchart TB
 *Схема 1. Согласование и журнал раньше, чем читатель увидит строку.*
 
 Если ORCHID не допустил запись или журнал не подтвердил сохранение, строка в карте не появляется. Фоновой задачи, которая потом «доедет» и проявит отклонённую запись, нет.
+
+### Чтение строки (рабочий набор → sealed)
+
+Порядок lookup не менялся: staging → карта в RAM → sealed `.sbpt` → окно mmap `.gmap`. Подробности: [хранение](storage-sealed-gmap.md).
+
+### Допуск SELECT на реплике (ортогонален I/O строки)
+
+На сессии `READ_REPLICA` SQL допускается только если проходят fences отставания/полноты. Missing-stream incompleteness — **sticky O(1) бит** поверх in-memory `LocalSealedInventoryIndex`, **не** обход `ofShardIdentity` по диску на каждый SELECT. Пересборка inventory — на mailbox `helloCatchUp` после invalidate seal/unpack (fail-closed, пока индекс не готов). **Mismatch** peer inventory — только differential heal; сам по себе это **не** admit fence.
+
+```mermaid
+flowchart TB
+  Sel["SELECT / EXPLAIN на READ_REPLICA"] --> Gate{"допуск"}
+  Gate -->|"applyLagStale / дыра каталога / structural sealed hole"| Deny["отказ / ротация / fallback на writer"]
+  Gate -->|"sticky missing-stream"| Deny
+  Gate -->|ok| RowIO["I/O строки: staging → map → .sbpt → .gmap"]
+  Hello["HELLO / seal / unpack"] --> Inv["rebuild LocalSealedInventoryIndex\nmailbox helloCatchUp"]
+  Inv --> Sticky["MissingStreamAdmitState sticky bit"]
+  Sticky -.->|O(1)| Gate
+  Hello --> Diff["mismatch peer inventory\n→ только differential heal"]
+```
+
+*Схема 2. Допуск реплики, чтение строки и heal — три независимых трека.*
+
+Оператору: [чтение с реплики](../configure-and-operate/operations/replica-reads.md), [сеть репликации](replication-network.md).
 
 ## Из чего собран узел
 
@@ -140,5 +166,7 @@ flowchart TB
 | «ORCHID — выборы лидера Raft» | Фаза плюс кворум digest, без выборов лидера |
 | «PIN — блокировка строки» | PIN про перенос шарда, а не про SQL-блокировки |
 | «Развёртка — распределённый SQL» | Развёртка распараллеливает локальные ключи шардов одного узла |
+| «SELECT на реплике каждый раз обходит sealed identity на диске» | Sticky `MissingStreamAdmitState` + memory inventory; disk rebuild только на invalidate через `helloCatchUp` |
+| «Mismatch peer sealed inventory = отказ admit» | Mismatch → только differential heal; fences допуска — lag / локальная structural hole / missing-stream |
 
 Дальше: [путь записи](write-path-staging.md), [ORCHID](orchid-consensus.md), [хранение](storage-sealed-gmap.md).

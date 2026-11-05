@@ -15,22 +15,8 @@
  */
 package org.genfork.grid.replication;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-
 import org.genfork.grid.diag.VisibilityDiag;
 import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstController;
-import org.genfork.grid.mem.adaptive.AdaptiveDiskFirstMode;
 import org.genfork.grid.mem.stage.WorkingSetBudget;
 import org.genfork.grid.nio.EncodeBuffers;
 import org.genfork.grid.replication.apply.ReplicaApplier;
@@ -42,18 +28,25 @@ import org.genfork.grid.replication.orchid.OrchidNode;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.snapshot.IndexCheckpointService;
 import org.genfork.grid.replication.snapshot.SnapshotService;
-import org.genfork.grid.replication.snapshot.sealed.DumpDomainResult;
-import org.genfork.grid.replication.snapshot.sealed.SealedDumpSafetyUtil;
-import org.genfork.grid.replication.snapshot.sealed.SealedGridMapReader;
-import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
+import org.genfork.grid.replication.snapshot.sealed.*;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
-import org.genfork.grid.replication.util.EnvelopeClosureHydrateUtil;
-import org.genfork.grid.replication.util.LazyShardHydrateFlightUtil;
-import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
-import org.genfork.grid.replication.util.OrchidTipCatchUpUtil;
-import org.genfork.grid.replication.util.SealedHydrateTxFenceUtil;
+import org.genfork.grid.replication.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Sealed hydrate, working-set budgets, periodic dump, and snapshot install helpers.
@@ -224,7 +217,7 @@ public final class SealedHydrateService {
 			return;
 		}
 		try {
-			if (runLazyShardHydrate(domainType, shard, key)) {
+			if (runLazyShardHydrate(domainType, shard)) {
 				hydratedShards.add(key);
 				hydrateShardsDone.set(hydratedShards.size());
 				hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
@@ -245,7 +238,7 @@ public final class SealedHydrateService {
 	 * @return {@code true} when hydrate ran (applier present); {@code false} when skipped — do not
 	 *         mark {@link #hydratedShards} (no false done)
 	 */
-	private boolean runLazyShardHydrate(String domainType, int shard, String key) {
+	private boolean runLazyShardHydrate(String domainType, int shard) {
 		final ReplicaApplier applier = appliers.get(domainType);
 		if (applier == null) {
 			return false;
@@ -311,15 +304,6 @@ public final class SealedHydrateService {
 		return isLazyHydrate() ? HYDRATE_MODE_LAZY : HYDRATE_MODE_FULL;
 	}
 
-	/** Adaptive mode name, or {@code null} when adaptive off. */
-	public String adaptiveModeName() {
-		if (adaptiveDiskFirstController == null) {
-			return null;
-		}
-		final AdaptiveDiskFirstMode mode = adaptiveDiskFirstController.mode();
-		return mode == null ? null : mode.name();
-	}
-
 	public int hydrateShardsDone() {
 		return hydrateShardsDone.get();
 	}
@@ -345,10 +329,6 @@ public final class SealedHydrateService {
 
 	public boolean isAdaptiveDiskFirst() {
 		return adaptiveDiskFirstController != null;
-	}
-
-	public AdaptiveDiskFirstController adaptiveDiskFirstController() {
-		return adaptiveDiskFirstController;
 	}
 
 	public WorkingSetBudget createWorkingSetBudget() {
@@ -564,10 +544,6 @@ public final class SealedHydrateService {
 			log.warn("Incomplete .sbpt heal dump failed domain={} shard={}: {}",
 					domainType, shard, ex.toString());
 		}
-	}
-
-	public int installFromOpLog(String domainType, int shard, long fromSeqInclusive, int limit) {
-		return snapshotService.installFromOpLog(domainType, shard, fromSeqInclusive, limit, appliers.get(domainType));
 	}
 
 	public void maybeDumpSealedAllDomains() {
@@ -890,8 +866,23 @@ public final class SealedHydrateService {
 		final String domainType = msg.domainType();
 		final int shard = msg.shard();
 		try {
+			if (!SealedShardPack.isCompleteShardArtifacts(msg.packed())) {
+				log.warn("Reject incomplete sealed shard pack from={} domain={} shard={}",
+						msg.fromNodeId(), domainType, shard);
+				return false;
+			}
+			final long packIdentity = SealedShardPack.identityFingerprintOfPacked(msg.packed());
 			// Unmap live readers before REPLACE — Windows AccessDenied on mmap'd sealed files.
 			sealedGridMapService.unpackShardArtifacts(domainType, shard, msg.packed());
+			final Path sealedRoot = sealedGridMapService.sealedRootOrNull();
+			if (sealedRoot != null) {
+				final long diskIdentity = SealedPackFingerprint.ofShardIdentity(sealedRoot, domainType, shard);
+				if (packIdentity != 0L && diskIdentity != packIdentity) {
+					log.warn("Sealed pack identity mismatch after unpack from={} domain={} shard={} pack={} disk={}",
+							msg.fromNodeId(), domainType, shard, packIdentity, diskIdentity);
+					return false;
+				}
+			}
 			log.debug("Unpacked sealed shard pack from={} domain={} shard={} bytes={}",
 					msg.fromNodeId(), domainType, shard, msg.packed().length);
 			final ReplicaApplier applier = appliers.get(domainType);

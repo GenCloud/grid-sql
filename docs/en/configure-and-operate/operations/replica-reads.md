@@ -111,13 +111,46 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 
 ## Stale / lag / completeness policy
 
-Serving-stream `applyLagStale` alone is **not** the full read gate. Replica SQL admission also fails closed when local data is **incomplete**:
+Serving-stream `applyLagStale` alone is **not** the full read gate. Replica SQL admission also fails closed when local data is **incomplete**.
+
+```mermaid
+flowchart TB
+  Req["READ_REPLICA statement"] --> A{"replicaReadsEnabled\nand not catch-up/Witness?"}
+  A -->|no| DenyCfg["REPLICA_READ_DISABLED / deny"]
+  A -->|yes| B{"applyLagStale\nor catalog hole?"}
+  B -->|yes| Stale["REPLICA_READ_STALE / rotate"]
+  B -->|no| C{"structural sealed hole\non local files?"}
+  C -->|yes| Inc["incomplete / rotate"]
+  C -->|no| D{"sticky missing-stream\nMissingStreamAdmitState?"}
+  D -->|yes / index not ready| Inc
+  D -->|no| Exec["execute → staging → map → sealed"]
+```
+
+*Figure 2. Admit before row I/O. Sticky missing-stream is O(1); disk inventory rebuild is off the SELECT path.*
+
+### Dual-track: admit fence vs differential heal
+
+| Track | Trigger | Effect on SELECT |
+|-------|---------|------------------|
+| **Admit fence** | `applyLagStale`, catalog fingerprint hole, **local** structural sealed hole, proposer **missing-stream** (sticky bit) | Deny / rotate / writer fallback |
+| **Differential heal** | Peer HELLO inventory FP ≠ local index for `domain#shard` | Pull mismatched shards (`fromSeq=1`); **does not** fence admit by itself |
+| **Aggregate root FP** | Single mixed fingerprint of all sealed packs | Metrics / HELLO advertise only — **never** an admit fence alone |
+
+Missing-stream sticky state (`MissingStreamAdmitState` + `LocalSealedInventoryIndex`):
+
+1. Seal / unpack / structural-hole invalidate → mark inventory **not ready** (fail-closed) and enqueue rebuild on `helloCatchUp`.
+2. Rebuild walks disk once into the memory index and recomputes the sticky incomplete bit (`ProposerMissingStreamUtil`).
+3. Every subsequent SELECT reads the sticky bit — **no** per-query `ofShardIdentity` directory walk.
+4. While the index is not ready (post-invalidate, pre-rebuild), admit stays incomplete.
 
 | Condition | Behavior |
 |-----------|----------|
 | `applyLagStale` (serving streams) | Reject `REPLICA_READ_STALE`; AUTH rotate on the read ring |
 | Unhydrated LAZY tip debt / incomplete apply | Same client-visible incomplete signal — not a silent empty SELECT |
 | `catalogFingerprint` mismatch vs peers | Deny replica read: catalog object-set incomplete (VIEW/TABLE hole) — message includes fingerprint mismatch |
+| Sealed structural hole (magic-OK undersize / bad GMAP) on local files | Deny replica read: lag-complete ≠ sealed-complete. Aggregate root FP and peer inventory mismatch alone are **not** admit fences (inventory drives differential heal only). HELLO advertises per-shard identity; integrity tick pulls mismatched shards from the **advertising** peer (`fromSeq=1`). Readiness `applyLagStale` alone does **not** cover this fence. |
+| Proposer missing-stream (follower only) | Phase-ranked proposer’s sealed inventory lists `domain#shard` with FP≠0 while local OpLog tip/applied are 0 **and** local sealed identity is 0 → deny (`stale replica` / incomplete). Evaluated at inventory rebuild into a sticky bit — not per SELECT on disk. Tip-lag-complete ≠ key/stream-complete. Both FP=0 (empty / not yet sealed) and seal-dump lag with `lastSeq>0` are **not** incomplete. Layout drift (both FP≠0 unequal) stays heal-only. |
+| Inventory index not ready | Fail-closed incomplete until `helloCatchUp` rebuild publishes the index |
 | `replicaReadsEnabled=false` | `REPLICA_READ_DISABLED` |
 | Catch-up-only / learner | Always deny client SQL |
 | Witness region | Deny replica reads |

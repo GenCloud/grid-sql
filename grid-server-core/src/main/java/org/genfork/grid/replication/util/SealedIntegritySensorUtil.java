@@ -15,22 +15,20 @@
  */
 package org.genfork.grid.replication.util;
 
-import org.genfork.grid.replication.snapshot.sealed.SealedGridMapWriter;
+import org.genfork.grid.fs.GridFs;
+import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.channels.FileChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Minimal sealed artifact header sensor (magic / truncated header) — not a full scrub.
+ * Sealed artifact sensor: structural GMAP probe plus peer per-shard name+size FP mismatch.
  * <p>
  * Debounce ≤1 pack request per shard per window. LAZY callers should only probe opened shards.
+ * Magic-OK undersize is {@link Probe#TRUNCATED} via {@link SealedGmapStructuralProbeUtil}.
  *
  * @author: GenCloud
  * @date: 2026/11
@@ -38,54 +36,85 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class SealedIntegritySensorUtil {
 
-	/** Fixed GMAP header size probed for magic (see {@code SealedGridMapReader}). */
-	public static final int GMAP_FIXED_HEADER_BYTES = 32;
+	/** Fixed GMAP header size (see {@link SealedGmapStructuralProbeUtil#FIXED_HEADER_BYTES}). */
+	public static final int GMAP_FIXED_HEADER_BYTES = SealedGmapStructuralProbeUtil.FIXED_HEADER_BYTES;
 
 	/** Default debounce between pack requests for the same stream. */
 	public static final long PACK_REQUEST_DEBOUNCE_MS = 5_000L;
+
+	/** OpLog pull {@code fromSeqInclusive} used for sealed integrity heal of one shard. */
+	public static final long SEALED_INTEGRITY_PULL_FROM_SEQ = 1L;
 
 	private SealedIntegritySensorUtil() {
 	}
 
 	/**
-	 * Probe result for one sealed {@code .gmap} path.
+	 * Probe result for one sealed {@code .gmap} path or shard-vs-peer compare.
 	 */
 	public enum Probe {
 		OK,
 		MISSING,
 		TRUNCATED,
 		BAD_MAGIC,
-		IO_ERROR
+		IO_ERROR,
+		/** Local name+size identity differs from peer HELLO sealed fingerprint. */
+		SIZE_OR_FP_MISMATCH
 	}
 
 	/**
-	 * Read magic from {@code gmapPath}; fail-closed on truncate / bad magic / IO.
+	 * Structural GMAP probe (magic + directory bounds vs file size).
 	 */
 	public static Probe probeGmapHeader(Path gmapPath) {
-		if (gmapPath == null || !Files.isRegularFile(gmapPath)) {
+		return SealedGmapStructuralProbeUtil.probe(gmapPath);
+	}
+
+	/**
+	 * Worst structural probe across every non-orphan {@code .gmap} for {@code domain#shard}.
+	 * Empty listing → {@link Probe#MISSING}.
+	 */
+	public static Probe probeAllGmapHeaders(Path sealedRoot, String domain, int shard) {
+		if (sealedRoot == null || domain == null) {
 			return Probe.MISSING;
 		}
 		try {
-			final long size = Files.size(gmapPath);
-			if (size < GMAP_FIXED_HEADER_BYTES) {
-				return Probe.TRUNCATED;
-			}
-			try (FileChannel channel = FileChannel.open(gmapPath, StandardOpenOption.READ)) {
-				final ByteBuffer buf = ByteBuffer.allocate(Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-				final int read = channel.read(buf, 0L);
-				if (read < Integer.BYTES) {
-					return Probe.TRUNCATED;
+			final List<Path> files = SealedShardPack.listShardFiles(sealedRoot, domain, shard);
+			Probe worst = null;
+			for (Path file : files) {
+				final String name = file.getFileName() == null ? "" : file.getFileName().toString();
+				if (!name.endsWith(".gmap") || GridFs.isOrphanStagingName(file)) {
+					continue;
 				}
-				buf.flip();
-				final int magic = buf.getInt();
-				if (magic != SealedGridMapWriter.MAGIC) {
-					return Probe.BAD_MAGIC;
+				final Probe probe = probeGmapHeader(file);
+				if (worst == null || severity(probe) > severity(worst)) {
+					worst = probe;
 				}
-				return Probe.OK;
 			}
+			return worst == null ? Probe.MISSING : worst;
 		} catch (IOException ignored) {
 			return Probe.IO_ERROR;
 		}
+	}
+
+	/**
+	 * Peer identity mismatch when both sides advertise a non-zero sealed fingerprint.
+	 */
+	public static Probe probeFingerprintMismatch(long localIdentityFp, long peerIdentityFp) {
+		if (peerIdentityFp == 0L || localIdentityFp == 0L) {
+			return Probe.OK;
+		}
+		if (localIdentityFp != peerIdentityFp) {
+			return Probe.SIZE_OR_FP_MISMATCH;
+		}
+		return Probe.OK;
+	}
+
+	/**
+	 * Combine local header probe with peer fingerprint compare (worst wins).
+	 */
+	public static Probe combine(Probe headerProbe, Probe fingerprintProbe) {
+		final Probe left = headerProbe == null ? Probe.MISSING : headerProbe;
+		final Probe right = fingerprintProbe == null ? Probe.OK : fingerprintProbe;
+		return severity(right) > severity(left) ? right : left;
 	}
 
 	/**
@@ -95,7 +124,19 @@ public final class SealedIntegritySensorUtil {
 		return probe == Probe.MISSING
 				|| probe == Probe.TRUNCATED
 				|| probe == Probe.BAD_MAGIC
-				|| probe == Probe.IO_ERROR;
+				|| probe == Probe.IO_ERROR
+				|| probe == Probe.SIZE_OR_FP_MISMATCH;
+	}
+
+	private static int severity(Probe probe) {
+		return switch (probe) {
+			case OK -> 0;
+			case SIZE_OR_FP_MISMATCH -> 1;
+			case TRUNCATED -> 2;
+			case BAD_MAGIC -> 3;
+			case MISSING -> 4;
+			case IO_ERROR -> 5;
+		};
 	}
 
 	/**
@@ -109,7 +150,7 @@ public final class SealedIntegritySensorUtil {
 			final String key = domainType + '#' + shard;
 			final long window = debounceMs <= 0L ? PACK_REQUEST_DEBOUNCE_MS : debounceMs;
 			final Long prev = lastRequestMillis.get(key);
-			if (prev != null && (nowMillis - prev.longValue()) < window) {
+			if (prev != null && (nowMillis - prev) < window) {
 				return false;
 			}
 			lastRequestMillis.put(key, nowMillis);

@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Incomplete-replica detect for writer fallback on auto-route SELECT.
+ * Incomplete-replica detect for writer fallback on auto-route SELECT (AUTH + EXEC).
  *
  * @author: GenCloud
  * @date: 2026/11
@@ -29,9 +29,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class ReplicaReadFallbackUtilTest {
 	@Test
-	void matchesApplyLagStaleMessage() {
+	void matchesAuthApplyLagStaleMessage() {
 		assertTrue(ReplicaReadFallbackUtil.isIncompleteReplica(
 				new IllegalStateException(FactoryAuthRedirectUtil.ERR_APPLY_LAG_STALE)));
+		assertTrue(ReplicaReadFallbackUtil.isIncompleteReplicaMessage(
+				FactoryAuthRedirectUtil.ERR_APPLY_LAG_STALE));
+	}
+
+	@Test
+	void matchesExecWireStaleReplica() {
+		assertTrue(ReplicaReadFallbackUtil.isIncompleteReplica(
+				new IllegalStateException("SQL error 42: stale replica read (apply lag exceeded)")));
+		assertTrue(ReplicaReadFallbackUtil.isIncompleteReplicaMessage(
+				"stale replica read (apply lag exceeded)"));
+	}
+
+	@Test
+	void matchesCatalogObjectSetIncomplete() {
+		assertTrue(ReplicaReadFallbackUtil.isIncompleteReplica(
+				new IllegalStateException(
+						"SQL error 42: replica read denied: catalog object-set incomplete (fingerprint mismatch)")));
 	}
 
 	@Test
@@ -46,5 +63,7 @@ public class ReplicaReadFallbackUtilTest {
 	void ignoresUnrelated() {
 		assertFalse(ReplicaReadFallbackUtil.isIncompleteReplica(new IllegalStateException("boom")));
 		assertFalse(ReplicaReadFallbackUtil.isIncompleteReplica(null));
+		assertFalse(ReplicaReadFallbackUtil.isIncompleteReplicaMessage(null));
+		assertFalse(ReplicaReadFallbackUtil.isIncompleteReplicaMessage("channel closed"));
 	}
 }

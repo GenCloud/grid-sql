@@ -15,22 +15,6 @@
  */
 package org.genfork.grid.replication.snapshot.sealed;
 
-import java.io.IOException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
-import java.util.function.Function;
-
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.mem.index.IndexPointerRef;
@@ -44,6 +28,17 @@ import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.utils.ArrayUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Per-domain sealed GridMap lifecycle service.
@@ -68,6 +63,10 @@ public final class SealedGridMapService {
 	private final Map<String, Function<Integer, GridEntriesProcessor>> processors = new ConcurrentHashMap<>();
 	private final Map<String, Set<Integer>> registeredShards = new ConcurrentHashMap<>();
 	private final SealedReaderLifecycleGate lifecycleGate = new SealedReaderLifecycleGate();
+	/** Cached aggregate sealed identity; invalidated on unpack/seal/purge. */
+	private final AtomicLong cachedAggregateIdentityFp = new AtomicLong(0L);
+	private final AtomicLong aggregateIdentityEpoch = new AtomicLong(0L);
+	private final AtomicLong cachedAggregateEpoch = new AtomicLong(-1L);
 
 	public SealedGridMapService(Path sealedRoot) {
 		this(sealedRoot, null);
@@ -93,7 +92,6 @@ public final class SealedGridMapService {
 
 	/** Safety cap: Function must return null past last shard (see TableStore). */
 	private static final int MAX_SHARD_PROBE = 4_096;
-	/** OpLog read chunk when merging into sealed dump (same order as hydrate). */
 
 	/**
 	 * Per-shard gate: {@code true} skips dump for that shard (open TX / envelope).
@@ -182,6 +180,9 @@ public final class SealedGridMapService {
 			rows += dumpOneShard(
 					domainType, shard, byShard, opLog, nodeState, tableShardCount, truncateOpLog);
 		}
+		if (rows > 0) {
+			invalidateSealedIdentityCache();
+		}
 		if (deferGate instanceof SealedDumpSafetyUtil.TrackingDeferGate tracking) {
 			return new DumpDomainResult(rows, tracking.deferredShards(), tracking.deferredReasons());
 		}
@@ -203,7 +204,7 @@ public final class SealedGridMapService {
 		if (opLog != null) {
 			for (String streamKey : opLog.streamKeys()) {
 				if (OpLogStreamKeyUtil.startsWithDomain(streamKey, domainType)) {
-					shards.add(Integer.valueOf(SealedDumpMergeUtil.parseShard(streamKey)));
+					shards.add(SealedDumpMergeUtil.parseShard(streamKey));
 				}
 			}
 		}
@@ -508,6 +509,105 @@ public final class SealedGridMapService {
 		return SealedShardPack.pack(sealedRoot, domainType, shard);
 	}
 
+	/**
+	 * Aggregate name+size sealed identity for HELLO — entire sealed root (catches node holes
+	 * even when catalog domain keys diverge from dump prefixes). Cached until
+	 * {@link #invalidateSealedIdentityCache()}.
+	 */
+	public long aggregateSealedIdentityFingerprint() throws IOException {
+		if (sealedRoot == null) {
+			return 0L;
+		}
+		final long epoch = aggregateIdentityEpoch.get();
+		if (cachedAggregateEpoch.get() == epoch) {
+			return cachedAggregateIdentityFp.get();
+		}
+		final long computed = SealedPackFingerprint.ofSealedRootIdentity(sealedRoot);
+		cachedAggregateIdentityFp.set(computed);
+		cachedAggregateEpoch.set(epoch);
+		return computed;
+	}
+
+	/**
+	 * Invalidate cached aggregate sealed identity after unpack / seal / purge.
+	 */
+	public void invalidateSealedIdentityCache() {
+		aggregateIdentityEpoch.incrementAndGet();
+	}
+
+	/**
+	 * Invoke {@code consumer} for every registered {@code domain#shard} binding plus any
+	 * shard that still has on-disk {@code .gmap} under that domain hex (covers hole shards
+	 * missing from OpLog stream keys / partial registration).
+	 */
+	public void forEachRegisteredShard(BiConsumer<String, Integer> consumer) {
+		if (consumer == null) {
+			return;
+		}
+		final Set<String> emitted = new HashSet<>();
+		for (Map.Entry<String, Set<Integer>> entry : registeredShards.entrySet()) {
+			final String domain = entry.getKey();
+			final Set<Integer> shards = entry.getValue();
+			if (domain == null || shards == null) {
+				continue;
+			}
+			for (Integer shard : shards) {
+				if (shard == null) {
+					continue;
+				}
+				final String key = domain + '#' + shard;
+				if (emitted.add(key)) {
+					consumer.accept(domain, shard);
+				}
+			}
+			emitOnDiskShards(domain, emitted, consumer);
+		}
+	}
+
+	private void emitOnDiskShards(
+			String domain,
+			Set<String> emitted,
+			BiConsumer<String, Integer> consumer
+	) {
+		if (!GridFs.isDirectory(sealedRoot)) {
+			return;
+		}
+
+		final String hex = SealedShardPack.domainHex(domain);
+		final String prefix = hex + "_";
+		try (DirectoryStream<Path> stream = GridFs.newDirectoryStream(sealedRoot, prefix + "*_n*.gmap")) {
+			for (Path file : stream) {
+				final String name = file.getFileName().toString();
+				final int shard = parseShardFromGmapName(name, hex);
+				if (shard < 0) {
+					continue;
+				}
+				final String key = domain + '#' + shard;
+				if (emitted.add(key)) {
+					consumer.accept(domain, shard);
+				}
+			}
+		} catch (IOException ignored) {
+			// best-effort heal enumeration
+		}
+	}
+
+	private static int parseShardFromGmapName(String name, String hex) {
+		if (name == null || hex == null || !name.startsWith(hex + "_") || !name.endsWith(".gmap")) {
+			return -1;
+		}
+		final String mid = name.substring(hex.length() + 1, name.length() - ".gmap".length());
+		final int nodeSep = mid.lastIndexOf("_n");
+		if (nodeSep <= 0) {
+			return -1;
+		}
+		try {
+			return Integer.parseInt(mid.substring(0, nodeSep));
+		} catch (NumberFormatException ignored) {
+			return -1;
+		}
+	}
+
 	/** Sealed root path when configured; {@code null} when durability sealed is unbound. */
 	public Path sealedRootOrNull() {
 		return sealedRoot;
@@ -523,11 +623,18 @@ public final class SealedGridMapService {
 		if (sealedRoot == null) {
 			throw new IllegalStateException("sealed root not configured");
 		}
+		if (!SealedShardPack.isCompleteShardArtifacts(packed)) {
+			throw new IOException("incomplete sealed shard pack for " + domainType + "#" + shard);
+		}
 		try {
 			return lifecycleGate.callExclusive(domainType, shard, () -> {
 				try {
 					releaseReadersBeforeOverwriteUnlocked(domainType, shard);
-					return SealedShardPack.unpack(packed, sealedRoot);
+					final List<Path> written = SealedShardPack.unpack(packed, sealedRoot);
+					final Set<String> keep = SealedShardPack.packedEntryNames(packed);
+					SealedShardPack.purgeOrphansNotIn(sealedRoot, domainType, shard, keep);
+					invalidateSealedIdentityCache();
+					return written;
 				} catch (IOException e) {
 					throw new UncheckedSealedIo(e);
 				}
@@ -547,10 +654,6 @@ public final class SealedGridMapService {
 		final GridEntriesProcessor processor = byShard == null ? null : byShard.apply(shard);
 		releaseReaderForOverwrite(domainType, shard, processor);
 		SealedIndexLifecycleUtil.releaseShardSealedOnly(sealedBPTreeService, domainType, shard);
-	}
-
-	public SealedBPTreeService sealedBPTreeService() {
-		return sealedBPTreeService;
 	}
 
 	public SealedBitmapService sealedBitmapService() {
@@ -622,7 +725,7 @@ public final class SealedGridMapService {
 				if (shard != null) {
 					try {
 						SealedIndexLifecycleUtil.detachAndReleaseShard(
-								byShard, sealedBPTreeService, domainType, shard.intValue());
+								byShard, sealedBPTreeService, domainType, shard);
 					} catch (IOException e) {
 						throw new IllegalStateException(
 								"sealed release before deleteDomain failed " + OpLogStreamKeyUtil.format(domainType, shard), e);
@@ -855,12 +958,13 @@ public final class SealedGridMapService {
 				if (suffix < 0) {
 					continue;
 				}
-				final int end = suffix;
-				if (end <= prefix.length()) {
+
+                if (suffix <= prefix.length()) {
 					continue;
 				}
+
 				try {
-					shards.add(Integer.parseInt(name.substring(prefix.length(), end)));
+					shards.add(Integer.parseInt(name.substring(prefix.length(), suffix)));
 				} catch (NumberFormatException ignored) {
 					// Ignore unrelated files sharing the hash prefix.
 				}
@@ -885,7 +989,7 @@ public final class SealedGridMapService {
 				if (shard == null) {
 					continue;
 				}
-				final GridEntriesProcessor processor = byShard.apply(shard.intValue());
+				final GridEntriesProcessor processor = byShard.apply(shard);
 				if (processor != null) {
 					return processor;
 				}

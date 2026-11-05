@@ -49,13 +49,40 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_OPLOG_PUSH_RECV = "grid.replication.oplog_push_recv";
 	public static final String METRIC_APPLY_ACK_SENT = "grid.replication.apply_ack_sent";
 	public static final String METRIC_APPLY_ACK_RECV = "grid.replication.apply_ack_recv";
+	public static final String METRIC_APPLY_NACK_RECV = "grid.replication.apply_nack_recv";
+	public static final String METRIC_APPLY_NACK_HEAL_SCHEDULED = "grid.replication.apply_nack_heal_scheduled";
+	public static final String METRIC_APPLY_NACK_HEAL_SUPPRESSED = "grid.replication.apply_nack_heal_suppressed";
 	public static final String METRIC_ORCHID_RPC_SENT = "grid.replication.orchid_rpc_sent";
 	public static final String METRIC_CONNECT_FAILURES = "grid.replication.connect_failures";
 	public static final String METRIC_SHIP_BACKPRESSURE = "grid.replication.ship_backpressure";
 	public static final String METRIC_SEALED_MISSES = "grid.replication.sealed_misses";
+	public static final String METRIC_SEALED_INTEGRITY_PACK_REQUESTED = "grid.replication.sealed_integrity_pack_requested";
+	public static final String METRIC_SEALED_INVENTORY_DISK_PROBES = "grid.replication.sealed_inventory_disk_probes";
+	public static final String METRIC_SEALED_INVENTORY_OBSERVE_SKIPPED = "grid.replication.sealed_inventory_observe_skipped";
+	public static final String METRIC_SEALED_INVENTORY_OBSERVE_SKIP_BYPASSED =
+			"grid.replication.sealed_inventory_observe_skip_bypassed";
+	public static final String METRIC_PROPOSER_MISSING_STREAM_HITS = "grid.replication.proposer_missing_stream_hits";
+	public static final String METRIC_MISSING_STREAM_INCOMPLETE = "grid.replication.missing_stream_incomplete";
+	public static final String METRIC_SEALED_INVENTORY_REBUILD_QUEUED =
+			"grid.replication.sealed_inventory_rebuild_queued";
+	public static final String METRIC_SEALED_INVENTORY_REBUILD = "grid.replication.sealed_inventory_rebuild";
+	public static final String METRIC_SEALED_DUMP_DEFERRED = "grid.replication.sealed_dump_deferred";
+	public static final String METRIC_SEALED_DUMP_AT_RISK = "grid.replication.sealed_dump_at_risk";
+	public static final String METRIC_ORPHAN_APPLY_ENVELOPE_ABORT = "grid.replication.orphan_apply_envelope_abort";
+	public static final String METRIC_ENVELOPE_DEFER = "grid.replication.envelope_defer";
+	public static final String METRIC_STICKY_APPLY_ENVELOPE_CLEAR = "grid.replication.sticky_apply_envelope_clear";
+	public static final String METRIC_DUPLEX_MISMATCH = "grid.replication.duplex_mismatch";
+	public static final String METRIC_DUPLEX_REPAIR = "grid.replication.duplex_repair";
+	public static final String METRIC_DUPLEX_UNCORRECTABLE = "grid.replication.duplex_uncorrectable";
+	public static final String METRIC_MAP_GET_HIT = "grid.replication.map_get_hit";
+	public static final String METRIC_MAP_GET_MISS = "grid.replication.map_get_miss";
 	public static final String METRIC_OVERLAY_PINNED = "grid.replication.overlay_pinned_keys";
+	public static final String METRIC_ORCHID_WAIT_P50_NS = "grid.replication.orchid_wait_p50_ns";
 	public static final String METRIC_ORCHID_WAIT_P99_NS = "grid.replication.orchid_wait_p99_ns";
+	public static final String METRIC_ORCHID_WAIT_SAMPLE_COUNT = "grid.replication.orchid_wait_sample_count";
+	public static final String METRIC_OPLOG_FSYNC_P50_NS = "grid.replication.oplog_fsync_p50_ns";
 	public static final String METRIC_OPLOG_FSYNC_P99_NS = "grid.replication.oplog_fsync_p99_ns";
+	public static final String METRIC_OPLOG_FSYNC_SAMPLE_COUNT = "grid.replication.oplog_fsync_sample_count";
 	public static final String METRIC_MAP_HIT_RATE = "grid.replication.map_hit_rate";
 
 	public static final String METRIC_ORCHID_R = "grid.replication.orchid_r";
@@ -87,6 +114,8 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_SQL_ROLLBACKS = "grid.sql.tx_rollbacks";
 	public static final String METRIC_SQL_SESSION_OPENS = "grid.sql.session_opens";
 	public static final String METRIC_SQL_AUTH_FAILURES = "grid.sql.auth_failures";
+	public static final String METRIC_SQL_REPLICA_READS = "grid.sql.replica_reads";
+	public static final String METRIC_SQL_REPLICA_READ_DENIED = "grid.sql.replica_read_denied";
 	public static final String METRIC_SQL_PRIVILEGE_USERS = "grid.sql.privilege_users";
 	public static final String METRIC_SQL_AUTH_OPEN = "grid.sql.auth_open";
 	public static final String METRIC_CATALOG_APPLY_LAG = "grid.replication.catalog_apply_lag";
@@ -139,6 +168,17 @@ public final class GridMetricsBinder implements MeterBinder {
 				.register(registry);
 		FunctionCounter.builder(METRIC_APPLY_ACK_RECV, ReplicationMetrics.class, m -> ReplicationMetrics.applyAckRecv())
 				.register(registry);
+		FunctionCounter.builder(METRIC_APPLY_NACK_RECV, ReplicationMetrics.class, m -> ReplicationMetrics.applyNackRecv())
+				.description("Apply NACK frames received")
+				.register(registry);
+		FunctionCounter.builder(METRIC_APPLY_NACK_HEAL_SCHEDULED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.applyNackHealScheduled())
+				.description("Apply-NACK heal tasks scheduled")
+				.register(registry);
+		FunctionCounter.builder(METRIC_APPLY_NACK_HEAL_SUPPRESSED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.applyNackHealSuppressed())
+				.description("Apply-NACK heal tasks suppressed (storm gate)")
+				.register(registry);
 		FunctionCounter.builder(METRIC_ORCHID_RPC_SENT, ReplicationMetrics.class, m -> ReplicationMetrics.orchidRpcSent())
 				.register(registry);
 		FunctionCounter.builder(METRIC_CONNECT_FAILURES, ReplicationMetrics.class, m -> ReplicationMetrics.connectFailures())
@@ -147,13 +187,93 @@ public final class GridMetricsBinder implements MeterBinder {
 				.register(registry);
 		FunctionCounter.builder(METRIC_SEALED_MISSES, ReplicationMetrics.class, m -> ReplicationMetrics.sealedMisses())
 				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INTEGRITY_PACK_REQUESTED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedIntegrityPackRequested())
+				.description("Sealed integrity pack requests")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INVENTORY_DISK_PROBES, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedInventoryDiskProbes())
+				.description("HELLO sealed inventory disk identity probes")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INVENTORY_OBSERVE_SKIPPED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedInventoryObserveSkipped())
+				.description("HELLO sealed inventory observe skipped (identity unchanged)")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INVENTORY_OBSERVE_SKIP_BYPASSED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedInventoryObserveSkipBypassed())
+				.description("HELLO inventory identity skip bypassed (differential heal still needed)")
+				.register(registry);
+		FunctionCounter.builder(METRIC_PROPOSER_MISSING_STREAM_HITS, ReplicationMetrics.class,
+						m -> ReplicationMetrics.proposerMissingStreamHits())
+				.description("Follower missing-stream incompleteness evaluations that returned true")
+				.register(registry);
+		Gauge.builder(METRIC_MISSING_STREAM_INCOMPLETE, this, GridMetricsBinder::sampleMissingStreamIncomplete)
+				.description("Sticky missing-stream READ_REPLICA incompleteness (0/1)")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INVENTORY_REBUILD_QUEUED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedInventoryRebuildQueued())
+				.description("Sealed inventory admit rebuilds queued after invalidate")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_INVENTORY_REBUILD, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedInventoryRebuildTotal())
+				.description("Sealed inventory admit rebuilds completed")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_DUMP_DEFERRED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedDumpDeferred())
+				.description("Sealed dump shards deferred (open TX / envelope)")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SEALED_DUMP_AT_RISK, ReplicationMetrics.class,
+						m -> ReplicationMetrics.sealedDumpAtRisk())
+				.description("At-risk sealed dump attempts (huge OpLog delta / no .sbpt)")
+				.register(registry);
+		FunctionCounter.builder(METRIC_ORPHAN_APPLY_ENVELOPE_ABORT, ReplicationMetrics.class,
+						m -> ReplicationMetrics.orphanApplyEnvelopeAbort())
+				.description("Orphan multi-stream apply envelope aborts")
+				.register(registry);
+		FunctionCounter.builder(METRIC_ENVELOPE_DEFER, ReplicationMetrics.class, m -> ReplicationMetrics.envelopeDefer())
+				.description("Sealed dump deferred for ENVELOPE membership")
+				.register(registry);
+		FunctionCounter.builder(METRIC_STICKY_APPLY_ENVELOPE_CLEAR, ReplicationMetrics.class,
+						m -> ReplicationMetrics.stickyApplyEnvelopeClear())
+				.description("Sticky committed apply envelopes cleared before seal")
+				.register(registry);
+		FunctionCounter.builder(METRIC_DUPLEX_MISMATCH, ReplicationMetrics.class, m -> ReplicationMetrics.duplexMismatch())
+				.description("Duplex blob mismatches detected")
+				.register(registry);
+		FunctionCounter.builder(METRIC_DUPLEX_REPAIR, ReplicationMetrics.class, m -> ReplicationMetrics.duplexRepair())
+				.description("Duplex repairs applied")
+				.register(registry);
+		FunctionCounter.builder(METRIC_DUPLEX_UNCORRECTABLE, ReplicationMetrics.class,
+						m -> ReplicationMetrics.duplexUncorrectable())
+				.description("Duplex uncorrectable failures")
+				.register(registry);
+		FunctionCounter.builder(METRIC_MAP_GET_HIT, ReplicationMetrics.class, m -> ReplicationMetrics.mapGetHits())
+				.description("Local map get hits")
+				.register(registry);
+		FunctionCounter.builder(METRIC_MAP_GET_MISS, ReplicationMetrics.class, m -> ReplicationMetrics.mapGetMisses())
+				.description("Local map get misses")
+				.register(registry);
 
 		Gauge.builder(METRIC_OVERLAY_PINNED, ReplicationMetrics.class, m -> ReplicationMetrics.overlayPinnedKeys())
 				.description("Live overlay pinned keys")
 				.register(registry);
+		Gauge.builder(METRIC_ORCHID_WAIT_P50_NS, ReplicationMetrics.class, m -> ReplicationMetrics.orchidWaitP50Ns())
+				.description("ORCHID wait latency p50 (ns)")
+				.register(registry);
 		Gauge.builder(METRIC_ORCHID_WAIT_P99_NS, ReplicationMetrics.class, m -> ReplicationMetrics.orchidWaitP99Ns())
 				.register(registry);
+		Gauge.builder(METRIC_ORCHID_WAIT_SAMPLE_COUNT, ReplicationMetrics.class,
+						m -> ReplicationMetrics.orchidWaitSampleCount())
+				.description("ORCHID wait latency sample count")
+				.register(registry);
+		Gauge.builder(METRIC_OPLOG_FSYNC_P50_NS, ReplicationMetrics.class, m -> ReplicationMetrics.oplogFsyncP50Ns())
+				.description("OpLog fsync latency p50 (ns)")
+				.register(registry);
 		Gauge.builder(METRIC_OPLOG_FSYNC_P99_NS, ReplicationMetrics.class, m -> ReplicationMetrics.oplogFsyncP99Ns())
+				.register(registry);
+		Gauge.builder(METRIC_OPLOG_FSYNC_SAMPLE_COUNT, ReplicationMetrics.class,
+						m -> ReplicationMetrics.oplogFsyncSampleCount())
+				.description("OpLog fsync latency sample count")
 				.register(registry);
 		Gauge.builder(METRIC_MAP_HIT_RATE, ReplicationMetrics.class, m -> ReplicationMetrics.mapHitRate())
 				.register(registry);
@@ -233,6 +353,12 @@ public final class GridMetricsBinder implements MeterBinder {
 				.register(registry);
 		FunctionCounter.builder(METRIC_SQL_AUTH_FAILURES, SqlTxMetrics.class, m -> SqlTxMetrics.authFailures())
 				.description("SQL AUTH frame failures")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_REPLICA_READS, SqlTxMetrics.class, m -> SqlTxMetrics.replicaReads())
+				.description("SQL reads served on replica path")
+				.register(registry);
+		FunctionCounter.builder(METRIC_SQL_REPLICA_READ_DENIED, SqlTxMetrics.class, m -> SqlTxMetrics.replicaReadDenied())
+				.description("SQL replica reads denied (writer-only / eligibility)")
 				.register(registry);
 		Gauge.builder(METRIC_SQL_PRIVILEGE_USERS, this, GridMetricsBinder::samplePrivilegeUsers)
 				.description("Privilege catalog user count")
@@ -463,6 +589,14 @@ public final class GridMetricsBinder implements MeterBinder {
 			return ZERO;
 		}
 		return (double) coordinator.catalogApplyLag();
+	}
+
+	private double sampleMissingStreamIncomplete() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return coordinator.isMissingStreamIncompleteSticky() ? ONE : ZERO;
 	}
 
 	private SqlServerRuntime sqlRuntimeOrNull() {

@@ -122,6 +122,12 @@ public class GridHealthMetricsSmokeIT {
 		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_SQL_LOCK_WAIT_TIMEOUTS).functionCounter());
 		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_OPLOG_PUSH_SENT).functionCounter());
 		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_SEALED_MISS).functionCounter());
+		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_APPLY_NACK_RECV).functionCounter());
+		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_SEALED_INVENTORY_OBSERVE_SKIPPED).functionCounter());
+		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_DUPLEX_REPAIR).functionCounter());
+		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_SQL_REPLICA_READS).functionCounter());
+		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_ORCHID_WAIT_P50_NS).gauge());
+		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_OPLOG_FSYNC_P50_NS).gauge());
 		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_ORCHID_R).gauge());
 		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_REPAIR_ISSUED).gauge());
 		assertNotNull(meterRegistry.find(GridMetricsBinder.METRIC_REPAIR_APPLIED).gauge());

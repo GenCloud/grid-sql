@@ -80,10 +80,6 @@ public class ShardMigrator {
 		return cooldown;
 	}
 
-	public SealedPackShipGate getSealedShipGate() {
-		return sealedShipGate;
-	}
-
 	public void setOpenTxGate(BiPredicate<String, Integer> openTxGate) {
 		this.openTxGate = openTxGate;
 	}
@@ -211,7 +207,7 @@ public class ShardMigrator {
 				return;
 			}
 			final byte[] packed = SealedShardPack.packListed(files);
-			if (!SealedShardPack.hasArtifactFiles(packed)) {
+			if (!SealedShardPack.isCompleteShardArtifacts(packed)) {
 				sealedShipGate.onShipped(domainType, shard, fingerprint);
 				return;
 			}

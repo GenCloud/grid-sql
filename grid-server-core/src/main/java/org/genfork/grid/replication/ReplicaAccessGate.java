@@ -78,21 +78,6 @@ public final class ReplicaAccessGate {
 		}
 	}
 
-	static void ensureShardWritableState(boolean draining) {
-		if (draining) {
-			throw new OrchidNotSyncedException(WRITE_SHARD_DRAINING);
-		}
-	}
-
-	/**
-	 * Linearizable SELECT path (default / PRIMARY session): proposer only, fail-closed on lag.
-	 *
-	 * @throws OrchidNotSyncedException when this node must not serve a successful read
-	 */
-	public static void ensureRead(ReplicationCoordinator replication) {
-		ensureLinearizableRead(replication);
-	}
-
 	/**
 	 * Linearizable SELECT: learners never serve; followers / stale lag fail-closed
 	 * so multi-host clients rotate to the phase-ranked proposer.
@@ -125,17 +110,6 @@ public final class ReplicaAccessGate {
 				replication.isCatalogFingerprintStale());
 	}
 
-	static void ensureWriteState(boolean writeAdmission, boolean writerEligible) {
-		ensureWriteState(writeAdmission, writerEligible, false, true);
-	}
-
-	static void ensureWriteState(
-			boolean writeAdmission,
-			boolean writerEligible,
-			boolean applyLagStale) {
-		ensureWriteState(writeAdmission, writerEligible, applyLagStale, true);
-	}
-
 	static void ensureWriteState(
 			boolean writeAdmission,
 			boolean writerEligible,
@@ -155,18 +129,6 @@ public final class ReplicaAccessGate {
 		}
 	}
 
-	/**
-	 * @param writeAdmission {@code false} → Cross-DC learner
-	 * @param applyLagStale  apply lag exceeded {@code ha.max-stale-lag}
-	 * @param writerEligible phase-ranked proposer with write-admission
-	 */
-	static void ensureReadState(
-			boolean writeAdmission,
-			boolean applyLagStale,
-			boolean writerEligible) {
-		ensureLinearizableReadState(writeAdmission, applyLagStale, writerEligible);
-	}
-
 	static void ensureLinearizableReadState(
 			boolean writeAdmission,
 			boolean applyLagStale,
@@ -182,15 +144,6 @@ public final class ReplicaAccessGate {
 			boolean writeAdmission,
 			boolean applyLagStale,
 			boolean replicaReadsEnabled,
-			boolean regionAllowsReplicaRead) {
-		ensureReplicaReadState(
-				writeAdmission, applyLagStale, replicaReadsEnabled, regionAllowsReplicaRead, false);
-	}
-
-	static void ensureReplicaReadState(
-			boolean writeAdmission,
-			boolean applyLagStale,
-			boolean replicaReadsEnabled,
 			boolean regionAllowsReplicaRead,
 			boolean catalogFingerprintStale) {
 		if (!replicaReadsEnabled) {
@@ -198,7 +151,7 @@ public final class ReplicaAccessGate {
 		}
 		denyIfLearner(writeAdmission);
 		// Prefer catalog object-set fence message when both lag and fingerprint fire
-		// (AUTH already folds fingerprint into applyLagStale for sticky rotate).
+		// (follower AUTH uses isAuthApplyLagStale; admit uses isClientApplyLagStale).
 		if (catalogFingerprintStale) {
 			throw new OrchidNotSyncedException(REPLICA_READ_CATALOG_INCOMPLETE);
 		}

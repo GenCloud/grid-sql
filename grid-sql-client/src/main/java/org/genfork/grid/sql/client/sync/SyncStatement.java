@@ -95,7 +95,7 @@ public final class SyncStatement {
 			Duration timeout,
 			Executor syncExecutor
 	) {
-		this(transport, null, null, Integer.valueOf(sessionId), sql, txClosed, timeout, syncExecutor);
+		this(transport, null, null, sessionId, sql, txClosed, timeout, syncExecutor);
 	}
 
 	private SyncStatement(
@@ -174,6 +174,7 @@ public final class SyncStatement {
 				if (writerFallback == null || !ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
 					throw ex;
 				}
+				readFactory.markCurrentReadEndpointStale();
 				final TransportOutcome outcome = SyncAwait.await(
 						writerFallback.execAutocommit(sql, args, fetchWindowOverride),
 						timeout, cancelSlot, syncExecutor);

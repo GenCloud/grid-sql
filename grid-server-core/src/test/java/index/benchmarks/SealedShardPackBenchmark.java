@@ -24,6 +24,8 @@ import org.genfork.grid.replication.snapshot.sealed.SealedBitmapService;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.snapshot.sealed.SealedPackFingerprint;
 import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
+import org.genfork.grid.replication.util.SealedIntegritySensorUtil;
+import org.genfork.grid.replication.util.SealedPeerShipGate;
 import org.junit.jupiter.api.Test;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -79,6 +81,8 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 	private List<Path> listed;
 	private long fingerprint;
 	private byte[] packedBytes;
+	private Path sampleGmap;
+	private final SealedPeerShipGate peerShipGate = new SealedPeerShipGate();
 
 	@Setup(Level.Trial)
 	public void setup() throws Exception {
@@ -102,6 +106,11 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 		listed = SealedShardPack.listShardFiles(sealedRoot, DOMAIN, SHARD);
 		fingerprint = SealedPackFingerprint.ofFiles(listed);
 		packedBytes = SealedShardPack.packListed(listed);
+		sampleGmap = listed.stream()
+				.filter(p -> p.getFileName().toString().endsWith(".gmap"))
+				.findFirst()
+				.orElseThrow();
+		peerShipGate.onShipped("peer-jmh", DOMAIN, SHARD, fingerprint);
 	}
 
 	@TearDown(Level.Trial)
@@ -123,9 +132,34 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 	}
 
 	@Benchmark
+	public void fingerprintOfFilesIdentity(Blackhole bh) throws Exception {
+		bh.consume(SealedPackFingerprint.ofFilesIdentity(listed));
+	}
+
+	@Benchmark
+	public void completeShardArtifactsDetect(Blackhole bh) {
+		bh.consume(SealedShardPack.isCompleteShardArtifacts(packedBytes));
+	}
+
+	@Benchmark
 	public void skipUnchangedFingerprint(Blackhole bh) throws Exception {
 		final long again = SealedPackFingerprint.ofFiles(listed);
 		bh.consume(again == fingerprint);
+	}
+
+	@Benchmark
+	public void structuralGmapProbe(Blackhole bh) {
+		bh.consume(SealedIntegritySensorUtil.probeGmapHeader(sampleGmap));
+	}
+
+	@Benchmark
+	public void cachedAggregateIdentity(Blackhole bh) throws Exception {
+		bh.consume(sealed.aggregateSealedIdentityFingerprint());
+	}
+
+	@Benchmark
+	public void peerShipGateShouldShip(Blackhole bh) {
+		bh.consume(peerShipGate.shouldShip("peer-jmh", DOMAIN, SHARD, fingerprint));
 	}
 
 	@Benchmark

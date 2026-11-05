@@ -8,16 +8,12 @@
 
 ## Путь изменения
 
-```
-допуск ORCHID (фаза + контрольная сумма)
-      │
-журнал OpLog: append + подтверждение
-      │
-put в карту (строка становится видимой)
-      │
-доставка соседним узлам по Netty
-      │
-применение у соседа → его карта
+```mermaid
+flowchart TB
+  Orchid["допуск ORCHID\nфаза + контрольная сумма"] --> OpLog["OpLog: append + подтверждение"]
+  OpLog --> Map["put в карту\nстрока видима"]
+  Map --> Ship["доставка соседям по Netty"]
+  Ship --> Apply["применение у соседа → его карта"]
 ```
 
 *Схема 1. Доставка соседям — последний шаг, а не первый.*
@@ -50,6 +46,26 @@ uint32 BE length | uint8 opcode | тело
 ### HELLO и sealed catch-up
 
 Если у пира `APPLY_ACK` строго ниже водяного знака обрезки OpLog (`peerAck < truncatedThrough`), одного хвоста журнала недостаточно: truncate уже убрал нужные seq. На пути HELLO тогда уходит sealed-пакет шарда (`.gmap` / `.sbpt` / `.sbm` через `HelloSealedCatchUpUtil`), после чего — живой хвост OpLog. Пустой sealed-корень — no-op; дальше работает обычный pull/repair.
+
+Разбор HELLO / `onPeerAvailable` / attrs канала остаётся на event loop Netty. Observe sealed inventory, membership catch-up, sealed ship по OPLOG_PULL и **eager rebuild admit-индекса** идут на выделенный serial mailbox `helloCatchUp` (logic VT) — **не** на EL и **не** на `OrchidNode.orchidRpcQueue`.
+
+```mermaid
+flowchart TB
+  EL["Netty EL: decode HELLO\nattrs / onPeerAvailable"] --> Mail["mailbox helloCatchUp\nlogic VT"]
+  Mail --> Obs["observe sealed inventory пира"]
+  Obs -->|"не изменился vs last hash"| Skip["пропуск disk ofShardIdentity\nobserve_skipped++"]
+  Obs -->|"изменился / bypass"| Diff["сравнить LocalSealedInventoryIndex\nс entries пира"]
+  Diff -->|"mismatch FP"| Heal["differential pull\nfromSeq=1 — только heal"]
+  Diff -->|"у proposer есть stream,\nлокально tip+sealed FP=0"| Sticky["пересчёт MissingStreamAdmitState\nadmit fence"]
+  Local["локальный seal / unpack"] --> Inv["invalidate + markNotReady\nfail-closed"]
+  Inv --> Rebuild["eager rebuild inventory\nна helloCatchUp"]
+  Rebuild --> Sticky
+  Sel["SELECT на READ_REPLICA"] -.->|O(1) sticky| Sticky
+```
+
+*Схема 2. Dual-track HELLO: heal vs sticky admit. SELECT не обходит sealed pack по диску.*
+
+Неизменённый inventory пира пропускает directory-walk `ofShardIdentity` (invalidate при локальном seal/unpack). Solo / unit без peer transport один раз пересобирает admit-индекс **синхронно**. `local propose digest timeout` под нагрузкой HELLO — баг изоляции EL/mailbox, а не повод поднимать 5s ORCHID digest timeout или ослаблять кворум. Политика допуска: [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
 
 ## Внутри дата-центра
 

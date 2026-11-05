@@ -178,6 +178,7 @@ public final class SyncConnection implements AutoCloseable {
 				if (!ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
 					throw ex;
 				}
+				readFactory.markCurrentReadEndpointStale();
 			}
 		}
 		final List<TransportOutcome> outcomes =
@@ -216,6 +217,7 @@ public final class SyncConnection implements AutoCloseable {
 				if (!ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
 					throw ex;
 				}
+				readFactory.markCurrentReadEndpointStale();
 			}
 		}
 		final List<TransportOutcome> outcomes =

@@ -186,6 +186,7 @@ public final class RoutingConnection implements Connection {
 			if (!ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
 				return Flux.error(ex);
 			}
+			readFactory.markCurrentReadEndpointStale();
 			return writer.executeBatchBound(list);
 		});
 	}

@@ -47,6 +47,7 @@ import org.genfork.grid.replication.schema.SchemaEpochSupport;
 import org.genfork.grid.replication.snapshot.IndexCheckpointService;
 import org.genfork.grid.replication.snapshot.SnapshotService;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
+import org.genfork.grid.replication.snapshot.sealed.SealedPackFingerprint;
 import org.genfork.grid.replication.swarm.*;
 import org.genfork.grid.replication.transport.ApplyAckSender;
 import org.genfork.grid.replication.transport.DiscoveredPeer;
@@ -57,7 +58,6 @@ import org.genfork.grid.replication.tx.TxEnvelopeCodec;
 import org.genfork.grid.replication.tx.TxEnvelopeCoordinator;
 import org.genfork.grid.fs.GridFs;
 import org.genfork.grid.replication.netty.ReplicationRpcCodec.ApplyNack;
-import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
 import org.genfork.grid.replication.util.ApplyNackHealUtil;
 import org.genfork.grid.replication.util.ApplyNackHealUtil.CoalesceState;
 import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec;
@@ -67,11 +67,16 @@ import org.genfork.grid.replication.util.CatalogLagFenceUtil.ProgressTracker;
 import org.genfork.grid.replication.util.CatalogTruncateGateUtil;
 import org.genfork.grid.replication.util.CrossDcVoterUtil;
 import org.genfork.grid.replication.util.HelloSealedCatchUpUtil;
+import org.genfork.grid.replication.util.LocalSealedInventoryIndex;
+import org.genfork.grid.replication.util.MissingStreamAdmitState;
 import org.genfork.grid.replication.util.OpLogArchiveUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+import org.genfork.grid.replication.util.ProposerMissingStreamUtil;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil.PackDebounce;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil.Probe;
+import org.genfork.grid.replication.util.SealedInventoryIdentityUtil;
+import org.genfork.grid.replication.util.SealedShardInventoryEntry;
 import org.genfork.grid.threading.ThreadService;
 import org.genfork.grid.sql.tx.DistForUpdatePeerLockAgent;
 import org.genfork.grid.sql.tx.NettyDistForUpdatePeerLockAgent;
@@ -90,6 +95,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -178,6 +184,10 @@ public class ReplicationCoordinator {
 	 * divergence. Locus reconcile still runs on {@link #REPAIR_FULL_RECONCILE_EVERY}.
 	 */
 	private static final long REPAIR_SOFT_LAG_OPS = 10000L;
+	/** First HELLO re-advertise after start so sealed FP is non-zero once domains bind. */
+	private static final long HELLO_SEALED_READVERTISE_INITIAL_MS = 5_000L;
+	/** Periodic HELLO re-advertise for sealed identity fence (cheap LE trailer). */
+	private static final long HELLO_SEALED_READVERTISE_PERIOD_MS = 10_000L;
 	private final AtomicLong repairTickCount = new AtomicLong();
 	/** Stuck-lag progress for {@code _catalog} readiness fence. */
 	private final ProgressTracker catalogLagProgress = new ProgressTracker();
@@ -185,6 +195,22 @@ public class ReplicationCoordinator {
 	private final ConcurrentHashMap<String, Long> peerCatalogApplied = new ConcurrentHashMap<>();
 	/** Peer HELLO {@code catalogFingerprint} by node id. */
 	private final ConcurrentHashMap<String, Long> peerCatalogFingerprint = new ConcurrentHashMap<>();
+	/** Peer HELLO per-shard sealed identity: peerId → (domain#shard → fp). */
+	private final ConcurrentHashMap<String, ConcurrentHashMap<String, Long>> peerSealedShardFpByNode =
+			new ConcurrentHashMap<>();
+	/** Peer HELLO inventory identity hash — skip disk observe when unchanged. */
+	private final ConcurrentHashMap<String, Long> peerSealedInventoryIdentityByNode = new ConcurrentHashMap<>();
+	/** Cached local HELLO inventory (invalidated with structural hole epoch). */
+	private final AtomicReference<List<SealedShardInventoryEntry>> sealedInventoryCache =
+			new AtomicReference<>(List.of());
+	private final AtomicLong sealedInventoryCachedEpoch = new AtomicLong(-1L);
+	/**
+	 * Sticky missing-stream admit (O(1) SELECT). Memory index from {@link #sealedShardInventory()};
+	 * fail-closed while not ready after invalidate until eager rebuild.
+	 */
+	private final MissingStreamAdmitState missingStreamAdmitState = new MissingStreamAdmitState();
+	/** Coalesce eager inventory rebuild on helloCatchUp mailbox. */
+	private final AtomicBoolean sealedInventoryRebuildQueued = new AtomicBoolean(false);
 	/**
 	 * Writer fingerprint last shipped as journal snapshot per peer.
 	 * Prevents HELLO↔apply storms when peer object-set cannot converge from CREATE* diff alone.
@@ -202,6 +228,10 @@ public class ReplicationCoordinator {
 	private final CoalesceState applyNackHealState = new CoalesceState();
 	/** Sealed header sensor pack-request debounce. */
 	private final PackDebounce sealedIntegrityDebounce = new PackDebounce();
+	/** Cached local structural sealed-hole probe (SELECT must not dir-walk every admit). */
+	private final AtomicLong sealedStructuralHoleEpoch = new AtomicLong(0L);
+	private final AtomicLong sealedStructuralHoleCachedEpoch = new AtomicLong(-1L);
+	private final AtomicBoolean sealedStructuralHoleCached = new AtomicBoolean(false);
 	/** Durable data root ({@code dataDir/cluster/node}) for boot staging GC. */
 	private final Path durableDataDir;
 	/**
@@ -284,15 +314,6 @@ public class ReplicationCoordinator {
 			return false;
 		}
 		return overlayStore.pinsDomainShard(domainType, shard, OpLogStreamKeyUtil.shardCountOf(opLog, domainType, defaultShardCount));
-	}
-
-	/**
-	 * Bind SQL catalog DDL apply callback and ensure {@link #CATALOG_DOMAIN} applier/recorder exist.
-	 * Idempotent; call from {@link org.genfork.grid.sql.SqlEngine} construction.
-	 * Re-gates HELLO sealed packs until {@link #markCatalogBootstrapComplete()}.
-	 */
-	public void bindSqlCatalog(ReplicaApplier.CatalogDdlHandler handler) {
-		bindSqlCatalog(handler, () -> 0L, List::of, () -> 0L, null);
 	}
 
 	/**
@@ -509,10 +530,15 @@ public class ReplicationCoordinator {
 				regionClaimService::regionEpoch,
 				regionClaimService::regionRoleWire,
 				this::catalogAppliedEpoch,
-				this::catalogFingerprint);
+				this::catalogFingerprint,
+				this::sealedArtifactsFingerprint);
+		nettyTransport.setSealedShardInventorySupplier(this::sealedShardInventory);
 		nettyTransport.setSealedGridMapService(sealedGridMapService);
 		nettyTransport.setApplyNackHealHandler(this::onApplyNackHeal);
-		nettyTransport.setSealedShardPackHandler(sealedHydrateService::onSealedShardPack);
+		nettyTransport.setSealedShardPackHandler(msg -> {
+			sealedHydrateService.onSealedShardPack(msg);
+			invalidateSealedStructuralHoleCache();
+		});
 		nettyTransport.setCatalogDdlSnapshotHandler(this::onCatalogDdlSnapshotBody);
 		nettyTransport.setRegionClaimHandlers(regionClaimService::onRegionClaimReqBuildAck, regionClaimService::onRegionClaimAck);
 		regionClaimService.seedObservedState();
@@ -528,6 +554,7 @@ public class ReplicationCoordinator {
 		}
 		orchidNode.start();
 		ensureApplyUnhandledDiagBound();
+		enqueueSealedInventoryAdmitRebuild();
 		if (peerTransportEnabled && crossDcEnabled) {
 			crossDcPublisher.start();
 		}
@@ -562,6 +589,16 @@ public class ReplicationCoordinator {
 		}
 		if (peerTransportEnabled && repairEnabled && homologousRepair != null && !peers.isEmpty()) {
 			backgroundScheduler.scheduleAtFixedRate(this::repairTick, repairIntervalMs, repairIntervalMs, TimeUnit.MILLISECONDS);
+		}
+		// Re-advertise sealed/catalog HELLO fences after domains bind (boot HELLO often has sealedFp=0).
+		if (peerTransportEnabled) {
+			backgroundScheduler.scheduleAtFixedRate(() -> {
+				try {
+                    nettyTransport.broadcastHello();
+                } catch (RuntimeException ex) {
+					log.debug("HELLO rebroadcast failed: {}", ex.toString());
+				}
+			}, HELLO_SEALED_READVERTISE_INITIAL_MS, HELLO_SEALED_READVERTISE_PERIOD_MS, TimeUnit.MILLISECONDS);
 		}
 		if (adaptiveDiskFirstController != null) {
 			adaptiveDiskFirstController.start();
@@ -1179,15 +1216,282 @@ public class ReplicationCoordinator {
 				return true;
 			}
 		}
-		return false;
+		if (isSealedArtifactsFingerprintStale()) {
+			return true;
+		}
+		return hasProposerMissingStream();
 	}
 
 	/**
-	 * AUTH / PROMOTE {@link org.genfork.grid.sql.client.ServerMeta#applyLagStale} and replica-read
-	 * gates: serving HA lag <em>or</em> incomplete row visibility.
+	 * Follower-only missing-stream incompleteness — O(1) sticky bit (no disk on SELECT).
+	 * <p>
+	 * Fail-closed while inventory index is not ready (post-invalidate, pre-eager-rebuild).
+	 * Predicate itself is {@link ProposerMissingStreamUtil#hasMissingStream} at recompute time.
+	 * Solo / unit paths without Netty transport warm the index synchronously once.
+	 */
+	private boolean hasProposerMissingStream() {
+		if (isWriterEligible()) {
+			return false;
+		}
+		if (!missingStreamAdmitState.isInventoryReady()) {
+			if (nettyTransport == null || !peerTransportEnabled) {
+				rebuildSealedInventoryAdmitState();
+			} else {
+				enqueueSealedInventoryAdmitRebuild();
+				return true;
+			}
+		}
+		return missingStreamAdmitState.isIncomplete();
+	}
+
+	/**
+	 * Sticky missing-stream gauge (0/1) for Micrometer.
+	 */
+	public boolean isMissingStreamIncompleteSticky() {
+		return missingStreamAdmitState.isIncomplete();
+	}
+
+	/**
+	 * Whether local sealed inventory index is ready for admit (after rebuild).
+	 */
+	public boolean isSealedInventoryAdmitReady() {
+		return missingStreamAdmitState.isInventoryReady();
+	}
+
+	/**
+	 * Aggregate sealed name+size identity (HELLO advertise / metrics).
+	 * Prefers registered sealed domains; falls back to OpLog stream keys.
+	 * Not an admit gate by itself — see {@link #isSealedArtifactsFingerprintStale()}.
+	 */
+	public long sealedArtifactsFingerprint() {
+		if (sealedGridMapService == null) {
+			return 0L;
+		}
+		try {
+			final long fromRegistered = sealedGridMapService.aggregateSealedIdentityFingerprint();
+			if (fromRegistered != 0L) {
+				return fromRegistered;
+			}
+			if (durableDataDir == null || opLog == null) {
+				return 0L;
+			}
+			final Path sealedRoot = durableDataDir.resolve("sealed");
+			long aggregate = 0L;
+			for (String streamKey : opLog.streamKeys()) {
+				final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+				if (parsed == null) {
+					continue;
+				}
+				final long shardFp = SealedPackFingerprint.ofShardIdentity(
+						sealedRoot, parsed.domain(), parsed.shard());
+				aggregate = SealedPackFingerprint.mixIdentity(aggregate, shardFp);
+			}
+			return aggregate;
+		} catch (Exception ignored) {
+			return 0L;
+		}
+	}
+
+	/**
+	 * Per-shard sealed identity inventory for HELLO trailer (differential heal).
+	 * Cached until {@link #invalidateSealedStructuralHoleCache()}.
+	 */
+	public List<SealedShardInventoryEntry> sealedShardInventory() {
+		if (durableDataDir == null) {
+			publishMissingStreamAdmitFromInventory(List.of());
+			return List.of();
+		}
+		final long epoch = sealedStructuralHoleEpoch.get();
+		if (sealedInventoryCachedEpoch.get() == epoch) {
+			final List<SealedShardInventoryEntry> cached = sealedInventoryCache.get();
+			if (cached != null) {
+				if (!missingStreamAdmitState.isInventoryReady()) {
+					publishMissingStreamAdmitFromInventory(cached);
+				}
+				return cached;
+			}
+		}
+		final List<SealedShardInventoryEntry> out = new ArrayList<>();
+		final Path sealedRoot = durableDataDir.resolve("sealed");
+		forEachSealedHealStream((domain, shard) -> {
+			try {
+				final long fp = SealedPackFingerprint.ofShardIdentity(sealedRoot, domain, shard);
+				if (fp != 0L) {
+					out.add(new SealedShardInventoryEntry(domain, shard, fp));
+				}
+			} catch (Exception ignored) {
+				// skip unreadable shard
+			}
+		});
+		final List<SealedShardInventoryEntry> frozen = List.copyOf(out);
+		sealedInventoryCache.set(frozen);
+		sealedInventoryCachedEpoch.set(epoch);
+		publishMissingStreamAdmitFromInventory(frozen);
+		return frozen;
+	}
+
+	/**
+	 * {@code true} when local sealed files have a structural hole (magic-OK undersize / bad GMAP).
+	 * Peer inventory mismatch drives differential heal only — not admit fence (avoids permanent
+	 * incomplete while peers advertise different sealed inventories). Aggregate root FP alone
+	 * is never a fence.
+	 */
+	public boolean isSealedArtifactsFingerprintStale() {
+		return hasLocalSealedStructuralHole();
+	}
+
+	/**
+	 * Invalidate cached structural sealed-hole probe (after unpack / seal / known disk change).
+	 * Also clears HELLO inventory cache and peer inventory-skip hashes so heal re-probes.
+	 * <p>
+	 * Marks missing-stream admit not-ready (fail-closed) and enqueues eager inventory rebuild
+	 * on {@code helloCatchUp} mailbox — SELECT must not wait for the next HELLO.
+	 */
+	public void invalidateSealedStructuralHoleCache() {
+		sealedStructuralHoleEpoch.incrementAndGet();
+		sealedInventoryCachedEpoch.set(-1L);
+		sealedInventoryCache.set(List.of());
+		peerSealedInventoryIdentityByNode.clear();
+		if (sealedGridMapService != null) {
+			sealedGridMapService.invalidateSealedIdentityCache();
+		}
+		missingStreamAdmitState.markNotReady();
+		enqueueSealedInventoryAdmitRebuild();
+	}
+
+	/**
+	 * Eager rebuild of local sealed inventory index + sticky missing-stream bit (off Netty EL).
+	 */
+	private void enqueueSealedInventoryAdmitRebuild() {
+		if (!sealedInventoryRebuildQueued.compareAndSet(false, true)) {
+			return;
+		}
+		ReplicationMetrics.recordSealedInventoryRebuildQueued();
+		final Runnable rebuild = () -> {
+			try {
+				rebuildSealedInventoryAdmitState();
+			} finally {
+				sealedInventoryRebuildQueued.set(false);
+			}
+		};
+		// Peer transport off / not started: sync rebuild (unit tests, solo durable).
+		if (nettyTransport != null && peerTransportEnabled) {
+			nettyTransport.submitHelloCatchUp(rebuild);
+		} else {
+			rebuild.run();
+		}
+	}
+
+	private void rebuildSealedInventoryAdmitState() {
+		final long startedNs = System.nanoTime();
+		sealedInventoryCachedEpoch.set(-1L);
+		sealedShardInventory();
+		ReplicationMetrics.recordSealedInventoryRebuild(
+				Math.max(0L, System.nanoTime() - startedNs));
+	}
+
+	private void publishMissingStreamAdmitFromInventory(List<SealedShardInventoryEntry> inventory) {
+		final LocalSealedInventoryIndex index = LocalSealedInventoryIndex.fromEntries(inventory);
+		final boolean follower = !isWriterEligible();
+		final Map<String, Long> proposerMap = proposerSealedShardFpMapOrEmpty();
+		final boolean missing = missingStreamAdmitState.publishAndRecompute(
+				index,
+				follower,
+				proposerMap,
+				domain -> domain != null && appliers.containsKey(domain),
+				(domain, shard) -> opLog == null ? 0L : opLog.lastSeq(domain, shard),
+				(domain, shard) -> nodeState == null ? 0L : nodeState.appliedWatermark(domain, shard));
+		if (missing) {
+			ReplicationMetrics.recordProposerMissingStreamHit();
+		}
+	}
+
+	private void recomputeMissingStreamAdmitSticky() {
+		final boolean follower = !isWriterEligible();
+		final Map<String, Long> proposerMap = proposerSealedShardFpMapOrEmpty();
+		final boolean missing = missingStreamAdmitState.recompute(
+				follower,
+				proposerMap,
+				domain -> domain != null && appliers.containsKey(domain),
+				(domain, shard) -> opLog == null ? 0L : opLog.lastSeq(domain, shard),
+				(domain, shard) -> nodeState == null ? 0L : nodeState.appliedWatermark(domain, shard));
+		if (missing) {
+			ReplicationMetrics.recordProposerMissingStreamHit();
+		}
+	}
+
+	private Map<String, Long> proposerSealedShardFpMapOrEmpty() {
+		if (orchidNode == null || nodeState == null) {
+			return Map.of();
+		}
+		final String proposerId = orchidNode.phaseRankedProposerId();
+		if (proposerId == null || proposerId.isBlank() || proposerId.equals(nodeState.getNodeId())) {
+			return Map.of();
+		}
+		final ConcurrentHashMap<String, Long> proposerMap = peerSealedShardFpByNode.get(proposerId);
+		if (proposerMap == null || proposerMap.isEmpty()) {
+			return Map.of();
+		}
+		return proposerMap;
+	}
+
+	/**
+	 * Local structural GMAP hole (truncated / bad magic / IO) on any present sealed shard files.
+	 * Empty sealed listing ({@link Probe#MISSING}) is not a hole by itself — OpLog may still be live.
+	 * Result cached until {@link #invalidateSealedStructuralHoleCache()}.
+	 */
+	private boolean hasLocalSealedStructuralHole() {
+		if (durableDataDir == null) {
+			return false;
+		}
+		final long epoch = sealedStructuralHoleEpoch.get();
+		if (sealedStructuralHoleCachedEpoch.get() == epoch) {
+			return sealedStructuralHoleCached.get();
+		}
+		final Path sealedRoot = durableDataDir.resolve("sealed");
+		final AtomicBoolean hole = new AtomicBoolean(false);
+		forEachSealedHealStream((domain, shard) -> {
+			if (hole.get()) {
+				return;
+			}
+			final Probe probe = SealedIntegritySensorUtil.probeAllGmapHeaders(sealedRoot, domain, shard);
+			if (probe == Probe.TRUNCATED || probe == Probe.BAD_MAGIC || probe == Probe.IO_ERROR) {
+				hole.set(true);
+			}
+		});
+		final boolean value = hole.get();
+		sealedStructuralHoleCached.set(value);
+		sealedStructuralHoleCachedEpoch.set(epoch);
+		return value;
+	}
+
+	/**
+	 * READ_REPLICA admission only ({@link ReplicaAccessGate#ensureReplicaRead}).
+	 * <p>
+	 * Fence matrix (do not merge callers):
+	 * <ul>
+	 *   <li>{@link #isApplyLagStale()} — write / linearizable read / readiness detail</li>
+	 *   <li>{@link #isAuthApplyLagStale()} — AUTH_OK / PROMOTE {@code ServerMeta} only</li>
+	 *   <li>{@code isClientApplyLagStale()} — {@code ensureReplicaRead} only
+	 *       ({@code isApplyLagStale || isReplicaDataIncomplete})</li>
+	 * </ul>
+	 * Never fold into AUTH for the phase-ranked writer.
 	 */
 	public boolean isClientApplyLagStale() {
 		return isApplyLagStale() || isReplicaDataIncomplete();
+	}
+
+	/**
+	 * AUTH / PROMOTE {@link org.genfork.grid.sql.client.ServerMeta#applyLagStale} only
+	 * ({@code SqlExecHandler.serverMeta}).
+	 * <p>
+	 * {@code isApplyLagStale() || (!writerEligible && incomplete)}. Incomplete tip debt on the
+	 * phase-ranked writer must <em>not</em> poison PRIMARY TX obtain — otherwise JDBC
+	 * {@code begin} fails with {@code replica apply lag stale}. Replica SELECT completeness
+	 * stays on {@link #isClientApplyLagStale()} / {@link ReplicaAccessGate#ensureReplicaRead}.
+	 */
+	public boolean isAuthApplyLagStale() {
+		return isApplyLagStale() || (!isWriterEligible() && isReplicaDataIncomplete());
 	}
 
 	/**
@@ -1195,7 +1499,7 @@ public class ReplicationCoordinator {
 	 */
 	public long catalogFingerprint() {
 		final Long value = catalogFingerprintSupplier.get();
-		return value == null ? 0L : value.longValue();
+		return value == null ? 0L : value;
 	}
 
 	/**
@@ -1208,7 +1512,7 @@ public class ReplicationCoordinator {
 			return false;
 		}
 		for (Long peerFp : peerCatalogFingerprint.values()) {
-			if (peerFp != null && peerFp.longValue() != 0L && peerFp.longValue() != local) {
+			if (peerFp != null && peerFp != 0L && peerFp != local) {
 				return true;
 			}
 		}
@@ -1231,8 +1535,8 @@ public class ReplicationCoordinator {
 	public long maxPeerCatalogAppliedEpoch() {
 		long max = 0L;
 		for (Long value : peerCatalogApplied.values()) {
-			if (value != null && value.longValue() > max) {
-				max = value.longValue();
+			if (value != null && value > max) {
+				max = value;
 			}
 		}
 		return max;
@@ -1295,9 +1599,126 @@ public class ReplicationCoordinator {
 					discovered.id(),
 					discovered.catalogAppliedEpoch(),
 					discovered.catalogFingerprint());
+			observePeerSealedFence(
+					discovered.id(),
+                    discovered.sealedShardInventory());
 		}
 		if (peerMembershipService != null) {
 			peerMembershipService.onPeerDiscovered(discovered);
+		}
+	}
+
+	/**
+	 * HELLO sealed fence (legacy callers): remember aggregate root FP only — no ship-all.
+	 */
+	public void observePeerSealedFence(String peerId) {
+		observePeerSealedFence(peerId, List.of());
+	}
+
+	/**
+	 * HELLO sealed fence: remember peer root + per-shard inventory; differential heal only.
+	 * Aggregate root mismatch alone does not fan-out pull/ship.
+	 */
+	public void observePeerSealedFence(
+			String peerId,
+            List<SealedShardInventoryEntry> peerInventory
+	) {
+		if (peerId == null) {
+			return;
+		}
+		final ConcurrentHashMap<String, Long> shardMap =
+				peerSealedShardFpByNode.computeIfAbsent(peerId, ignored -> new ConcurrentHashMap<>());
+		if (peerInventory != null) {
+			for (SealedShardInventoryEntry entry : peerInventory) {
+				if (entry == null || entry.domain() == null || entry.identityFingerprint() == 0L) {
+					continue;
+				}
+				shardMap.put(
+						OpLogStreamKeyUtil.format(entry.domain(), entry.shard()),
+						entry.identityFingerprint());
+			}
+		}
+		if (durableDataDir == null || peerInventory == null || peerInventory.isEmpty()) {
+			recomputeMissingStreamAdmitSticky();
+			return;
+		}
+		final Path sealedRoot = durableDataDir.resolve("sealed");
+		final LocalSealedInventoryIndex localIndex = missingStreamAdmitState.index();
+		final long inventoryIdentity = SealedInventoryIdentityUtil.identityHash(peerInventory);
+		final Long previousIdentity = peerSealedInventoryIdentityByNode.put(peerId, inventoryIdentity);
+		if (previousIdentity != null && previousIdentity == inventoryIdentity && inventoryIdentity != 0L) {
+			final boolean needsHeal = ProposerMissingStreamUtil.needsDifferentialObserve(
+					peerInventory,
+					localIndex::fingerprint);
+			if (!needsHeal) {
+				ReplicationMetrics.recordSealedInventoryObserveSkipped();
+				recomputeMissingStreamAdmitSticky();
+				return;
+			}
+			ReplicationMetrics.recordSealedInventoryObserveSkipBypassed();
+		}
+		final long now = System.currentTimeMillis();
+		for (SealedShardInventoryEntry entry : peerInventory) {
+			if (entry == null || entry.domain() == null || entry.identityFingerprint() == 0L) {
+				continue;
+			}
+			final long localFp;
+			try {
+				ReplicationMetrics.recordSealedInventoryDiskProbe();
+				localFp = SealedPackFingerprint.ofShardIdentity(sealedRoot, entry.domain(), entry.shard());
+			} catch (Exception ignored) {
+				continue;
+			}
+			if (localFp == entry.identityFingerprint()) {
+				if (localFp != 0L) {
+					HelloSealedCatchUpUtil.markPeerInventoryMatched(
+							peerId, entry.domain(), entry.shard(), localFp);
+				}
+				continue;
+			}
+			if (localFp == 0L) {
+				HelloSealedCatchUpUtil.clearPeerShipGate(peerId, entry.domain(), entry.shard());
+			}
+			if (nettyTransport == null) {
+				continue;
+			}
+			if (!sealedIntegrityDebounce.tryAcquire(
+					entry.domain(), entry.shard(), now, SealedIntegritySensorUtil.PACK_REQUEST_DEBOUNCE_MS)) {
+				continue;
+			}
+			nettyTransport.sendOplogPull(
+					peerId,
+					entry.domain(),
+					entry.shard(),
+					SealedIntegritySensorUtil.SEALED_INTEGRITY_PULL_FROM_SEQ);
+			ReplicationMetrics.recordSealedIntegrityPackRequested();
+			if (isWriterEligible() && localFp != 0L) {
+				HelloSealedCatchUpUtil.shipSealedBaseline(
+						sealedGridMapService, nettyTransport, peerId, entry.domain(), entry.shard());
+			}
+		}
+		// Refresh memory index after differential disk probes (epoch unchanged → force rebuild).
+		sealedInventoryCachedEpoch.set(-1L);
+		sealedShardInventory();
+	}
+
+	/**
+	 * Union of OpLog stream keys and sealed registered shards for sealed heal fan-out.
+	 */
+	private void forEachSealedHealStream(BiConsumer<String, Integer> consumer) {
+		if (consumer == null) {
+			return;
+		}
+		if (opLog != null) {
+			for (String streamKey : opLog.streamKeys()) {
+				final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+				if (parsed != null) {
+					consumer.accept(parsed.domain(), parsed.shard());
+				}
+			}
+		}
+		if (sealedGridMapService != null) {
+			sealedGridMapService.forEachRegisteredShard(consumer);
 		}
 	}
 
@@ -1322,8 +1743,8 @@ public class ReplicationCoordinator {
 			return;
 		}
 		if (previousPeerFp != null
-				&& previousPeerFp.longValue() != 0L
-				&& previousPeerFp.longValue() != peerCatalogFingerprint) {
+				&& previousPeerFp != 0L
+				&& previousPeerFp != peerCatalogFingerprint) {
 			// Peer object-set moved but still mismatches — allow one more reconcile ship.
 			catalogSnapshotShippedLocalFp.remove(peerId);
 		}
@@ -1345,7 +1766,7 @@ public class ReplicationCoordinator {
 		}
 		for (Map.Entry<String, Long> e : peerCatalogFingerprint.entrySet()) {
 			final Long peerFp = e.getValue();
-			if (peerFp == null || peerFp.longValue() == 0L || peerFp.longValue() == localFp) {
+			if (peerFp == null || peerFp == 0L || peerFp == localFp) {
 				continue;
 			}
 			final long peerApplied = peerCatalogApplied.getOrDefault(e.getKey(), 0L);
@@ -1363,12 +1784,12 @@ public class ReplicationCoordinator {
 		}
 		final long localFp = catalogFingerprint();
 		final Long shipped = catalogSnapshotShippedLocalFp.get(peerId);
-		if (shipped != null && shipped.longValue() == localFp) {
+		if (shipped != null && shipped == localFp) {
 			return;
 		}
 		final Long maxApplied = catalogMaxAppliedSupplier.get();
 		final long base = Math.max(
-				maxApplied == null ? 0L : maxApplied.longValue(),
+				maxApplied == null ? 0L : maxApplied,
 				Math.max(0L, peerCatalogAppliedEpoch));
 		final CatalogDdlSnapshot snapshot = new CatalogDdlSnapshot(
 				nodeState == null ? "" : nodeState.getNodeId(),
@@ -1735,7 +2156,8 @@ public class ReplicationCoordinator {
 	}
 
 	/**
-	 * Header/truncate sealed sensor on opened/hydrated streams → ≤1 OPLOG_PULL (sealed ship) per shard/window.
+	 * Per-shard structural + peer inventory sensor → ≤1 OPLOG_PULL per mismatched shard/window.
+	 * No aggregate root-FP fan-out (that caused HELLO sealed ship storms).
 	 */
 	private void sealedIntegritySensorTick() {
 		if (sealedGridMapService == null || durableDataDir == null || peers.isEmpty() || nettyTransport == null) {
@@ -1743,45 +2165,77 @@ public class ReplicationCoordinator {
 		}
 		final Path sealedRoot = durableDataDir.resolve("sealed");
 		final long now = System.currentTimeMillis();
-		for (String streamKey : opLog.streamKeys()) {
-			final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
-			if (parsed == null) {
+		for (ReplicationPeer peer : peers) {
+			if (peer == null || peer.id() == null) {
 				continue;
 			}
-			final String domain = parsed.domain();
-			final int shard = parsed.shard();
-			if (sealedHydrateService != null && sealedHydrateService.isLazyHydrate()
-					&& !sealedHydrateService.isStreamHydrated(streamKey)) {
+			final ConcurrentHashMap<String, Long> peerShardMap = peerSealedShardFpByNode.get(peer.id());
+			if (peerShardMap == null || peerShardMap.isEmpty()) {
 				continue;
 			}
-			if (sealedGridMapService.reader(domain, shard) == null) {
-				continue;
-			}
-			Path gmap = null;
-			try {
-				for (Path file : SealedShardPack.listShardFiles(sealedRoot, domain, shard)) {
-					final String name = file.getFileName() == null ? "" : file.getFileName().toString();
-					if (name.endsWith(".gmap") && !GridFs.isOrphanStagingName(file)) {
-						gmap = file;
-						break;
-					}
+			forEachSealedHealStream((domain, shard) ->
+					sealedIntegritySensorPullIfNeeded(peer.id(), peerShardMap, sealedRoot, domain, shard, now));
+			// Remote-only streams advertised by peer but absent from local heal set.
+			for (Map.Entry<String, Long> advertised : peerShardMap.entrySet()) {
+				if (advertised == null || advertised.getKey() == null || advertised.getValue() == null) {
+					continue;
 				}
-			} catch (Exception ignored) {
-				continue;
+				if (advertised.getValue() == 0L) {
+					continue;
+				}
+				final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(advertised.getKey());
+				if (parsed == null || parsed.domain() == null) {
+					continue;
+				}
+				if (!appliers.containsKey(parsed.domain())) {
+					continue;
+				}
+				sealedIntegritySensorPullIfNeeded(
+						peer.id(), peerShardMap, sealedRoot, parsed.domain(), parsed.shard(), now);
 			}
-			final Probe probe = SealedIntegritySensorUtil.probeGmapHeader(gmap);
-			if (!SealedIntegritySensorUtil.needsPeerPack(probe)) {
-				continue;
-			}
-			if (!sealedIntegrityDebounce.tryAcquire(
-					domain, shard, now, SealedIntegritySensorUtil.PACK_REQUEST_DEBOUNCE_MS)) {
-				continue;
-			}
-			final ReplicationPeer peer = peers.getFirst();
-			final long fromSeq = Math.max(1L, nodeState.appliedWatermark(domain, shard) + 1L);
-			nettyTransport.sendOplogPull(peer.id(), domain, shard, fromSeq);
-			ReplicationMetrics.recordSealedIntegrityPackRequested();
 		}
+	}
+
+	private void sealedIntegritySensorPullIfNeeded(
+			String peerId,
+			ConcurrentHashMap<String, Long> peerShardMap,
+			Path sealedRoot,
+			String domain,
+			int shard,
+			long now
+	) {
+		final String streamKey = OpLogStreamKeyUtil.format(domain, shard);
+		final Probe headerProbe = SealedIntegritySensorUtil.probeAllGmapHeaders(sealedRoot, domain, shard);
+		Probe probe = headerProbe;
+		final Long peerFp = peerShardMap.get(streamKey);
+		if (peerFp != null && peerFp != 0L) {
+			long localFp = missingStreamAdmitState.index().fingerprint(domain, shard);
+			if (localFp == 0L || localFp != peerFp) {
+				try {
+					ReplicationMetrics.recordSealedInventoryDiskProbe();
+					localFp = SealedPackFingerprint.ofShardIdentity(sealedRoot, domain, shard);
+				} catch (Exception ignored) {
+					localFp = 0L;
+				}
+			}
+			probe = SealedIntegritySensorUtil.combine(
+					headerProbe,
+					SealedIntegritySensorUtil.probeFingerprintMismatch(localFp, peerFp));
+		}
+		if (probe == Probe.MISSING) {
+			if (peerFp == null || peerFp == 0L) {
+				return;
+			}
+		} else if (!SealedIntegritySensorUtil.needsPeerPack(probe)) {
+			return;
+		}
+		if (!sealedIntegrityDebounce.tryAcquire(
+				domain, shard, now, SealedIntegritySensorUtil.PACK_REQUEST_DEBOUNCE_MS)) {
+			return;
+		}
+		nettyTransport.sendOplogPull(
+				peerId, domain, shard, SealedIntegritySensorUtil.SEALED_INTEGRITY_PULL_FROM_SEQ);
+		ReplicationMetrics.recordSealedIntegrityPackRequested();
 	}
 
 	/**

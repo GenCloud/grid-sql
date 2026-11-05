@@ -58,6 +58,7 @@ final class RoutingReadStatement extends AbstractBoundStatement {
 			if (!ReplicaReadFallbackUtil.isIncompleteReplica(ex)) {
 				return Flux.error(ex);
 			}
+			readFactory.markCurrentReadEndpointStale();
 			return execOn(writerFallback, binds);
 		});
 	}

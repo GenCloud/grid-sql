@@ -458,6 +458,11 @@ public final class SyncConnectionFactory implements AutoCloseable {
 		return s == null ? "" : s;
 	}
 
+	/**
+	 * Sync obtain/exec await budget. Explicit {@code execTimeout} wins; otherwise
+	 * {@link SyncAwait#DEFAULT_TIMEOUT}. Do not substitute default {@code connectTimeout}
+	 * (5s) here — that silently breaks AUTH under repair/heal load.
+	 */
 	private static Duration resolveTimeout(RemoteConnectionFactory factory) {
 		if (factory == null) {
 			return SyncAwait.DEFAULT_TIMEOUT;

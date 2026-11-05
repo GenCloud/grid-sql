@@ -31,6 +31,7 @@ import org.genfork.grid.replication.orchid.OrchidTransport.OrchidProposeMessage;
 import org.genfork.grid.replication.repair.RepairCommand;
 import org.genfork.grid.replication.repair.VersionLocus;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
+import org.genfork.grid.replication.util.SealedShardInventoryEntry;
 import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil;
 
 import java.nio.ByteBuffer;
@@ -68,10 +69,12 @@ public final class ReplicationRpcCodec {
 			long regionEpoch,
 			byte regionRole,
 			long catalogAppliedEpoch,
-			long catalogFingerprint
+			long catalogFingerprint,
+			long sealedArtifactsFingerprint,
+			List<SealedShardInventoryEntry> sealedShardInventory
 	) {
 		/**
-		 * Legacy ctor without catalog fingerprint (defaults to {@code 0}).
+		 * Compact ctor with empty sealed shard inventory.
 		 */
 		public Hello(
 				String nodeId,
@@ -80,9 +83,31 @@ public final class ReplicationRpcCodec {
 				long schemaEpoch,
 				long regionEpoch,
 				byte regionRole,
-				long catalogAppliedEpoch
+				long catalogAppliedEpoch,
+				long catalogFingerprint,
+				long sealedArtifactsFingerprint
 		) {
-			this(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole, catalogAppliedEpoch, 0L);
+			this(
+					nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole,
+					catalogAppliedEpoch, catalogFingerprint, sealedArtifactsFingerprint, List.of());
+		}
+
+		/**
+		 * Legacy ctor without sealed artifacts fingerprint (defaults to {@code 0}).
+		 */
+		public Hello(
+				String nodeId,
+				String clusterId,
+				String localDc,
+				long schemaEpoch,
+				long regionEpoch,
+				byte regionRole,
+				long catalogAppliedEpoch,
+				long catalogFingerprint
+		) {
+			this(
+					nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole,
+					catalogAppliedEpoch, catalogFingerprint, 0L, List.of());
 		}
 
 		/**
@@ -96,7 +121,7 @@ public final class ReplicationRpcCodec {
 				long regionEpoch,
 				byte regionRole
 		) {
-			this(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole, 0L, 0L);
+			this(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole, 0L, 0L, 0L, List.of());
 		}
 	}
 
@@ -245,10 +270,6 @@ public final class ReplicationRpcCodec {
 
 	public static byte[] encodePhaseMessageBatch(List<OrchidPhaseMessage> messages) {
 		return PhaseRpcCodec.encodePhaseMessageBatch(messages);
-	}
-
-	public static void encodePhaseMessageBatchInto(ByteBuffer buf, List<OrchidPhaseMessage> messages) {
-		PhaseRpcCodec.encodePhaseMessageBatchInto(buf, messages);
 	}
 
 	public static List<OrchidPhaseMessage> decodePhaseMessageBatch(byte[] body) {

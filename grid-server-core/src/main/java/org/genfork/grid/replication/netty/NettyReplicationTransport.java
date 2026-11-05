@@ -50,18 +50,17 @@ import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
 import org.genfork.grid.replication.transport.DiscoveredPeer;
 import org.genfork.grid.replication.transport.ReplicationMessageType;
 import org.genfork.grid.replication.transport.ReplicationPeer;
+import org.genfork.grid.replication.util.SealedShardInventoryEntry;
 import org.genfork.grid.sql.tx.ForUpdateLockWaiterKeyUtil;
 import org.genfork.grid.sql.tx.ForUpdatePeerHeldKeys;
 import org.genfork.grid.sql.tx.ForUpdatePrepareWireUtil;
 import org.genfork.grid.sql.tx.LockWaitCancelledException;
 import org.genfork.grid.sql.tx.LockWaitTimeoutException;
 import org.genfork.grid.sql.tx.SqlRecordLockManager;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import org.genfork.grid.threading.SerialTaskQueue;
+import org.genfork.grid.threading.ThreadService;
+
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -143,6 +142,10 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	private Supplier<Long> catalogAppliedEpochSupplier = () -> 0L;
 	/** Local catalog object-set fingerprint for HELLO trailing field. */
 	private Supplier<Long> catalogFingerprintSupplier = () -> 0L;
+	/** Local sealed artifacts name+size identity for HELLO trailing field. */
+	private Supplier<Long> sealedArtifactsFingerprintSupplier = () -> 0L;
+	/** Local per-shard sealed identity inventory for HELLO trailer. */
+	private Supplier<List<SealedShardInventoryEntry>> sealedShardInventorySupplier = List::of;
 	/** Peer compacted ddl.sql snapshot apply (logic VT). */
 	private Consumer<byte[]> catalogDdlSnapshotHandler = _ -> {
 	};
@@ -171,6 +174,11 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 */
 	private final ThreadLocal<List<ApplyAck>> coalesceApplyAcks = ThreadLocal.withInitial(ArrayList::new);
 	private final ThreadLocal<Boolean> applyAckCoalesceActive = ThreadLocal.withInitial(() -> Boolean.FALSE);
+	/**
+	 * Serial mailbox for HELLO membership / sealed observe / OPLOG_PULL sealed ship.
+	 * Distinct from {@code OrchidNode} orchidRpcQueue / commitApplyQueue so digests are not starved.
+	 */
+	private final SerialTaskQueue helloCatchUpQueue = new SerialTaskQueue();
 
 	public NettyReplicationTransport(String localNodeId, String clusterId, String localDc, long schemaEpoch, String bindHost, int bindPort, long connectTimeoutMs, int maxFrameBytes, List<ReplicationPeer> peers) {
 		this.localNodeId = localNodeId;
@@ -187,6 +195,17 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	/**
 	 * Dynamic membership: add peer and connect if transport already started.
 	 */
+	/**
+	 * Enqueue HELLO sealed/membership or OPLOG_PULL catch-up off Netty EL.
+	 * Must not share {@code OrchidNode} orchidRpcQueue.
+	 */
+	public void submitHelloCatchUp(Runnable task) {
+		if (task == null) {
+			return;
+		}
+		helloCatchUpQueue.submit(ThreadService.getLogicExecutor(), task);
+	}
+
 	public void setSchemaEpoch(long epoch) {
 		schemaEpoch.set(epoch);
 	}
@@ -260,15 +279,10 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 
 	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier) {
 		bindHandlers(orchidNode, applierByDomain, crossDcPublisher, nodeState, homologousRepair, opLog, sparseCatchUp,
-				onPeerHello, onApplyAckPeer, regionEpochSupplier, regionRoleSupplier, () -> 0L, () -> 0L);
+				onPeerHello, onApplyAckPeer, regionEpochSupplier, regionRoleSupplier, () -> 0L, () -> 0L, () -> 0L);
 	}
 
-	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier, Supplier<Long> catalogAppliedEpochSupplier) {
-		bindHandlers(orchidNode, applierByDomain, crossDcPublisher, nodeState, homologousRepair, opLog, sparseCatchUp,
-				onPeerHello, onApplyAckPeer, regionEpochSupplier, regionRoleSupplier, catalogAppliedEpochSupplier, () -> 0L);
-	}
-
-	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier, Supplier<Long> catalogAppliedEpochSupplier, Supplier<Long> catalogFingerprintSupplier) {
+	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier, Supplier<Long> catalogAppliedEpochSupplier, Supplier<Long> catalogFingerprintSupplier, Supplier<Long> sealedArtifactsFingerprintSupplier) {
 		this.orchidNode = orchidNode;
 		this.applierByDomain = applierByDomain;
 		this.crossDcPublisher = crossDcPublisher;
@@ -284,6 +298,16 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		this.regionRoleSupplier = regionRoleSupplier == null ? () -> (byte) 0 : regionRoleSupplier;
 		this.catalogAppliedEpochSupplier = catalogAppliedEpochSupplier == null ? () -> 0L : catalogAppliedEpochSupplier;
 		this.catalogFingerprintSupplier = catalogFingerprintSupplier == null ? () -> 0L : catalogFingerprintSupplier;
+		this.sealedArtifactsFingerprintSupplier = sealedArtifactsFingerprintSupplier == null
+				? () -> 0L
+				: sealedArtifactsFingerprintSupplier;
+	}
+
+	/**
+	 * HELLO sealed per-shard inventory supplier (differential heal advertise).
+	 */
+	public void setSealedShardInventorySupplier(Supplier<List<SealedShardInventoryEntry>> supplier) {
+		this.sealedShardInventorySupplier = supplier == null ? List::of : supplier;
 	}
 
 	/**
@@ -345,7 +369,7 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 */
 	public long currentCatalogAppliedEpoch() {
 		final Long value = catalogAppliedEpochSupplier.get();
-		return value == null ? 0L : Math.max(0L, value.longValue());
+		return value == null ? 0L : Math.max(0L, value);
 	}
 
 	/**
@@ -353,7 +377,15 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 */
 	public long currentCatalogFingerprint() {
 		final Long value = catalogFingerprintSupplier.get();
-		return value == null ? 0L : value.longValue();
+		return value == null ? 0L : value;
+	}
+
+	/**
+	 * Local sealed artifacts name+size identity advertised on HELLO (0 when unbound / empty).
+	 */
+	public long currentSealedArtifactsFingerprint() {
+		final Long value = sealedArtifactsFingerprintSupplier.get();
+		return value == null ? 0L : value;
 	}
 
 	/**
@@ -382,11 +414,23 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	 * Re-broadcast HELLO with current schema/region/catalog fence (claim notify; no new opcode).
 	 */
 	public void broadcastHello() {
+		final List<SealedShardInventoryEntry> inventory = currentSealedShardInventory();
 		final Hello hello = new Hello(
 				localNodeId, clusterId, localDc, schemaEpoch.get(),
 				currentRegionEpoch(), currentRegionRoleWire(),
-				currentCatalogAppliedEpoch(), currentCatalogFingerprint());
+				currentCatalogAppliedEpoch(), currentCatalogFingerprint(),
+				currentSealedArtifactsFingerprint(),
+				inventory);
 		broadcastEncoded(new WireMessage(ReplicationMessageType.HELLO.opcode(), ReplicationRpcCodec.encodeHello(hello)));
+	}
+
+	private List<SealedShardInventoryEntry> currentSealedShardInventory() {
+		try {
+			final List<SealedShardInventoryEntry> value = sealedShardInventorySupplier.get();
+			return value == null ? List.of() : value;
+		} catch (RuntimeException ignored) {
+			return List.of();
+		}
 	}
 
 	public void start() {
@@ -701,10 +745,10 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 					locks.lock(req.table(), req.key());
 					granted = true;
 				}
-			} catch (LockWaitTimeoutException | LockWaitCancelledException ex) {
-				granted = false;
-			}
+			} catch (LockWaitTimeoutException | LockWaitCancelledException _) {
+            }
 		}
+
 		if (granted) {
 			forUpdatePeerHeldKeys.remember(req.txId(), req.table(), req.key());
 		}
@@ -903,7 +947,9 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		if (toNodeIds == null || toNodeIds.isEmpty() || messages == null || messages.isEmpty()) {
 			return;
 		}
-		final LinkedHashSet<String> dirtyPeers = new LinkedHashSet<>(toNodeIds.size() * 2);
+
+		final Set<String> dirtyPeers = new LinkedHashSet<>(toNodeIds.size() * 2);
+        //noinspection ForLoopReplaceableByForEach
 		for (int i = 0; i < messages.size(); i++) {
 			final WireMessage message = messages.get(i);
 			if (message == null) {
@@ -981,8 +1027,10 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		if (toNodeIds == null || toNodeIds.isEmpty() || messages == null || messages.isEmpty()) {
 			return;
 		}
-		final ArrayList<WireMessage> wires = new ArrayList<>(messages.size());
-		for (int i = 0; i < messages.size(); i++) {
+
+		final List<WireMessage> wires = new ArrayList<>(messages.size());
+        //noinspection ForLoopReplaceableByForEach
+        for (int i = 0; i < messages.size(); i++) {
 			final OrchidProposeMessage message = messages.get(i);
 			if (message == null) {
 				continue;

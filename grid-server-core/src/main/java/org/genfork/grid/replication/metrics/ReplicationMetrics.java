@@ -43,6 +43,20 @@ public final class ReplicationMetrics {
 	private static final LongAdder APPLY_NACK_HEAL_SCHEDULED = new LongAdder();
 	private static final LongAdder APPLY_NACK_HEAL_SUPPRESSED = new LongAdder();
 	private static final LongAdder SEALED_INTEGRITY_PACK_REQUESTED = new LongAdder();
+	/** Disk {@code ofShardIdentity} probes during HELLO differential observe. */
+	private static final LongAdder SEALED_INVENTORY_DISK_PROBES = new LongAdder();
+	/** HELLO observe skipped because peer inventory identity unchanged. */
+	private static final LongAdder SEALED_INVENTORY_OBSERVE_SKIPPED = new LongAdder();
+	/** Identity hash matched but differential heal still required (skip bypassed). */
+	private static final LongAdder SEALED_INVENTORY_OBSERVE_SKIP_BYPASSED = new LongAdder();
+	/** Follower READ incompleteness: proposer missing-stream samples (gauge source). */
+	private static final LongAdder PROPOSER_MISSING_STREAM_HITS = new LongAdder();
+	/** Eager sealed inventory admit rebuilds queued (post-invalidate). */
+	private static final LongAdder SEALED_INVENTORY_REBUILD_QUEUED = new LongAdder();
+	/** Completed sealed inventory admit rebuilds. */
+	private static final LongAdder SEALED_INVENTORY_REBUILD_TOTAL = new LongAdder();
+	/** Cumulative rebuild wall nanos. */
+	private static final LongAdder SEALED_INVENTORY_REBUILD_NANOS = new LongAdder();
 	private static final LongAdder MAP_GET_HIT = new LongAdder();
 	private static final LongAdder MAP_GET_MISS = new LongAdder();
 	private static final LongAdder SHIP_BACKPRESSURE = new LongAdder();
@@ -122,12 +136,63 @@ public final class ReplicationMetrics {
 		return SEALED_INTEGRITY_PACK_REQUESTED.sum();
 	}
 
-	public static void recordMapGetHit() {
-		MAP_GET_HIT.increment();
+	public static void recordSealedInventoryDiskProbe() {
+		SEALED_INVENTORY_DISK_PROBES.increment();
 	}
 
-	public static void recordMapGetMiss() {
-		MAP_GET_MISS.increment();
+	public static long sealedInventoryDiskProbes() {
+		return SEALED_INVENTORY_DISK_PROBES.sum();
+	}
+
+	public static void recordSealedInventoryObserveSkipped() {
+		SEALED_INVENTORY_OBSERVE_SKIPPED.increment();
+	}
+
+	public static long sealedInventoryObserveSkipped() {
+		return SEALED_INVENTORY_OBSERVE_SKIPPED.sum();
+	}
+
+	public static void recordSealedInventoryObserveSkipBypassed() {
+		SEALED_INVENTORY_OBSERVE_SKIP_BYPASSED.increment();
+	}
+
+	public static long sealedInventoryObserveSkipBypassed() {
+		return SEALED_INVENTORY_OBSERVE_SKIP_BYPASSED.sum();
+	}
+
+	public static void recordProposerMissingStreamHit() {
+		PROPOSER_MISSING_STREAM_HITS.increment();
+	}
+
+	public static long proposerMissingStreamHits() {
+		return PROPOSER_MISSING_STREAM_HITS.sum();
+	}
+
+	public static void recordSealedInventoryRebuildQueued() {
+		SEALED_INVENTORY_REBUILD_QUEUED.increment();
+	}
+
+	public static long sealedInventoryRebuildQueued() {
+		return SEALED_INVENTORY_REBUILD_QUEUED.sum();
+	}
+
+	public static void recordSealedInventoryRebuild(long durationNanos) {
+		SEALED_INVENTORY_REBUILD_TOTAL.increment();
+		if (durationNanos > 0L) {
+			SEALED_INVENTORY_REBUILD_NANOS.add(durationNanos);
+		}
+	}
+
+	public static long sealedInventoryRebuildTotal() {
+		return SEALED_INVENTORY_REBUILD_TOTAL.sum();
+	}
+
+	public static long mapGetHits() {
+		return MAP_GET_HIT.sum();
+	}
+
+	public static long mapGetMisses() {
+		return MAP_GET_MISS.sum();
 	}
 
 	public static void recordSealedMiss() {
@@ -209,6 +274,11 @@ public final class ReplicationMetrics {
 	/** Samples recorded for OpLog / tip group force (pressure signal for sealed dump backoff). */
 	public static long oplogFsyncSampleCount() {
 		return OPLOG_FSYNC_COUNT.get();
+	}
+
+	/** Samples recorded for ORCHID phase-wait latency ring. */
+	public static long orchidWaitSampleCount() {
+		return ORCHID_WAIT_COUNT.get();
 	}
 
 	public static void recordSealedDumpDeferred() {

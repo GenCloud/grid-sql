@@ -473,7 +473,7 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 					replication.getNodeState().getNodeId(),
 					replication.isWriterEligible(),
 					replication.promoteHint(),
-					replication.isClientApplyLagStale(),
+					replication.isAuthApplyLagStale(),
 					replication.getNodeState().getSchemaEpoch(),
 					replication.regionEpoch(),
 					replication.regionRoleWire(),

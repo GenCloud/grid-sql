@@ -38,19 +38,19 @@ Because the file is immutable, a later change to the same key does not edit it. 
 
 ## Reads
 
-```
-query
-  │
-  ├─► write queue (changes not yet flushed)
-  │
-  ├─► in-memory map (working set)
-  │
-  ├─► sealed .sbpt index
-  │
-  └─► node file .gmap  (memory miss → load the key)
+Row I/O (what answers a SELECT after admit) is separate from **replica admit** (lag / sticky missing-stream / structural hole). Admit does not open `.gmap` windows; see [replica reads](../configure-and-operate/operations/replica-reads.md).
+
+```mermaid
+flowchart TB
+  Q["query after admit"] --> Stg["write queue\nnot yet flushed"]
+  Stg --> Map["in-memory map\nworking set"]
+  Map --> Sbpt["sealed .sbpt / .sbm"]
+  Sbpt --> Gmap["node file .gmap\nmmap window on miss"]
 ```
 
 *Figure 1. Row lookup order: from the freshest to the coldest.*
+
+Sealed **identity inventory** (name+size FP per `domain#shard`) is a different artefact: it feeds HELLO trailers, differential heal, and the sticky missing-stream admit bit (`LocalSealedInventoryIndex`). Building/rebuilding that index walks disk on `helloCatchUp` after invalidate — not on every row miss.
 
 ### Working-set miss
 

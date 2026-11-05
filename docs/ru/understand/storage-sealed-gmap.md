@@ -38,19 +38,19 @@
 
 ## Чтение
 
-```
-запрос
-  │
-  ├─► очередь записи (ещё не слитые изменения)
-  │
-  ├─► карта в памяти (рабочий набор)
-  │
-  ├─► запечатанный индекс .sbpt
-  │
-  └─► файл узла .gmap  (промах в памяти → подгрузка ключа)
+I/O строки (ответ SELECT после допуска) отдельно от **допуска реплики** (lag / sticky missing-stream / structural hole). Admit не открывает окна `.gmap`; см. [чтение с реплики](../configure-and-operate/operations/replica-reads.md).
+
+```mermaid
+flowchart TB
+  Q["запрос после допуска"] --> Stg["очередь записи\nещё не слитые"]
+  Stg --> Map["карта в памяти\nрабочий набор"]
+  Map --> Sbpt["sealed .sbpt / .sbm"]
+  Sbpt --> Gmap["файл узла .gmap\nокно mmap при промахе"]
 ```
 
 *Схема 1. Порядок поиска строки: от самого свежего к самому холодному.*
+
+Sealed **identity inventory** (FP name+size на `domain#shard`) — другой артефакт: trailer HELLO, differential heal и sticky missing-stream admit (`LocalSealedInventoryIndex`). Сборка/пересборка индекса обходит диск на `helloCatchUp` после invalidate — не на каждый промах строки.
 
 ### Промах рабочего набора
 

@@ -22,6 +22,7 @@ import org.genfork.grid.replication.netty.ReplicationRpcCodec.Hello;
 import org.genfork.grid.replication.orchid.OrchidTransport.OrchidPhaseBatchMessage;
 import org.genfork.grid.replication.orchid.OrchidTransport.OrchidPhaseDigest;
 import org.genfork.grid.replication.orchid.OrchidTransport.OrchidPhaseMessage;
+import org.genfork.grid.replication.util.SealedShardInventoryEntry;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -39,7 +40,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 public class ReplicationRpcCodecTest {
 	@Test
 	void helloRoundTrip() {
-		final Hello hello = new Hello("n1", "c1", "dc-a", 7L, 5L, (byte) 1, 42L, 99L);
+		final Hello hello = new Hello(
+				"n1", "c1", "dc-a", 7L, 5L, (byte) 1, 42L, 99L, 123L,
+				List.of(new SealedShardInventoryEntry("d1", 2, 55L)));
 		final Hello decoded = ReplicationRpcCodec.decodeHello(ReplicationRpcCodec.encodeHello(hello));
 		assertEquals("n1", decoded.nodeId());
 		assertEquals("c1", decoded.clusterId());
@@ -49,6 +52,19 @@ public class ReplicationRpcCodecTest {
 		assertEquals((byte) 1, decoded.regionRole());
 		assertEquals(42L, decoded.catalogAppliedEpoch());
 		assertEquals(99L, decoded.catalogFingerprint());
+		assertEquals(123L, decoded.sealedArtifactsFingerprint());
+		assertEquals(1, decoded.sealedShardInventory().size());
+		assertEquals("d1", decoded.sealedShardInventory().getFirst().domain());
+		assertEquals(2, decoded.sealedShardInventory().getFirst().shard());
+		assertEquals(55L, decoded.sealedShardInventory().getFirst().identityFingerprint());
+	}
+
+	@Test
+	void helloLegacyCatalogBodyDefaultsSealedFingerprint() {
+		final Hello legacy = new Hello("n1", "c1", "dc-a", 7L, 5L, (byte) 1, 42L, 99L);
+		final Hello decoded = ReplicationRpcCodec.decodeHello(ReplicationRpcCodec.encodeHello(legacy));
+		assertEquals(99L, decoded.catalogFingerprint());
+		assertEquals(0L, decoded.sealedArtifactsFingerprint());
 	}
 
 	@Test

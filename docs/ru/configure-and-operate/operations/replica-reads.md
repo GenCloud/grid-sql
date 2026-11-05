@@ -115,13 +115,46 @@ RemoteConnectionFactory reads = RemoteConnectionFactory.createReadFactory(url);
 
 ## Отставание, полнота данных и отказы
 
-Одного serving-stream `applyLagStale` для допуска чтения **недостаточно**. Клиентский SQL на реплике fail-closed также при **неполных** данных:
+Одного serving-stream `applyLagStale` для допуска чтения **недостаточно**. Клиентский SQL на реплике fail-closed также при **неполных** данных.
+
+```mermaid
+flowchart TB
+  Req["Оператор на READ_REPLICA"] --> A{"replicaReadsEnabled\nи не catch-up/Witness?"}
+  A -->|нет| DenyCfg["REPLICA_READ_DISABLED / отказ"]
+  A -->|да| B{"applyLagStale\nили дыра каталога?"}
+  B -->|да| Stale["REPLICA_READ_STALE / ротация"]
+  B -->|нет| C{"structural sealed hole\nна локальных файлах?"}
+  C -->|да| Inc["incomplete / ротация"]
+  C -->|нет| D{"sticky missing-stream\nMissingStreamAdmitState?"}
+  D -->|да / индекс не готов| Inc
+  D -->|нет| Exec["execute → staging → map → sealed"]
+```
+
+*Схема 2. Допуск раньше I/O строки. Sticky missing-stream — O(1); пересборка inventory на диске — вне пути SELECT.*
+
+### Два трека: admit fence и differential heal
+
+| Трек | Триггер | Влияние на SELECT |
+|------|---------|-------------------|
+| **Admit fence** | `applyLagStale`, дыра `catalogFingerprint`, **локальная** structural sealed hole, proposer **missing-stream** (sticky) | Отказ / ротация / fallback на writer |
+| **Differential heal** | FP inventory пира ≠ локальный индекс по `domain#shard` | Pull mismatched shards (`fromSeq=1`); **сам** admit не закрывает |
+| **Aggregate root FP** | Один смешанный FP всех sealed pack | Метрики / реклама HELLO — **никогда** не fence admit в одиночку |
+
+Sticky missing-stream (`MissingStreamAdmitState` + `LocalSealedInventoryIndex`):
+
+1. Seal / unpack / invalidate structural hole → inventory **not ready** (fail-closed) и enqueue rebuild на `helloCatchUp`.
+2. Rebuild один раз обходит диск → memory index и пересчёт sticky bit (`ProposerMissingStreamUtil`).
+3. Дальнейшие SELECT читают sticky bit — **без** directory-walk `ofShardIdentity` на запрос.
+4. Пока индекс не готов — admit incomplete.
 
 | Условие | Поведение |
 |---------|-----------|
 | `applyLagStale` (serving streams) | `REPLICA_READ_STALE` → AUTH-ротация по кольцу чтения |
 | Непроигранный LAZY tip / неполный apply | Тот же клиентский сигнал incomplete — не тихий пустой SELECT |
 | Несовпадение `catalogFingerprint` с пирами | Отказ: неполный object-set каталога (дыра VIEW/TABLE) |
+| Structural hole sealed (magic-OK undersize / битый GMAP) на локальных файлах | Отказ: lag-complete ≠ sealed-complete. Aggregate root FP и mismatch peer inventory **сами по себе** не admit fence (inventory только differential heal). HELLO рекламирует per-shard identity; integrity tick тянет только mismatched shards (`fromSeq=1`). Readiness `applyLagStale` **не** закрывает этот fence. |
+| Proposer missing-stream (только follower) | В inventory phase-ranked proposer есть `domain#shard` с FP≠0, а локальные tip/applied OpLog = 0 **и** локальный sealed identity = 0 → отказ (incomplete). Предикат считается при rebuild inventory в sticky bit — не на каждый SELECT с диска. Tip-lag-complete ≠ key/stream-complete. Оба FP=0 и seal-dump lag при `lastSeq>0` — **не** incomplete. Layout drift (оба FP≠0, но разные) — только heal. |
+| Inventory index не готов | Fail-closed incomplete, пока `helloCatchUp` не опубликует индекс |
 | `replicaReadsEnabled=false` | `REPLICA_READ_DISABLED` |
 | Узел только подтягивания / learner | отказ клиентского SQL |
 | Witness | отказ чтения с реплики |

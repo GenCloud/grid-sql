@@ -31,6 +31,7 @@ import org.genfork.grid.replication.repair.RepairCommandType;
 import org.genfork.grid.replication.repair.VersionLocus;
 import org.genfork.grid.replication.snapshot.sealed.SealedBitmapService;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapService;
+import org.genfork.grid.replication.snapshot.sealed.SealedGridMapWriter;
 import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
 import org.genfork.grid.replication.swarm.PlacementHint;
 import org.genfork.grid.replication.swarm.PlacementScore;
@@ -159,11 +160,14 @@ class LocusAndSwarmSoakTest {
 	void migratorCatchUpShipsSealedPackThenCutsOver() throws Exception {
 		final Path sealedRoot = temp.resolve("sealed-ship");
 		final SealedGridMapService sealed = new SealedGridMapService(sealedRoot);
+		// CATCH_UP ships only complete packs (≥1 valid .gmap); bitmap alone is not enough.
+		SealedGridMapWriter.writeNodes(sealedRoot, DOMAIN, SHARD, 1L,
+				List.of(new SealedGridMapWriter.Kv(bytes("open"), bytes("row-1"))));
 		final SealedBitmapService bitmaps = sealed.sealedBitmapService();
 		final GridBitmapIndex bitmap = new GridBitmapIndex(BITMAP_PROPERTY + "-BITMAP", BITMAP_CAPACITY);
 		bitmap.insert(new SingleTreeKey(bytes("open")), new IndexPointerRef(0L, bytes("row-1")));
 		bitmaps.dumpIndex(DOMAIN, SHARD, BITMAP_PROPERTY, bitmap);
-		assertTrue(SealedShardPack.hasArtifactFiles(sealed.packShardArtifacts(DOMAIN, SHARD)));
+		assertTrue(SealedShardPack.isCompleteShardArtifacts(sealed.packShardArtifacts(DOMAIN, SHARD)));
 
 		try (OpLog opLog = new OpLog(temp.resolve("oplog-sealed"), false)) {
 			final AtomicReference<OpLogSegment> pushedSeg = new AtomicReference<>();
@@ -176,7 +180,7 @@ class LocusAndSwarmSoakTest {
 			assertEquals(ShardPlacementMap.DrainState.CUTOVER_DONE,
 					migrator.getPlacementMap().drainState(DOMAIN, SHARD));
 			assertNotNull(pushedPack.get());
-			assertTrue(SealedShardPack.hasArtifactFiles(pushedPack.get()));
+			assertTrue(SealedShardPack.isCompleteShardArtifacts(pushedPack.get()));
 			assertNull(pushedSeg.get());
 		}
 	}
@@ -213,6 +217,8 @@ class LocusAndSwarmSoakTest {
 	void sealedShipOncePerCatchUpWhenUnchanged() throws Exception {
 		final Path sealedRoot = temp.resolve("sealed-once");
 		final SealedGridMapService sealed = new SealedGridMapService(sealedRoot);
+		SealedGridMapWriter.writeNodes(sealedRoot, DOMAIN, SHARD, 1L,
+				List.of(new SealedGridMapWriter.Kv(bytes("k"), bytes("r"))));
 		final SealedBitmapService bitmaps = sealed.sealedBitmapService();
 		final GridBitmapIndex bitmap = new GridBitmapIndex(BITMAP_PROPERTY + "-BITMAP", BITMAP_CAPACITY);
 		bitmap.insert(new SingleTreeKey(bytes("k")), new IndexPointerRef(0L, bytes("r")));

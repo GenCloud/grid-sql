@@ -78,13 +78,16 @@ class ApplyLagServingStreamsIT {
 			assertTrue(coord.isReplicaDataIncomplete(),
 					"unhydrated tip must mark replica data incomplete for client SELECT");
 			assertTrue(coord.isClientApplyLagStale(),
-					"client AUTH / replica-read meta must fence incomplete LAZY tip");
+					"READ_REPLICA admission must fence incomplete LAZY tip");
+			assertFalse(coord.isAuthApplyLagStale(),
+					"PRIMARY AUTH must not fence writer on unhydrated LAZY tip");
 
 			coord.ensureShardHydrated(DOMAIN, 0);
 			// After hydrate, applied catches tip (or dump truncates); lag should clear.
 			assertFalse(coord.isApplyLagStale());
 			assertFalse(coord.isReplicaDataIncomplete());
 			assertFalse(coord.isClientApplyLagStale());
+			assertFalse(coord.isAuthApplyLagStale());
 		} finally {
 			coord.stop();
 		}

@@ -42,8 +42,10 @@ public final class SealedGridMapWriter {
 	public static final int VERSION_NODE = 2;
 	public static final int NODE_COUNT = 16;
 	public static final long MAX_FILE_BYTES = 1L << 30;
+	/** Entry directory record size (shared with structural probe). */
+	public static final int ENTRY_DIR_BYTES = 16;
 	private static final int IO_CHUNK_BYTES = 1 << 20;
-	private static final int ENTRY_BYTES = 16;
+	private static final int ENTRY_BYTES = ENTRY_DIR_BYTES;
 	private static final int BUCKET_BYTES = 8;
 
 	private SealedGridMapWriter() {
@@ -139,12 +141,9 @@ public final class SealedGridMapWriter {
 			final List<Kv> ordered = orderedEntries(buckets, 1, capacity);
 			final Path target = sealedRoot.resolve(safe + "_" + shard + "_n" + node + ".gmap");
 			final int nodeId = node;
-			final int bucketCapacity = capacity;
-			final List<Kv>[][] nodeBuckets = buckets;
-			final List<Kv> nodeOrdered = ordered;
-			staging[node] = GridFs.writeUnpublished(target, temporary -> writeFile(
-					temporary, VERSION_NODE, 1, nodeId, domainType, shard, watermark, bucketCapacity,
-					nodeBuckets, nodeOrdered, true, true));
+            staging[node] = GridFs.writeUnpublished(target, temporary -> writeFile(
+					temporary, VERSION_NODE, 1, nodeId, domainType, shard, watermark, capacity,
+                    buckets, ordered, true, true));
 		}
 		return staging;
 	}

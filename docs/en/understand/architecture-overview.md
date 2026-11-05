@@ -6,7 +6,9 @@ Below is how that path is built. Layer details live behind the table links.
 
 ## The path of one request
 
-Human chain first, then names on the diagram:
+Two product paths share the engine and catalog but **diverge after parse**. Writes still go through ORCHID → OpLog → map. Replica SELECT/EXPLAIN also pass a **read admit** gate that must stay off the disk hot path.
+
+### Write (PRIMARY / TX)
 
 1. Client (`grid://` or `jdbc:grid://`) → SQL parse and table catalog.
 2. Write queue → ORCHID (phase + checksum) → journal on disk.
@@ -29,6 +31,30 @@ flowchart TB
 *Figure 1. Agreement and the journal before any reader sees the row.*
 
 If ORCHID did not admit the write or the journal did not confirm persistence, the row never appears in the map. There is no background task that later “catches up” a rejected write.
+
+### Read (working set → sealed)
+
+Row lookup order is unchanged: staging → RAM map → sealed `.sbpt` → `.gmap` mmap window. Details: [storage](storage-sealed-gmap.md).
+
+### Replica SELECT admit (orthogonal to row I/O)
+
+When the session is `READ_REPLICA`, SQL is admitted only if lag/completeness fences pass. Missing-stream incompleteness is a **sticky O(1) bit** over an in-memory `LocalSealedInventoryIndex` — **not** a per-SELECT walk of `ofShardIdentity` on disk. Inventory rebuild runs on the `helloCatchUp` mailbox after seal/unpack invalidate (fail-closed until ready). Peer inventory **mismatch** drives differential heal only; it is **not** an admit fence by itself.
+
+```mermaid
+flowchart TB
+  Sel["SELECT / EXPLAIN on READ_REPLICA"] --> Gate{"admit gate"}
+  Gate -->|"applyLagStale / catalog hole / structural sealed hole"| Deny["deny / rotate / writer fallback"]
+  Gate -->|"sticky missing-stream bit"| Deny
+  Gate -->|pass| RowIO["row I/O: staging → map → .sbpt → .gmap"]
+  Hello["HELLO / seal / unpack"] --> Inv["rebuild LocalSealedInventoryIndex\nhelloCatchUp mailbox"]
+  Inv --> Sticky["MissingStreamAdmitState sticky bit"]
+  Sticky -.->|O(1) read| Gate
+  Hello --> Diff["peer inventory mismatch\n→ differential heal only"]
+```
+
+*Figure 2. Replica admit vs row read vs heal — three tracks.*
+
+Operators: [replica reads](../configure-and-operate/operations/replica-reads.md), [replication network](replication-network.md).
 
 ## What a node is made of
 
@@ -140,5 +166,7 @@ Run results and reference thresholds: [capacity and SLO](../performance/capacity
 | "ORCHID = Raft leader election" | Phase + digest quorum; no Raft-style leader election |
 | "PIN = row lock" | PIN is about shard migration, not SQL locking |
 | "Fan-out = distributed SQL" | Fan-out parallelizes shard-local keys on one node |
+| "Replica SELECT walks sealed identity on every query" | Sticky `MissingStreamAdmitState` + memory inventory; disk rebuild only on `helloCatchUp` invalidate |
+| "Peer sealed inventory mismatch = admit deny" | Mismatch → differential heal only; admit fences are lag / local structural hole / missing-stream |
 
 Next: [write path](write-path-staging.md), [ORCHID](orchid-consensus.md), [storage](storage-sealed-gmap.md).
