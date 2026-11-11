@@ -238,6 +238,7 @@ public final class DdlAst {
 			ColumnSpec addColumn,
 			boolean addColumnIfNotExists,
 			String dropColumn,
+			boolean dropColumnIfExists,
 			CheckSpec addCheck,
 			List<String> addPrimaryKeyColumns,
 			String addConstraintNameOrNull,
@@ -245,11 +246,11 @@ public final class DdlAst {
 			String dropConstraintName
 	) implements Stmt {
 		public AlterTableSql(String table, ColumnSpec addColumn, String dropColumn) {
-			this(table, addColumn, false, dropColumn, null, null, null, null, null);
+			this(table, addColumn, false, dropColumn, false, null, null, null, null, null);
 		}
 
 		public AlterTableSql(String table, ColumnSpec addColumn, String dropColumn, CheckSpec addCheck) {
-			this(table, addColumn, false, dropColumn, addCheck, null, null, null, null);
+			this(table, addColumn, false, dropColumn, false, addCheck, null, null, null, null);
 		}
 	}
 

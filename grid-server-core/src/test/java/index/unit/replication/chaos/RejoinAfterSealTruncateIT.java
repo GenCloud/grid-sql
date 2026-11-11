@@ -171,6 +171,22 @@ public class RejoinAfterSealTruncateIT {
 					"rejoin after seal+truncate must catch orchid tip; local="
 							+ c.getOrchidNode().getLastCommittedSeq()
 							+ " writer=" + writerTip);
+
+			// Sealed unpack must unicast APPLY_ACK so donor needsSealedBaseline clears.
+			final long peerAckDeadline = System.currentTimeMillis() + CATCH_UP_TIMEOUT_MS;
+			boolean peerAcked = false;
+			while (System.currentTimeMillis() < peerAckDeadline) {
+				if (a.getNodeState().peerAck("seal-c", DOMAIN, 0) >= truncated) {
+					peerAcked = true;
+					break;
+				}
+				shipAllFrom(a, "seal-c");
+				LockSupport.parkNanos(PARK_NANOS);
+			}
+			assertTrue(peerAcked,
+					"donor peerAck must reach truncatedThrough after sealed catch-up; peerAck="
+							+ a.getNodeState().peerAck("seal-c", DOMAIN, 0)
+							+ " truncatedThrough=" + truncated);
 		} finally {
 			stopQuietly(a);
 			stopQuietly(b);

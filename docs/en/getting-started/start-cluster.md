@@ -102,6 +102,7 @@ For two sites, enable `grid.replication.cross-dc` with `ASYNC_SHIP` or `SYNC_VOT
 
 ## Next
 
+- Host RAM / CPU / disk by topology: [system requirements](../configure-and-operate/operations/system-requirements.md)
 - Failover and writer hand-off: [promote a node](../configure-and-operate/operations/ha-promote.md)
 - Offloading reads to replicas: [replica reads](../configure-and-operate/operations/replica-reads.md)
 - Metrics and probes: [monitoring](../configure-and-operate/monitoring.md)

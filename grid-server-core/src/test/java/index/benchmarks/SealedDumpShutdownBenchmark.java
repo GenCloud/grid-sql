@@ -74,6 +74,8 @@ public class SealedDumpShutdownBenchmark extends AbstractLatencyBenchmark {
 	private Path oplogRoot;
 	private OpLog opLog;
 	private SealedGridMapService sealed;
+	private SealedGridMapService sealedUnbound;
+	private GridEntriesProcessor unboundProc;
 	private ReplicationNodeState state;
 
 	@Setup(Level.Trial)
@@ -94,6 +96,23 @@ public class SealedDumpShutdownBenchmark extends AbstractLatencyBenchmark {
 			proc.installCommitted(key, ("v" + i).getBytes(StandardCharsets.UTF_8), false);
 		}
 		sealed.dumpDomain(DOMAIN, opLog, state, null);
+
+		// Unbound-reader path: disk sealed remains; reader closed; RAM has tip-only keys.
+		final Path unboundRoot = Files.createTempDirectory("sealed-dump-unbound-jmh");
+		sealedUnbound = new SealedGridMapService(unboundRoot);
+		unboundProc = new GridEntriesProcessor(SHARD, new GridScalableMap(), null, null);
+		sealedUnbound.bindProcessor(DOMAIN, shard -> shard == SHARD ? unboundProc : null);
+		for (int i = 0; i < ROW_COUNT; i++) {
+			final byte[] key = ("u" + i).getBytes(StandardCharsets.UTF_8);
+			unboundProc.installCommitted(key, ("v" + i).getBytes(StandardCharsets.UTF_8), false);
+		}
+		sealedUnbound.dumpDomain(DOMAIN, opLog, state, null, false);
+		sealedUnbound.closeAll();
+		sealedUnbound.bindProcessor(DOMAIN, shard -> shard == SHARD ? unboundProc : null);
+		for (int i = 0; i < ROW_COUNT; i++) {
+			unboundProc.evictCommitted(("u" + i).getBytes(StandardCharsets.UTF_8));
+		}
+		unboundProc.installCommitted("tip".getBytes(StandardCharsets.UTF_8), "x".getBytes(StandardCharsets.UTF_8), false);
 	}
 
 	@TearDown(Level.Trial)
@@ -104,6 +123,9 @@ public class SealedDumpShutdownBenchmark extends AbstractLatencyBenchmark {
 		if (sealed != null) {
 			sealed.closeAll();
 		}
+		if (sealedUnbound != null) {
+			sealedUnbound.closeAll();
+		}
 		deleteRecursive(sealedRoot);
 		deleteRecursive(oplogRoot);
 		ThreadService.shutdownNow();
@@ -112,6 +134,12 @@ public class SealedDumpShutdownBenchmark extends AbstractLatencyBenchmark {
 	@Benchmark
 	public void dumpShutdownStyle(Blackhole bh) {
 		bh.consume(sealed.dumpDomain(DOMAIN, opLog, state, null));
+	}
+
+	/** Unbound reader + disk .gmap merge (LAZY shutdown / checkpoint dump hot path). */
+	@Benchmark
+	public void dumpUnboundDiskMerge(Blackhole bh) {
+		bh.consume(sealedUnbound.dumpDomain(DOMAIN, opLog, state, null, false));
 	}
 
 	@Test

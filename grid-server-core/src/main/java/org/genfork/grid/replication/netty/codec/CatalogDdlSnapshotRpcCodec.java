@@ -20,32 +20,55 @@ import org.genfork.grid.nio.EncodeBuffers;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
 /**
  * Compacted catalog {@code ddl.sql} snapshot ship for peer object-set reconcile.
+ * <p>
+ * Optional trailing {@code privileges.meta} blob after compact lines (legacy peers omit;
+ * new peers apply via {@link org.genfork.grid.catalog.PrivilegeCatalog#loadSnapshotBytes}).
  *
  * @author: GenCloud
  * @date: 2026/11
  * @since: 1.3
  */
 public final class CatalogDdlSnapshotRpcCodec {
+	private static final byte[] EMPTY_PRIVILEGES = new byte[0];
+
 	private CatalogDdlSnapshotRpcCodec() {
 	}
 
 	/**
-	 * Snapshot payload: fromNodeId + fingerprint + baseEpoch + N UTF-8 lines.
+	 * Snapshot payload: fromNodeId + fingerprint + baseEpoch + N UTF-8 lines
+	 * + optional privileges.meta bytes.
 	 */
 	public record CatalogDdlSnapshot(
 			String fromNodeId,
 			long catalogFingerprint,
 			long baseEpochExclusive,
-			List<String> compactLines
+			List<String> compactLines,
+			byte[] privilegesMetaBytes
 	) {
 		public CatalogDdlSnapshot {
 			Objects.requireNonNull(fromNodeId, "fromNodeId");
 			compactLines = compactLines == null ? List.of() : List.copyOf(compactLines);
+			privilegesMetaBytes = privilegesMetaBytes == null || privilegesMetaBytes.length == 0
+					? EMPTY_PRIVILEGES
+					: Arrays.copyOf(privilegesMetaBytes, privilegesMetaBytes.length);
+		}
+
+		/**
+		 * Legacy ctor without privilege meta (empty blob).
+		 */
+		public CatalogDdlSnapshot(
+				String fromNodeId,
+				long catalogFingerprint,
+				long baseEpochExclusive,
+				List<String> compactLines
+		) {
+			this(fromNodeId, catalogFingerprint, baseEpochExclusive, compactLines, EMPTY_PRIVILEGES);
 		}
 	}
 
@@ -59,12 +82,16 @@ public final class CatalogDdlSnapshotRpcCodec {
 			lineBytes.add(b);
 			linesBytes += Integer.BYTES + b.length;
 		}
+		final byte[] privileges = snapshot.privilegesMetaBytes() == null
+				? EMPTY_PRIVILEGES
+				: snapshot.privilegesMetaBytes();
 		final ByteBuffer buf = EncodeBuffers.allocateWireLe(
 				Integer.BYTES + from.length
 						+ Long.BYTES
 						+ Long.BYTES
 						+ Integer.BYTES
-						+ linesBytes);
+						+ linesBytes
+						+ Integer.BYTES + privileges.length);
 		EncodeBuffers.putLengthPrefixed(buf, from);
 		buf.putLong(snapshot.catalogFingerprint());
 		buf.putLong(snapshot.baseEpochExclusive());
@@ -72,6 +99,7 @@ public final class CatalogDdlSnapshotRpcCodec {
 		for (byte[] line : lineBytes) {
 			EncodeBuffers.putLengthPrefixed(buf, line);
 		}
+		EncodeBuffers.putLengthPrefixed(buf, privileges);
 		return EncodeBuffers.toByteArray(buf);
 	}
 
@@ -88,6 +116,13 @@ public final class CatalogDdlSnapshotRpcCodec {
 		for (int i = 0; i < count; i++) {
 			lines.add(EncodeBuffers.getUtf8(buf));
 		}
-		return new CatalogDdlSnapshot(fromNodeId, fingerprint, baseEpoch, lines);
+		byte[] privileges = EMPTY_PRIVILEGES;
+		if (buf.remaining() >= Integer.BYTES) {
+			privileges = EncodeBuffers.getLengthPrefixed(buf);
+			if (privileges == null || privileges.length == 0) {
+				privileges = EMPTY_PRIVILEGES;
+			}
+		}
+		return new CatalogDdlSnapshot(fromNodeId, fingerprint, baseEpoch, lines, privileges);
 	}
 }

@@ -1283,9 +1283,22 @@ public final class SqlStatementParser {
 				lits.put(col, new ColumnRef(simpleColumn(a.columnName(1))));
 			}
 		}
-		final PkEq pk = ctx.expression() == null ? null : extractPkEq(ctx.expression());
-		final String pkCol = pk == null ? null : pk.column();
-		final Object pkVal = pk == null ? null : pk.value();
+		final Map<String, Object> peeledEqs = ctx.expression() == null
+				? Map.of()
+				: extractEqualityConjuncts(ctx.expression());
+		// null peel = OR / non-eq → empty equalities; RMW rejects; non-RMW uses whereSql scan.
+		final Map<String, Object> eqLiterals = peeledEqs == null ? Map.of() : peeledEqs;
+		String pkCol = null;
+		Object pkVal = null;
+		if (eqLiterals.size() == 1) {
+			final Map.Entry<String, Object> only = eqLiterals.entrySet().iterator().next();
+			pkCol = only.getKey();
+			pkVal = only.getValue();
+		} else if (eqLiterals.isEmpty()) {
+			final PkEq pk = ctx.expression() == null ? null : extractPkEq(ctx.expression());
+			pkCol = pk == null ? null : pk.column();
+			pkVal = pk == null ? null : pk.value();
+		}
 		final String sourceTable = ctx.sourceTable == null ? null : ctx.sourceTable.getText();
 		String targetJoinColumn = null;
 		String sourceJoinColumn = null;
@@ -1306,17 +1319,19 @@ public final class SqlStatementParser {
 			sourceJoinColumn = simpleColumn(joinColumns.get(1));
 		}
 		if (!rmw.isEmpty()) {
-			if (pkCol == null) {
+			if (eqLiterals.isEmpty()) {
 				throw new IllegalArgumentException("RMW UPDATE requires PK equality WHERE in v1.1");
 			}
 			final String templateKey = "antlr:" + table + ":" + rmw.size() + ":lit" + lits.size();
 			return new UpdateSql(table, new UpdatePlan(table, rmw, pkCol, pkVal, templateKey),
 					SqlNullSafeCollections.freezeMap(lits),
-					whereSql, pkCol, pkVal, null, null, null, parseReturning(ctx.returningClause()));
+					whereSql, pkCol, pkVal, null, null, null, parseReturning(ctx.returningClause()),
+					SqlNullSafeCollections.freezeMap(eqLiterals));
 		}
 		return new UpdateSql(table, null, SqlNullSafeCollections.freezeMap(lits), whereSql, pkCol, pkVal,
 				sourceTable, targetJoinColumn, sourceJoinColumn,
-				parseReturning(ctx.returningClause()));
+				parseReturning(ctx.returningClause()),
+				SqlNullSafeCollections.freezeMap(eqLiterals));
 	}
 
 	private static List<String> parseReturning(SimplifiedSqlParser.ReturningClauseContext ctx) {
@@ -1348,6 +1363,38 @@ public final class SqlStatementParser {
 			return new PkEq(simpleColumn(cmp.columnName()), SqlParseSupport.literal(cmp.value()));
 		}
 		return null;
+	}
+
+	/**
+	 * Peel {@code col = lit} conjuncts under AND / paren. Returns {@code null} when OR / non-eq
+	 * / unsupported predicate appears (caller rejects RMW).
+	 */
+	private static Map<String, Object> extractEqualityConjuncts(
+			org.genfork.grid.antlr.SimplifiedSqlParser.ExpressionContext expr) {
+		final LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+		if (!collectEqualityConjuncts(expr, out)) {
+			return null;
+		}
+		return out;
+	}
+
+	private static boolean collectEqualityConjuncts(
+			org.genfork.grid.antlr.SimplifiedSqlParser.ExpressionContext expr,
+			Map<String, Object> out) {
+		if (expr instanceof SimplifiedSqlParser.AndExpressionContext and) {
+			return collectEqualityConjuncts(and.expression(0), out)
+					&& collectEqualityConjuncts(and.expression(1), out);
+		}
+		if (expr instanceof SimplifiedSqlParser.ParenExpressionContext paren) {
+			return collectEqualityConjuncts(paren.expression(), out);
+		}
+		if (expr instanceof SimplifiedSqlParser.PredicateExpressionContext pred
+				&& pred.predicate() instanceof SimplifiedSqlParser.ComparisonContext cmp
+				&& "=".equals(cmp.operator().getText())) {
+			out.put(simpleColumn(cmp.columnName()), SqlParseSupport.literal(cmp.value()));
+			return true;
+		}
+		return false;
 	}
 
 	/** Literal / column-copy / CASE SET (no RMW) into {@code sets}. */
@@ -1545,7 +1592,7 @@ public final class SqlStatementParser {
 		final String constraintName = ctx.constraintName() == null ? null : ctx.constraintName().getText();
 		if (ctx.DROP() != null && ctx.CONSTRAINT() != null) {
 			return new AlterTableSql(
-					table, null, false, null, null, null, null, null, ctx.constraintName().getText());
+					table, null, false, null, false, null, null, null, null, ctx.constraintName().getText());
 		}
 		if (ctx.PRIMARY() != null && ctx.ADD() != null) {
 			final List<String> pkCols = new ArrayList<>();
@@ -1553,7 +1600,7 @@ public final class SqlStatementParser {
 				pkCols.add(c.getText());
 			}
 			return new AlterTableSql(
-					table, null, false, null, null, List.copyOf(pkCols), constraintName, null, null);
+					table, null, false, null, false, null, List.copyOf(pkCols), constraintName, null, null);
 		}
 		if (ctx.FOREIGN() != null && ctx.ADD() != null) {
 			final List<ColumnNameContext> names = ctx.columnName();
@@ -1584,6 +1631,7 @@ public final class SqlStatementParser {
 					null,
 					false,
 					null,
+					false,
 					null,
 					null,
 					null,
@@ -1602,6 +1650,7 @@ public final class SqlStatementParser {
 					null,
 					false,
 					null,
+					false,
 					new CheckSpec(constraintName, SqlParseSupport.textOf(ctx.expression())),
 					null,
 					null,
@@ -1633,9 +1682,11 @@ public final class SqlStatementParser {
 						false,
 						columnDefaultSql(cd));
 			}
-			return new AlterTableSql(table, col, ifNotExists, null, null, null, null, null, null);
+			return new AlterTableSql(table, col, ifNotExists, null, false, null, null, null, null, null);
 		}
-		return new AlterTableSql(table, null, false, ctx.columnName().getFirst().getText(), null, null, null, null, null);
+		final boolean dropIfExists = ctx.IF() != null;
+		return new AlterTableSql(
+				table, null, false, ctx.columnName().getFirst().getText(), dropIfExists, null, null, null, null, null);
 	}
 
 }

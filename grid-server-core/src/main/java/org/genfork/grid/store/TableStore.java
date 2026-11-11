@@ -678,7 +678,7 @@ public final class TableStore {
 		Objects.requireNonNull(sets, "sets");
 		final int shard = getShard(keyBytes);
 		ensureWritable(shard);
-		final GridEntriesProcessor processor = processors[shard];
+		final GridEntriesProcessor processor = getProcessor(keyBytes);
 		final GridEntriesProcessor.KeyEntry keyLock = new GridEntriesProcessor.KeyEntry(keyBytes);
 		final Object lock = fieldModifyLocks.computeIfAbsent(keyLock, k -> new Object());
 		synchronized (lock) {
@@ -1031,7 +1031,7 @@ public final class TableStore {
 		final byte[] logicalKey = keyBytesFromValueBlob(valueBytes);
 		final int shard = getShard(logicalKey);
 		ensureWritable(shard);
-		final GridEntriesProcessor processor = processors[shard];
+		final GridEntriesProcessor processor = getProcessor(logicalKey);
 		final byte[] prior = processor.getCommitted(keyBytes);
 		if (mutationRecorder == null) {
 			installCommittedWithPkMigration(keyBytes, logicalKey, valueBytes);
@@ -1056,7 +1056,7 @@ public final class TableStore {
 		maybeInjectFlushFail();
 		final int shard = getShard(keyBytes);
 		ensureWritable(shard);
-		final GridEntriesProcessor processor = processors[shard];
+		final GridEntriesProcessor processor = getProcessor(keyBytes);
 		final byte[] prior = processor.getCommitted(keyBytes);
 		if (mutationRecorder == null) {
 			processor.installCommitted(keyBytes, null, true);

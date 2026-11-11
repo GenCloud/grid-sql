@@ -457,7 +457,15 @@ public final class SqlDdlExecutor {
 					epoch
 			);
 		} else {
-			next = store.schema().withoutColumn(s.dropColumn(), epoch);
+			final String dropName = s.dropColumn();
+			if (store.schema().column(dropName) == null) {
+				if (s.dropColumnIfExists() || applyingReplicatedDdl.get()) {
+					return SqlResult.ddl(SqlStatementTag.ALTER_TABLE);
+				}
+				throw new IllegalArgumentException(
+						"Unknown column " + dropName + " in table " + table);
+			}
+			next = store.schema().withoutColumn(dropName, epoch);
 		}
 		store.replaceColumnSchema(next);
 		catalog.replaceSchema(next);

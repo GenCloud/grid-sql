@@ -172,10 +172,22 @@ public final class SqlPreparedBinder {
 
 	private static UpdateSql bindUpdate(UpdateSql s, Object[] binds) {
 		final int whereBindStart = maxBindIndex(s.setLiterals()) + 1;
-		final Object pk = resolve(s.pkValueOrNull(), binds);
+		final Map<String, Object> whereEqs = bindMap(s.whereEqLiterals(), binds);
+		Object pk = resolve(s.pkValueOrNull(), binds);
+		if (pk == null && s.pkColumnOrNull() != null) {
+			pk = whereEqs.get(s.pkColumnOrNull());
+			if (pk == null) {
+				for (Map.Entry<String, Object> entry : whereEqs.entrySet()) {
+					if (entry.getKey().equalsIgnoreCase(s.pkColumnOrNull())) {
+						pk = entry.getValue();
+						break;
+					}
+				}
+			}
+		}
 		final Map<String, Object> sets = bindMap(s.setLiterals(), binds);
 		final String whereSql = materializeWhere(s.whereSql(), binds, whereBindStart);
-		final UpdatePlan rmw = bindRmw(s.rmw(), pk);
+		final UpdatePlan rmw = bindRmw(s.rmw(), s.pkColumnOrNull(), pk);
 		return new UpdateSql(
 				s.table(),
 				rmw,
@@ -186,7 +198,8 @@ public final class SqlPreparedBinder {
 				s.sourceTableOrNull(),
 				s.targetJoinColumnOrNull(),
 				s.sourceJoinColumnOrNull(),
-				s.returning()
+				s.returning(),
+				whereEqs
 		);
 	}
 
@@ -196,11 +209,12 @@ public final class SqlPreparedBinder {
 		return new DeleteSql(s.table(), whereSql, s.pkColumnOrNull(), pk);
 	}
 
-	private static UpdatePlan bindRmw(UpdatePlan rmw, Object resolvedPk) {
+	private static UpdatePlan bindRmw(UpdatePlan rmw, String pkColumn, Object resolvedPk) {
 		if (rmw == null) {
 			return null;
 		}
-		return new UpdatePlan(rmw.table(), rmw.assigns(), rmw.pkColumn(), resolvedPk, rmw.templateKey());
+		final String column = pkColumn != null ? pkColumn : rmw.pkColumn();
+		return new UpdatePlan(rmw.table(), rmw.assigns(), column, resolvedPk, rmw.templateKey());
 	}
 
 	private static String materializeWhere(String whereSql, Object[] binds, int startIndex) {

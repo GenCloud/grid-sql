@@ -194,6 +194,68 @@ public class SqlEngineCatalogDmlTest {
 	}
 
 	@Test
+	void updateRmwPkEqAndExtraEqualitySucceeds() {
+		engine.execute(
+				"CREATE TABLE oly_rmw (player_id INT PRIMARY KEY, server_id INT, battles INT)");
+		engine.execute("INSERT INTO oly_rmw (player_id, server_id, battles) VALUES (10, 1, 0)");
+		final SqlResult upd = engine.execute(
+				"UPDATE oly_rmw SET battles = battles + 1 WHERE player_id = 10 AND server_id = 1");
+		assertEquals(1L, upd.rowsAffected());
+		assertEquals(1, ((Number) engine.execute(
+				"SELECT battles FROM oly_rmw WHERE player_id = 10").rows().getFirst()[0]).intValue());
+	}
+
+	@Test
+	void updateRmwPkEqAndExtraEqualityResidualMiss() {
+		engine.execute(
+				"CREATE TABLE oly_miss (player_id INT PRIMARY KEY, server_id INT, battles INT)");
+		engine.execute("INSERT INTO oly_miss (player_id, server_id, battles) VALUES (10, 1, 3)");
+		final SqlResult upd = engine.execute(
+				"UPDATE oly_miss SET battles = battles + 1 WHERE player_id = 10 AND server_id = 99");
+		assertEquals(0L, upd.rowsAffected());
+		assertEquals(3, ((Number) engine.execute(
+				"SELECT battles FROM oly_miss WHERE player_id = 10").rows().getFirst()[0]).intValue());
+	}
+
+	@Test
+	void updateRmwAndWithoutPkRejected() {
+		engine.execute("CREATE TABLE oly_nopk (player_id INT PRIMARY KEY, server_id INT, n INT)");
+		engine.execute("INSERT INTO oly_nopk (player_id, server_id, n) VALUES (1, 1, 0)");
+		final IllegalArgumentException ex = assertThrows(
+				IllegalArgumentException.class,
+				() -> engine.execute("UPDATE oly_nopk SET n = n + 1 WHERE server_id = 1 AND n = 0"));
+		assertTrue(
+				ex.getMessage().contains("PK") || ex.getMessage().contains("pk"),
+				() -> "expected PK constraint message, got: " + ex.getMessage());
+	}
+
+	@Test
+	void updateRmwOrRejected() {
+		engine.execute("CREATE TABLE oly_or (id INT PRIMARY KEY, n INT)");
+		engine.execute("INSERT INTO oly_or (id, n) VALUES (1, 0)");
+		final IllegalArgumentException ex = assertThrows(
+				IllegalArgumentException.class,
+				() -> engine.execute("UPDATE oly_or SET n = n + 1 WHERE id = 1 OR id = 2"));
+		assertTrue(
+				ex.getMessage().contains("PK") || ex.getMessage().contains("pk"),
+				() -> "expected PK constraint message, got: " + ex.getMessage());
+	}
+
+	@Test
+	void updateRmwPkAndBindSucceeds() {
+		engine.execute(
+				"CREATE TABLE oly_bind (player_id INT PRIMARY KEY, server_id INT, battles INT)");
+		engine.execute("INSERT INTO oly_bind (player_id, server_id, battles) VALUES (7, 2, 0)");
+		final SqlResult upd = engine.execute(
+				(SqlSession) null,
+				"UPDATE oly_bind SET battles = battles + 1 WHERE player_id = ? AND server_id = ?",
+				new Object[]{7, 2});
+		assertEquals(1L, upd.rowsAffected());
+		assertEquals(1, ((Number) engine.execute(
+				"SELECT battles FROM oly_bind WHERE player_id = 7").rows().getFirst()[0]).intValue());
+	}
+
+	@Test
 	void updateFromRejectsRmw() {
 		engine.execute("CREATE TABLE tgt (id INT PRIMARY KEY, v VARCHAR)");
 		engine.execute("CREATE TABLE src (id INT PRIMARY KEY, v VARCHAR)");

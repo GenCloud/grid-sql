@@ -42,7 +42,8 @@ public class ReplicationRpcCodecTest {
 	void helloRoundTrip() {
 		final Hello hello = new Hello(
 				"n1", "c1", "dc-a", 7L, 5L, (byte) 1, 42L, 99L, 123L,
-				List.of(new SealedShardInventoryEntry("d1", 2, 55L)));
+				List.of(new SealedShardInventoryEntry("d1", 2, 55L)),
+				777L);
 		final Hello decoded = ReplicationRpcCodec.decodeHello(ReplicationRpcCodec.encodeHello(hello));
 		assertEquals("n1", decoded.nodeId());
 		assertEquals("c1", decoded.clusterId());
@@ -57,6 +58,21 @@ public class ReplicationRpcCodecTest {
 		assertEquals("d1", decoded.sealedShardInventory().getFirst().domain());
 		assertEquals(2, decoded.sealedShardInventory().getFirst().shard());
 		assertEquals(55L, decoded.sealedShardInventory().getFirst().identityFingerprint());
+		assertEquals(777L, decoded.privilegeFingerprint());
+	}
+
+	@Test
+	void helloLegacyWithoutPrivilegeFingerprintDefaultsZero() {
+		final Hello withInventory = new Hello(
+				"n1", "c1", "dc-a", 7L, 5L, (byte) 1, 42L, 99L, 123L,
+				List.of(new SealedShardInventoryEntry("d1", 2, 55L)));
+		assertEquals(0L, withInventory.privilegeFingerprint());
+		final byte[] legacyBytes = encodeHelloWithoutPrivilegeTail(withInventory);
+		final Hello decoded = ReplicationRpcCodec.decodeHello(legacyBytes);
+		assertEquals(99L, decoded.catalogFingerprint());
+		assertEquals(123L, decoded.sealedArtifactsFingerprint());
+		assertEquals(1, decoded.sealedShardInventory().size());
+		assertEquals(0L, decoded.privilegeFingerprint());
 	}
 
 	@Test
@@ -181,5 +197,13 @@ public class ReplicationRpcCodecTest {
 		buf.put(c);
 		buf.putLong(schemaEpoch);
 		return EncodeBuffers.toByteArray(buf);
+	}
+
+	/** Current HELLO minus trailing privilege fingerprint (pre-privilege peers). */
+	private static byte[] encodeHelloWithoutPrivilegeTail(Hello hello) {
+		final byte[] full = ReplicationRpcCodec.encodeHello(hello);
+		final byte[] trimmed = new byte[full.length - Long.BYTES];
+		System.arraycopy(full, 0, trimmed, 0, trimmed.length);
+		return trimmed;
 	}
 }

@@ -620,10 +620,12 @@ public final class PrivilegeCatalog {
 			final DataOutputStream out = new DataOutputStream(raw);
 			out.writeInt(SNAPSHOT_MAGIC);
 			out.writeInt(SNAPSHOT_VERSION);
-			out.writeInt(users.size());
-			for (Map.Entry<String, UserRecord> entry : users.entrySet()) {
-				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
-				final UserRecord record = entry.getValue();
+			final ArrayList<String> userKeys = new ArrayList<>(users.keySet());
+			userKeys.sort(Comparator.naturalOrder());
+			out.writeInt(userKeys.size());
+			for (String userKey : userKeys) {
+				final UserRecord record = users.get(userKey);
+				PrivilegeCryptoIoUtil.writeUtf(out, userKey);
 				out.writeInt(record.salt().length);
 				out.write(record.salt());
 				out.writeInt(record.passwordHash().length);
@@ -631,38 +633,53 @@ public final class PrivilegeCatalog {
 				out.writeBoolean(record.administrator());
 				out.writeInt(record.kdfKind());
 			}
-			out.writeInt(grants.size());
-			for (Map.Entry<String, Set<SqlPrivilege>> entry : grants.entrySet()) {
-				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
-				out.writeInt(entry.getValue().size());
-				for (SqlPrivilege privilege : entry.getValue()) {
-					PrivilegeCryptoIoUtil.writeUtf(out, privilege.name());
-				}
+			final ArrayList<String> grantKeys = new ArrayList<>(grants.keySet());
+			grantKeys.sort(Comparator.naturalOrder());
+			out.writeInt(grantKeys.size());
+			for (String grantKey : grantKeys) {
+				PrivilegeCryptoIoUtil.writeUtf(out, grantKey);
+				writeSortedPrivileges(out, grants.get(grantKey));
 			}
-			out.writeInt(roles.size());
-			for (String role : roles) {
+			final ArrayList<String> roleKeys = new ArrayList<>(roles);
+			roleKeys.sort(Comparator.naturalOrder());
+			out.writeInt(roleKeys.size());
+			for (String role : roleKeys) {
 				PrivilegeCryptoIoUtil.writeUtf(out, role);
 			}
-			out.writeInt(memberships.size());
-			for (Map.Entry<String, Set<String>> entry : memberships.entrySet()) {
-				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
-				out.writeInt(entry.getValue().size());
-				for (String role : entry.getValue()) {
+			final ArrayList<String> membershipKeys = new ArrayList<>(memberships.keySet());
+			membershipKeys.sort(Comparator.naturalOrder());
+			out.writeInt(membershipKeys.size());
+			for (String memberKey : membershipKeys) {
+				PrivilegeCryptoIoUtil.writeUtf(out, memberKey);
+				final ArrayList<String> memberRoles = new ArrayList<>(memberships.get(memberKey));
+				memberRoles.sort(Comparator.naturalOrder());
+				out.writeInt(memberRoles.size());
+				for (String role : memberRoles) {
 					PrivilegeCryptoIoUtil.writeUtf(out, role);
 				}
 			}
-			out.writeInt(roleGrants.size());
-			for (Map.Entry<String, Set<SqlPrivilege>> entry : roleGrants.entrySet()) {
-				PrivilegeCryptoIoUtil.writeUtf(out, entry.getKey());
-				out.writeInt(entry.getValue().size());
-				for (SqlPrivilege privilege : entry.getValue()) {
-					PrivilegeCryptoIoUtil.writeUtf(out, privilege.name());
-				}
+			final ArrayList<String> roleGrantKeys = new ArrayList<>(roleGrants.keySet());
+			roleGrantKeys.sort(Comparator.naturalOrder());
+			out.writeInt(roleGrantKeys.size());
+			for (String roleGrantKey : roleGrantKeys) {
+				PrivilegeCryptoIoUtil.writeUtf(out, roleGrantKey);
+				writeSortedPrivileges(out, roleGrants.get(roleGrantKey));
 			}
 			out.flush();
 			return raw.toByteArray();
 		} catch (IOException ex) {
 			throw new IllegalStateException("privilege snapshot encode failed", ex);
+		}
+	}
+
+	private static void writeSortedPrivileges(DataOutputStream out, Set<SqlPrivilege> privileges)
+			throws IOException {
+		final ArrayList<SqlPrivilege> sorted = new ArrayList<>(
+				privileges == null ? List.of() : privileges);
+		sorted.sort(Comparator.comparing(Enum::name));
+		out.writeInt(sorted.size());
+		for (SqlPrivilege privilege : sorted) {
+			PrivilegeCryptoIoUtil.writeUtf(out, privilege.name());
 		}
 	}
 

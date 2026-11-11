@@ -63,13 +63,6 @@ public final class ApplyNackHealUtil {
 	}
 
 	/**
-	 * Stream key for coalesce maps.
-	 */
-	public static String streamKey(String domainType, int shard) {
-		return domainType + '#' + shard;
-	}
-
-	/**
 	 * Whether a heal should run for this NACK (coalesce / suppress / pack cap).
 	 *
 	 * @param peerAckAtOrAboveNack when peer already acked ≥ nack seq → suppress
@@ -92,7 +85,7 @@ public final class ApplyNackHealUtil {
 		if (peerAckAtOrAboveNack) {
 			return false;
 		}
-		final String key = streamKey(domainType, shard);
+		final String key = OpLogStreamKeyUtil.format(domainType, shard);
 		final Long healedSeq = state.lastHealedSeqByStream().get(key);
 		if (healedSeq != null && healedSeq.longValue() >= nackOpSeq) {
 			return false;
@@ -123,7 +116,7 @@ public final class ApplyNackHealUtil {
 			boolean wantsPack
 	) {
 		Objects.requireNonNull(state, "state");
-		final String key = streamKey(domainType, shard);
+		final String key = OpLogStreamKeyUtil.format(domainType, shard);
 		state.lastHealMillisByStream().put(key, nowMillis);
 		state.lastHealedSeqByStream().merge(key, nackOpSeq, Math::max);
 		if (wantsPack) {

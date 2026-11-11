@@ -121,4 +121,30 @@ public class SqlRecordLockWaitBenchmark extends AbstractLatencyBenchmark {
 		waiter.join(TimeUnit.SECONDS.toMillis(2L));
 		bh.consume(cancelled.get());
 	}
+
+	/**
+	 * Channel-abandon path: holder unlock must unpark waiter (sleep/wake lock release).
+	 */
+	@Benchmark
+	@Threads(1)
+	public void unlockUnparksWaiter(Blackhole bh) throws Exception {
+		final SqlRecordLockManager local = new SqlRecordLockManager(LOCK_WAIT_MS);
+		local.lock(TABLE, KEY, LONG_WAIT_NS);
+		final CountDownLatch started = new CountDownLatch(1);
+		final CountDownLatch acquired = new CountDownLatch(1);
+		final Thread waiter = Thread.ofVirtual().start(() -> {
+			started.countDown();
+			local.lock(TABLE, KEY, LONG_WAIT_NS);
+			acquired.countDown();
+			local.unlock(TABLE, KEY);
+		});
+		started.await(1L, TimeUnit.SECONDS);
+		LockSupport.parkNanos(CANCEL_PARK_NS);
+		local.unlock(TABLE, KEY);
+		if (!acquired.await(SETUP_AWAIT_SEC, TimeUnit.SECONDS)) {
+			throw new IllegalStateException("waiter did not acquire after unlock");
+		}
+		waiter.join(TimeUnit.SECONDS.toMillis(2L));
+		bh.consume(true);
+	}
 }

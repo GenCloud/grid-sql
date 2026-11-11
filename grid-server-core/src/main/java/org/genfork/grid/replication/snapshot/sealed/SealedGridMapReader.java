@@ -57,6 +57,12 @@ import org.genfork.grid.utils.UnsafeMemory;
  * @since: 1.0
  */
 public final class SealedGridMapReader implements AutoCloseable {
+	/**
+	 * Prefix for closed-race {@link IllegalStateException} (overwrite / unexpected ensure).
+	 * Probe {@link #get}/{@link #forEachLive} soft-miss instead of surfacing this to SQL.
+	 */
+	public static final String CLOSED_READER_MESSAGE_PREFIX = "sealed reader is closed: ";
+
 	/** Default / test-overridable payload window size (bytes). */
 	private static final int DEFAULT_WINDOW_BYTES = 64 * 1024 * 1024;
 	public static int WINDOW_BYTES = DEFAULT_WINDOW_BYTES;
@@ -421,14 +427,23 @@ public final class SealedGridMapReader implements AutoCloseable {
 	public byte[] get(byte[] key) {
 		Objects.requireNonNull(key, "key");
 		if (nodeReaders != null || nodePaths != null) {
-			ensureOpen();
-			final int node = Math.abs(ArrayUtil.fastHash(key) % SealedGridMapWriter.NODE_COUNT);
-			final SealedGridMapReader reader = nodeReader(node);
-			return reader == null ? null : reader.get(key);
+			lifecycle.lockRead();
+			try {
+				if (!openForProbe()) {
+					return null;
+				}
+				final int node = Math.abs(ArrayUtil.fastHash(key) % SealedGridMapWriter.NODE_COUNT);
+				final SealedGridMapReader reader = nodeReader(node);
+				return reader == null ? null : reader.get(key);
+			} finally {
+				lifecycle.unlockRead();
+			}
 		}
 		lifecycle.lockRead();
 		try {
-			ensureOpen();
+			if (!openForProbe()) {
+				return null;
+			}
 			final int hash = ArrayUtil.fastHash(key);
 			final int node = Math.abs(hash % SealedGridMapWriter.NODE_COUNT);
 			if (version == SealedGridMapWriter.VERSION_NODE && node != nodeId) {
@@ -462,18 +477,27 @@ public final class SealedGridMapReader implements AutoCloseable {
 	public void forEachLive(BiConsumer<byte[], byte[]> consumer) {
 		Objects.requireNonNull(consumer, "consumer");
 		if (nodeReaders != null || nodePaths != null) {
-			ensureOpen();
-			for (int node = 0; node < SealedGridMapWriter.NODE_COUNT; node++) {
-				final SealedGridMapReader reader = nodeReader(node);
-				if (reader != null) {
-					reader.forEachLive(consumer);
+			lifecycle.lockRead();
+			try {
+				if (!openForProbe()) {
+					return;
 				}
+				for (int node = 0; node < SealedGridMapWriter.NODE_COUNT; node++) {
+					final SealedGridMapReader reader = nodeReader(node);
+					if (reader != null) {
+						reader.forEachLive(consumer);
+					}
+				}
+			} finally {
+				lifecycle.unlockRead();
 			}
 			return;
 		}
 		lifecycle.lockRead();
 		try {
-			ensureOpen();
+			if (!openForProbe()) {
+				return;
+			}
 			for (int index = 0; index < entryCount; index++) {
 				final int entryPosition = entryTableOffset + index * ENTRY_BYTES;
 				final long payloadOffset = directory.getLong(entryPosition);
@@ -488,6 +512,13 @@ public final class SealedGridMapReader implements AutoCloseable {
 		} finally {
 			lifecycle.unlockRead();
 		}
+	}
+
+	/**
+	 * {@code true} after {@link #close()} / {@link #closeForOverwrite()}.
+	 */
+	public boolean isClosed() {
+		return closed;
 	}
 
 	public int shard() {
@@ -695,10 +726,12 @@ public final class SealedGridMapReader implements AutoCloseable {
 		}
 	}
 
-	private void ensureOpen() {
-		if (closed) {
-			throw new IllegalStateException("sealed reader is closed: " + path);
-		}
+	/**
+	 * Soft open check under {@link #lifecycle} read lock (probe path).
+	 * Dump/HELLO may close between field capture and lock — treat as sealed miss.
+	 */
+	private boolean openForProbe() {
+		return !closed;
 	}
 
 	@Override

@@ -109,6 +109,54 @@ public final class SealedHydrateService {
 	private final ConcurrentLinkedQueue<SealedShardPackMsg> pendingSealedPacks = new ConcurrentLinkedQueue<>();
 	/** Single-flight drain of {@link #pendingSealedPacks} + tip catch-up (no monitor wait). */
 	private final AtomicBoolean sealedPackDrainRunning = new AtomicBoolean(false);
+	/**
+	 * After successful sealed unpack: unicast APPLY_ACK(wm) to donor so {@code needsSealedBaseline} clears.
+	 * Set from {@link ReplicationCoordinator} to {@code NettyReplicationTransport#sendApplyAck}.
+	 */
+	private volatile SealedBaselineAckHandler sealedBaselineAckHandler;
+	/**
+	 * After local sealed dump changes disk inventory — rebuild HELLO sealedShards (coordinator).
+	 */
+	private volatile Runnable afterSealedDiskChange;
+
+	/**
+	 * Donor ACK after local sealed baseline apply (wm ≥ truncate on donor).
+	 */
+	@FunctionalInterface
+	public interface SealedBaselineAckHandler {
+		void ack(String donorNodeId, String domainType, int shard, long watermark);
+	}
+
+	/**
+	 * Wire unicast APPLY_ACK after sealed unpack (product path only).
+	 */
+	public void setSealedBaselineAckHandler(SealedBaselineAckHandler handler) {
+		this.sealedBaselineAckHandler = handler;
+	}
+
+	/**
+	 * Wire HELLO inventory invalidate after local seal dump (product path only).
+	 */
+	public void setAfterSealedDiskChange(Runnable afterSealedDiskChange) {
+		this.afterSealedDiskChange = afterSealedDiskChange;
+	}
+
+	/**
+	 * Drop LAZY hydrate memo for {@code domain#shard} so next touch re-opens sealed mmap.
+	 */
+	public void clearShardHydrateMemo(String domainType, int shard) {
+		if (domainType == null) {
+			return;
+		}
+		hydratedShards.remove(OpLogStreamKeyUtil.format(domainType, shard));
+	}
+
+	/**
+	 * {@code true} after {@link #markCatalogBootstrapComplete()} (HELLO sealed packs allowed).
+	 */
+	public boolean isCatalogBootstrapComplete() {
+		return catalogBootstrapComplete.get();
+	}
 
 	public SealedHydrateService(
 			boolean enabled,
@@ -201,7 +249,7 @@ public final class SealedHydrateService {
 			return;
 		}
 		final String key = OpLogStreamKeyUtil.format(domainType, shard);
-		// Hot path: shard already fully hydrated (sealed indexes bound).
+		// Hot path: trust memo (0 disk). Overwrite clears memo via onSealedReaderReleased (P0d).
 		if (hydratedShards.contains(key)) {
 			return;
 		}
@@ -221,6 +269,12 @@ public final class SealedHydrateService {
 				hydratedShards.add(key);
 				hydrateShardsDone.set(hydratedShards.size());
 				hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
+			} else if (sealedGridMapService != null
+					&& sealedGridMapService.hasSealedMapNodes(domainType, shard)) {
+				// .gmap present but reader did not bind — never silent empty SELECT of live map.
+				throw new IllegalStateException(
+						"LAZY sealed bind failed for " + key
+								+ " (sealed map nodes present, sealedReader unbound)");
 			}
 			created.complete(null);
 		} catch (RuntimeException | Error ex) {
@@ -235,8 +289,9 @@ public final class SealedHydrateService {
 	/**
 	 * Open sealed mmap, bind {@code .sbpt}, replay OpLog tail.
 	 *
-	 * @return {@code true} when hydrate ran (applier present); {@code false} when skipped — do not
-	 *         mark {@link #hydratedShards} (no false done)
+	 * @return {@code true} when hydrate completed with a usable sealed bind <strong>or</strong>
+	 *         proven map-empty shard (no {@code .gmap}); {@code false} when skipped / bind failed —
+	 *         do not mark {@link #hydratedShards} (no false done)
 	 */
 	private boolean runLazyShardHydrate(String domainType, int shard) {
 		final ReplicaApplier applier = appliers.get(domainType);
@@ -272,7 +327,17 @@ public final class SealedHydrateService {
 					domainType, shard, ckpt.length);
 		}
 		catchUpTipFromJournal();
-		return true;
+		final SealedGridMapReader reader = sealedGridMapService.reader(domainType, shard);
+		if (reader != null) {
+			return true;
+		}
+		// Proven map-empty: no .gmap nodes (orphan .sbpt/.sbm alone are not a map bind).
+		if (!sealedGridMapService.hasSealedMapNodes(domainType, shard)) {
+			return true;
+		}
+		log.warn("LAZY hydrate left sealedReader unbound with .gmap on disk domain={} shard={}",
+				domainType, shard);
+		return false;
 	}
 
 	public boolean isLazyHydrate() {
@@ -355,9 +420,24 @@ public final class SealedHydrateService {
 	}
 
 	public int dumpDomainSnapshot(String domainType) {
-		return sealedGridMapService != null
-				? dumpDomainSealed(domainType)
-				: 0;
+		if (sealedGridMapService == null) {
+			return 0;
+		}
+		final int rows = dumpDomainSealed(domainType);
+		if (rows > 0) {
+			notifySealedDiskChanged();
+		}
+		return rows;
+	}
+
+	/**
+	 * Coalesced HELLO inventory invalidate after local seal dump (not per-domain mid-pass).
+	 */
+	private void notifySealedDiskChanged() {
+		final Runnable diskChange = afterSealedDiskChange;
+		if (diskChange != null) {
+			diskChange.run();
+		}
 	}
 
 	/**
@@ -371,6 +451,9 @@ public final class SealedHydrateService {
 			return true;
 		}
 		final DumpDomainResult result = dumpDomainSealedResult(domainType, false);
+		if (result.rows() > 0) {
+			notifySealedDiskChanged();
+		}
 		return !result.anyDeferred();
 	}
 
@@ -399,11 +482,10 @@ public final class SealedHydrateService {
 		if (domainType == null || domainType.isEmpty()) {
 			return;
 		}
-		final String prefix = domainType + "#";
-		hydratedShards.removeIf(key -> key != null && key.startsWith(prefix));
+		hydratedShards.removeIf(key -> OpLogStreamKeyUtil.startsWithDomain(key, domainType));
 		LazyShardHydrateFlightUtil.removeMatching(
 				lazyShardHydrateFlights,
-				key -> key.startsWith(prefix));
+				key -> OpLogStreamKeyUtil.startsWithDomain(key, domainType));
 	}
 
 	/**
@@ -664,6 +746,9 @@ public final class SealedHydrateService {
 				domains++;
 				rowsTotal += Math.max(0, sealedRows);
 			}
+			if (rowsTotal > 0) {
+				notifySealedDiskChanged();
+			}
 			if (shutdownForce) {
 				log.info("Sealed shutdown dump domains={} rows={} truncateOpLog=false",
 						domains, rowsTotal);
@@ -760,10 +845,16 @@ public final class SealedHydrateService {
 			for (int shard = 0; shard < INDEX_KEY_CATALOG_MAX_SHARD; shard++) {
 				final SealedGridMapReader reader =
 						sealedGridMapService.reader(domain, shard);
-				if (reader == null) {
+				if (reader == null || reader.isClosed()) {
 					continue;
 				}
-				reader.forEachLive((k, v) -> keys.add(k));
+				try {
+					reader.forEachLive((k, v) -> keys.add(k));
+				} catch (IllegalStateException closedRace) {
+					if (!SealedClosedRaceUtil.isClosedReaderFailure(closedRace)) {
+						throw closedRace;
+					}
+				}
 			}
 			final ByteBuffer countBuf = EncodeBuffers.allocateHeapLe(Integer.BYTES);
 			countBuf.putInt(keys.size());
@@ -898,9 +989,19 @@ public final class SealedHydrateService {
 				closeOrphanApplyEnvelopesAfterStreamHydrate(domainType, shard, applier);
 			}
 			final String key = OpLogStreamKeyUtil.format(domainType, shard);
-			hydratedShards.add(key);
-			hydrateShardsDone.set(hydratedShards.size());
-			hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
+			final SealedGridMapReader bound = sealedGridMapService.reader(domainType, shard);
+			if (bound != null || !sealedGridMapService.hasSealedMapNodes(domainType, shard)) {
+				hydratedShards.add(key);
+				hydrateShardsDone.set(hydratedShards.size());
+				hydrateShardsTotal.set(Math.max(hydrateShardsTotal.get(), hydratedShards.size()));
+			} else {
+				hydratedShards.remove(key);
+				log.warn("Sealed pack open left reader unbound domain={} shard={}", domainType, shard);
+			}
+			final SealedBaselineAckHandler ackHandler = sealedBaselineAckHandler;
+			if (ackHandler != null && wm > 0L && msg.fromNodeId() != null) {
+				ackHandler.ack(msg.fromNodeId(), domainType, shard, wm);
+			}
 			return true;
 		} catch (IOException failure) {
 			log.warn("Failed to unpack sealed shard pack from={} domain={} shard={}: {}",

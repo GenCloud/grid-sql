@@ -46,7 +46,8 @@ public final class CommonPoolGuard {
 	private static final String GRID_PACKAGE_PREFIX = "org.genfork.grid.";
 	private static final String GUARD_CLASS = CommonPoolGuard.class.getName();
 	private static final String COMMON_POOL_THREAD_PREFIX = "ForkJoinPool.commonPool-worker-";
-	private static final long SAMPLE_INTERVAL_NS = TimeUnit.SECONDS.toNanos(2L);
+	/** Idle sampler cadence — fail-fast only; not on the replication hot path. */
+	private static final long SAMPLE_INTERVAL_NS = TimeUnit.SECONDS.toNanos(10L);
 	private static final int STACK_DEPTH = 64;
 	private static final int SUMMARY_MAX_FRAMES = 6;
 	private static final String HIT_MSG_PREFIX = "org.genfork.grid work on ForkJoinPool.commonPool() at ";

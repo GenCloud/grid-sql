@@ -252,7 +252,11 @@ public final class SqlDdlRender {
 				sb.append(" DEFAULT ").append(col.defaultExprOrNull());
 			}
 		} else {
-			sb.append("DROP COLUMN ").append(s.dropColumn());
+			sb.append("DROP COLUMN ");
+			if (s.dropColumnIfExists()) {
+				sb.append("IF EXISTS ");
+			}
+			sb.append(s.dropColumn());
 		}
 		return sb.toString();
 	}

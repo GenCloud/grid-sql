@@ -18,7 +18,7 @@
         <maven.compiler.target>25</maven.compiler.target>
         <java.version>25</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <surefire.forkedProcessTimeoutInSeconds>300</surefire.forkedProcessTimeoutInSeconds>
+        <surefire.forkedProcessTimeoutInSeconds>600</surefire.forkedProcessTimeoutInSeconds>
     </properties>
 
     <dependencies>
@@ -206,25 +206,6 @@
 
 	</dependencies>
 
-    <scm>
-        <connection>scm:git:${env.CI_REPOSITORY_URL}</connection>
-        <url>${env.CI_PROJECT_URL}</url>
-        <developerConnection>scm:git:${env.CI_REPOSITORY_URL}</developerConnection>
-        <tag>HEAD</tag>
-    </scm>
-
-    <distributionManagement>
-        <snapshotRepository>
-            <id>gitlab-maven</id>
-            <url>http://gitlab.l2-reactor.ru/api/v4/projects/${env.CI_PROJECT_ID}/packages/maven</url>
-        </snapshotRepository>
-
-        <repository>
-            <id>gitlab-maven</id>
-            <url>http://gitlab.l2-reactor.ru/api/v4/projects/${env.CI_PROJECT_ID}/packages/maven</url>
-        </repository>
-    </distributionManagement>
-
     <build>
         <resources>
             <resource>
@@ -325,7 +306,7 @@
                     <systemPropertyVariables>
                         <jmh.ignoreLock>true</jmh.ignoreLock>
                     </systemPropertyVariables>
-                    <argLine>-Xmx2g
+                    <argLine>@{jacoco.agent.argLine} -Xmx2g
                         --enable-preview
                         --add-opens=java.base/java.lang=ALL-UNNAMED
                         --add-opens=java.base/java.math=ALL-UNNAMED
@@ -383,26 +364,6 @@
                 </dependencies>
             </plugin>
 
-            <plugin>
-                <artifactId>maven-deploy-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>deploy-file</goal>
-                        </goals>
-                        <phase>deploy</phase>
-                        <configuration>
-                            <repositoryId>gitlab-maven</repositoryId>
-                            <url>http://gitlab.l2-reactor.ru/api/v4/projects/${env.CI_PROJECT_ID}/packages/maven</url>
-                            <file>${build.directory}/${project.build.finalName}.${project.packaging}</file>
-                            <sources>${build.directory}/${project.build.finalName}-sources.${project.packaging}</sources>
-                            <generatePom>false</generatePom>
-                            <pomFile>pom.xml</pomFile>
-                            <version>${project.version}</version>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
         </plugins>
     </build>
 

@@ -50,6 +50,8 @@ powershell -File .\scripts\run-jmeter-load-slo.ps1 -Stamp <run-id> -Clients 64 -
 
 Цифры привязаны к этому железу. Для облака, WAN и нескольких площадок нужен отдельный прогон.
 
+Планировочные полы host RAM / CPU / диск по топологии и тиру low/mid/high: [системные требования](../configure-and-operate/operations/system-requirements.md). Эти бюджеты не заменяют пороги TPS на этой странице.
+
 ## Опорные цифры
 
 HA (`primary` + `replica`, `fsync: true`): запись **4676**/с, чтение **52261…59430**/с, QG **8772…11519**/с, смесь HA **9896**/с. Пороги: ≈**4442** / ≈**52261** / ≈**8333**.

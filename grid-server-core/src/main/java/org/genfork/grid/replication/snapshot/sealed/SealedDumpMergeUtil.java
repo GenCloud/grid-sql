@@ -16,16 +16,19 @@
 package org.genfork.grid.replication.snapshot.sealed;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.genfork.grid.catalog.TableSchema;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
 import org.genfork.grid.replication.log.OpLog;
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.serial.LogicalFieldCursor;
 import org.genfork.grid.utils.ArrayUtil;
 
@@ -45,6 +48,46 @@ public final class SealedDumpMergeUtil {
 	public static final int SEAL_DUMP_OPLOG_BATCH = 2_048;
 
 	private SealedDumpMergeUtil() {
+	}
+
+	/**
+	 * Prior sealed view for dump merge: installed reader, or ephemeral disk open when LAZY unbound
+	 * but {@code .gmap} nodes exist (must not tip-only overwrite cold sealed keys).
+	 *
+	 * @param prior             reader to {@code forEachLive} (installed or ephemeral); may be null
+	 * @param ephemeralToClose  non-null when this helper opened disk; caller must close after merge
+	 * @param priorWm           sealed watermark for OpLog delta start
+	 */
+	public record DumpPrior(
+			SealedGridMapReader prior,
+			SealedGridMapReader ephemeralToClose,
+			long priorWm
+	) {
+	}
+
+	/**
+	 * Resolve dump prior: prefer installed; else open disk when map nodes present (fail-closed).
+	 */
+	public static DumpPrior openPriorForDump(
+			Path sealedRoot,
+			String domainType,
+			int shard,
+			SealedGridMapReader installed
+	) throws IOException {
+		Objects.requireNonNull(domainType, "domainType");
+		if (installed != null) {
+			return new DumpPrior(installed, null, installed.watermark());
+		}
+		if (sealedRoot == null || !SealedShardPack.hasMapNodes(sealedRoot, domainType, shard)) {
+			return new DumpPrior(null, null, 0L);
+		}
+		final SealedGridMapReader ephemeral = SealedGridMapReader.openShard(sealedRoot, domainType, shard);
+		if (ephemeral == null) {
+			throw new IllegalStateException(
+					"sealed map nodes present but openShard returned null "
+							+ OpLogStreamKeyUtil.format(domainType, shard));
+		}
+		return new DumpPrior(ephemeral, ephemeral, ephemeral.watermark());
 	}
 
 	public static List<SealedGridMapWriter.Kv> flattenNodeBuckets(List<SealedGridMapWriter.Kv>[] nodes) {
@@ -201,6 +244,9 @@ public final class SealedDumpMergeUtil {
 	}
 
 	public static void closeQuietly(SealedGridMapReader reader) {
+		if (reader == null) {
+			return;
+		}
 		try {
 			reader.close();
 		} catch (IOException ignored) {

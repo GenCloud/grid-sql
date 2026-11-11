@@ -66,7 +66,7 @@ Edit peers / ports / `cluster-id` in those files — they define the lab.
 
 Client pin and Witness (quorum for role capture; does not serve app read/write): [promote a node](ha-promote.md).
 
-Load tiers `low` / `mid` / `high` only change JVM heap via `env/*.env`.
+Load tiers `low` / `mid` / `high` change JVM heap via `env/*.env`. Host RAM / CPU / disk budgets per topology: [system requirements](system-requirements.md).
 
 ```powershell
 cd examples\compose\1dc-n2
