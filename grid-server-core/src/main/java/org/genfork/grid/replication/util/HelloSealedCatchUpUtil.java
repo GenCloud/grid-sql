@@ -29,7 +29,8 @@ import java.io.IOException;
  * <p>
  * OpLog catch-up alone cannot fill seqs retired by {@link OpLog#truncateTo}; peers need
  * sealed {@code .gmap} artifacts then the live OpLog tail. Skip-unchanged via
- * {@link SealedPeerShipGate} (peer + pack identity).
+ * {@link SealedPeerShipGate} (peer + pack identity) with in-flight TTL after push;
+ * confirm via inventory match ({@link #markPeerInventoryMatched}).
  *
  * @author: GenCloud
  * @date: 2026/09
@@ -77,12 +78,13 @@ public final class HelloSealedCatchUpUtil {
 				return false;
 			}
 			final long packFp = SealedShardPack.identityFingerprintOfPacked(packed);
-			if (!PEER_SHIP_GATE.shouldShip(peerId, domainType, shard, packFp)) {
+			final long now = System.currentTimeMillis();
+			if (!PEER_SHIP_GATE.shouldShip(peerId, domainType, shard, packFp, now)) {
 				return false;
 			}
 			transport.pushSealedShardPack(peerId, domainType, shard, packed);
-			// Do not mark shipped on push — peer unpack may fail; mark only when peer HELLO
-			// inventory matches (see {@link #markPeerInventoryMatched}).
+			// In-flight debounce only — confirm via inventory match / peer ACK clearing needsSealedBaseline.
+			PEER_SHIP_GATE.notePushInFlight(peerId, domainType, shard, packFp, now);
 			log.info("HELLO sealed catch-up shipped peer={} domain={} shard={} bytes={}",
 					peerId, domainType, shard, packed.length);
 			return true;
@@ -108,5 +110,12 @@ public final class HelloSealedCatchUpUtil {
 	 */
 	public static void clearPeerShipGate(String peerId, String domainType, int shard) {
 		PEER_SHIP_GATE.clear(peerId, domainType, shard);
+	}
+
+	/**
+	 * {@code true} when in-flight TTL has not expired or inventory already matched for this peer/stream.
+	 */
+	public static boolean isPeerShipGateActive(String peerId, String domainType, int shard) {
+		return PEER_SHIP_GATE.isActive(peerId, domainType, shard);
 	}
 }

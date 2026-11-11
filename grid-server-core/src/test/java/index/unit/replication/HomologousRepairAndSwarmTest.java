@@ -15,9 +15,11 @@
  */
 package index.unit.replication;
 
+import org.genfork.grid.codec.duplex.DuplexCodecSupport;
 import org.genfork.grid.replication.codec.OpLogCodec;
 import org.genfork.grid.replication.codec.ReplicationOp;
 import org.genfork.grid.replication.codec.ReplicationOpType;
+import org.genfork.grid.replication.metrics.ReplicationMetrics;
 import org.genfork.grid.replication.repair.HomologousRepair;
 import org.genfork.grid.replication.repair.RepairCommand;
 import org.genfork.grid.replication.repair.RepairCommandType;
@@ -43,6 +45,41 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * @since: 1.0
  */
 public class HomologousRepairAndSwarmTest {
+
+	@Test
+	void duplexVerifyDoesNotInflateHomologousRepairApplied() {
+		final HomologousRepair repair = new HomologousRepair();
+		final long appliedBefore = repair.repairApplied();
+		final long duplexBefore = ReplicationMetrics.duplexRepair();
+		final byte[] wire = DuplexCodecSupport.getCodec().encodeLogical(new byte[]{7, 8, 9}).toWireBytes();
+		final byte[] out = repair.verifyOrRebuildValue(wire);
+		assertTrue(out != null && out.length > 0);
+		assertEquals(appliedBefore, repair.repairApplied(), "duplex ECC must not bump repair_applied");
+		assertTrue(ReplicationMetrics.duplexRepair() >= duplexBefore + 1L);
+	}
+
+	@Test
+	void applyHealedLocusIncrementsRepairApplied() {
+		final HomologousRepair repair = new HomologousRepair();
+		final long before = repair.repairApplied();
+		repair.applyHealedLocus(new VersionLocus("d", 0, 1L, 2L, 1L, 3L));
+		assertEquals(before + 1L, repair.repairApplied());
+	}
+
+	@Test
+	void reconcileSkipsSealedEraGapsWhenTruncated() {
+		final HomologousRepair repair = new HomologousRepair();
+		final Map<Long, VersionLocus> remote = new HashMap<>();
+		final long sealedEraHash = HomologousRepair.keyHash(new byte[]{9});
+		remote.put(sealedEraHash, new VersionLocus("d", 0, sealedEraHash, 5L, 1L, 99L));
+		final long liveHash = HomologousRepair.keyHash(new byte[]{8});
+		remote.put(liveHash, new VersionLocus("d", 0, liveHash, 50L, 1L, 11L));
+		final List<RepairCommand> skipped = repair.reconcile("d", 0, remote, 40L);
+		assertTrue(skipped.stream().noneMatch(c -> c.keyHash() == sealedEraHash),
+				"sealed-era FETCH must not issue after truncate");
+		assertTrue(skipped.stream().anyMatch(c -> c.keyHash() == liveHash),
+				"post-truncate lag must still issue");
+	}
 
 	@Test
 	void reconcileEmitsFetchWhenMissingLocally() {

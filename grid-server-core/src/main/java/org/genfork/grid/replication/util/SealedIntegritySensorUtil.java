@@ -68,6 +68,8 @@ public final class SealedIntegritySensorUtil {
 		return SealedGmapStructuralProbeUtil.probe(gmapPath);
 	}
 
+	private static final String GMAP_SUFFIX = ".gmap";
+
 	/**
 	 * Worst structural probe across every non-orphan {@code .gmap} for {@code domain#shard}.
 	 * Empty listing → {@link Probe#MISSING}.
@@ -77,22 +79,34 @@ public final class SealedIntegritySensorUtil {
 			return Probe.MISSING;
 		}
 		try {
-			final List<Path> files = SealedShardPack.listShardFiles(sealedRoot, domain, shard);
-			Probe worst = null;
-			for (Path file : files) {
-				final String name = file.getFileName() == null ? "" : file.getFileName().toString();
-				if (!name.endsWith(".gmap") || GridFs.isOrphanStagingName(file)) {
-					continue;
-				}
-				final Probe probe = probeGmapHeader(file);
-				if (worst == null || severity(probe) > severity(worst)) {
-					worst = probe;
-				}
-			}
-			return worst == null ? Probe.MISSING : worst;
+			return probeAllGmapHeadersListed(SealedShardPack.listShardFiles(sealedRoot, domain, shard));
 		} catch (IOException ignored) {
 			return Probe.IO_ERROR;
 		}
+	}
+
+	/**
+	 * Same as {@link #probeAllGmapHeaders} over a pre-listed artifact set (avoids second DirectoryStream).
+	 */
+	public static Probe probeAllGmapHeadersListed(List<Path> files) {
+		if (files == null || files.isEmpty()) {
+			return Probe.MISSING;
+		}
+		Probe worst = null;
+		for (Path file : files) {
+			if (file == null) {
+				continue;
+			}
+			final String name = file.getFileName() == null ? "" : file.getFileName().toString();
+			if (!name.endsWith(GMAP_SUFFIX) || GridFs.isOrphanStagingName(file)) {
+				continue;
+			}
+			final Probe probe = probeGmapHeader(file);
+			if (worst == null || severity(probe) > severity(worst)) {
+				worst = probe;
+			}
+		}
+		return worst == null ? Probe.MISSING : worst;
 	}
 
 	/**
@@ -147,7 +161,7 @@ public final class SealedIntegritySensorUtil {
 
 		public boolean tryAcquire(String domainType, int shard, long nowMillis, long debounceMs) {
 			Objects.requireNonNull(domainType, "domainType");
-			final String key = domainType + '#' + shard;
+			final String key = OpLogStreamKeyUtil.format(domainType, shard);
 			final long window = debounceMs <= 0L ? PACK_REQUEST_DEBOUNCE_MS : debounceMs;
 			final Long prev = lastRequestMillis.get(key);
 			if (prev != null && (nowMillis - prev) < window) {

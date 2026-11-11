@@ -28,6 +28,9 @@ import java.util.Locale;
  * Owned IDENTITY sequences are omitted — they are implied by table IDENTITY columns and are
  * not part of {@link CatalogDdlCompactor} / journal snapshot reconcile.
  * Mid-pipeline Object decode forbidden — keys are catalog strings only.
+ * <p>
+ * Privileges ({@code privileges.meta} / users) are <strong>not</strong> mixed here — see
+ * {@link PrivilegeCatalogFingerprintUtil} (separate HELLO privilege fingerprint).
  *
  * @author: GenCloud
  * @date: 2026/11

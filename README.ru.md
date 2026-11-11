@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml)
 [![Jepsen QG](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/GenCloud/grid-sql/master/docs/assets/badges/jacoco-shields.json)](docs/en/internal/development.md#coverage-jacoco)
 
 **Нужна скорость SQL в Java без отдельного кэша, который разъезжается с журналом?** Grid — SQL-first СУБД в памяти с долговременным хранением (OpLog + sealed GridMap) и репликацией ORCHID. Один протокол для приложений: `grid://` (реактивный) или `jdbc:grid://` (JDBC).
 

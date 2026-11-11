@@ -2,6 +2,13 @@
 
 Everything to settle before a Grid cluster takes production traffic. Each item names the setting or command, why it matters, and the page with the full procedure. Work top to bottom: storage, cluster, recovery, access, observability, clients.
 
+## 0. Host sizing
+
+| Check | Setting | Why |
+|-------|---------|-----|
+| low / mid / high RAM·CPU·disk match the topology | [system requirements](../configure-and-operate/operations/system-requirements.md) | Compose `env/*.env` only sets heap; host budgets scale with solo / 1+1 / N=3 / multi-DC process count |
+| Living Load floors claimed only on starter 1+1 | [capacity SLO](../performance/capacity-slo.md) | N=3 lab stamps are not the WRITE/READ/CAPACITY living-floor host |
+
 ## 1. Storage and durability
 
 | Check | Setting | Why |

@@ -67,6 +67,11 @@ public final class SealedGridMapService {
 	private final AtomicLong cachedAggregateIdentityFp = new AtomicLong(0L);
 	private final AtomicLong aggregateIdentityEpoch = new AtomicLong(0L);
 	private final AtomicLong cachedAggregateEpoch = new AtomicLong(-1L);
+	/**
+	 * Cleared when a live sealed reader is dropped for overwrite — LAZY hydrate memo must not
+	 * stay sticky with {@code sealedReader == null}.
+	 */
+	private volatile BiConsumer<String, Integer> onSealedReaderReleased;
 
 	public SealedGridMapService(Path sealedRoot) {
 		this(sealedRoot, null);
@@ -115,6 +120,48 @@ public final class SealedGridMapService {
 			shards.add(shard);
 		}
 		registeredShards.put(domainType, shards);
+	}
+
+	/**
+	 * Wire LAZY hydrate-memo clear when overwrite drops a bound sealed reader.
+	 */
+	public void setOnSealedReaderReleased(BiConsumer<String, Integer> onSealedReaderReleased) {
+		this.onSealedReaderReleased = onSealedReaderReleased;
+	}
+
+	/**
+	 * {@code true} when sealed root has any artifact for {@code domain#shard} ({@code .gmap}/
+	 * {@code .sbpt}/{@code .sbm}).
+	 */
+	public boolean hasSealedShardArtifacts(String domainType, int shard) {
+		if (sealedRoot == null || domainType == null) {
+			return false;
+		}
+		try {
+			return !SealedShardPack.listShardFiles(sealedRoot, domainType, shard).isEmpty();
+		} catch (IOException ignored) {
+			return false;
+		}
+	}
+
+	/**
+	 * {@code true} when at least one node {@code .gmap} exists for {@code domain#shard}.
+	 * <p>
+	 * LAZY bind / proven-empty uses map nodes only — orphan {@code .sbpt}/{@code .sbm} after
+	 * empty-clear must not trip fail-closed or hot-path disk storms.
+	 */
+	public boolean hasSealedMapNodes(String domainType, int shard) {
+		if (sealedRoot == null || domainType == null) {
+			return false;
+		}
+		return SealedShardPack.hasMapNodes(sealedRoot, domainType, shard);
+	}
+
+	/**
+	 * Known registered domain names (for HELLO inventory hex→domain resolve).
+	 */
+	public Set<String> registeredDomainNames() {
+		return Set.copyOf(registeredShards.keySet());
 	}
 
 	public int dumpDomain(String domainType, OpLog opLog, ReplicationNodeState nodeState) {
@@ -233,9 +280,21 @@ public final class SealedGridMapService {
 				opLog == null ? 0L : opLog.lastSeq(domainType, shard));
 		// Sealed ∪ OpLog-delta ∪ RAM: eviction may drop cold keys from the working set before
 		// first seal; OpLog recovers them so truncate after dump cannot lose rows.
+		// LAZY unbound: installed reader may be null while .gmap still holds cold keys — open
+		// ephemeral disk prior (pin across forEachLive) or tip-only overwrite destroys sealed.
 		final LinkedHashMap<SealedDumpMergeUtil.BytesKey, byte[]> merged = new LinkedHashMap<>();
-		final SealedGridMapReader prior = reader(domainType, shard);
-		final long priorWm = prior == null ? 0L : prior.watermark();
+		final SealedDumpMergeUtil.DumpPrior dumpPrior;
+		try {
+			dumpPrior = SealedDumpMergeUtil.openPriorForDump(
+					sealedRoot, domainType, shard, reader(domainType, shard));
+		} catch (IOException e) {
+			throw new IllegalStateException(
+					"sealed map nodes present but openShard failed "
+							+ OpLogStreamKeyUtil.format(domainType, shard),
+					e);
+		}
+		final SealedGridMapReader prior = dumpPrior.prior();
+		final long priorWm = dumpPrior.priorWm();
 		final boolean pinned = prior != null;
 		if (pinned) {
 			lifecycleGate.pin(domainType, shard);
@@ -254,6 +313,7 @@ public final class SealedGridMapService {
 			if (pinned) {
 				lifecycleGate.unpin(domainType, shard);
 			}
+			SealedDumpMergeUtil.closeQuietly(dumpPrior.ephemeralToClose());
 		}
 		if (merged.isEmpty()) {
 			final long tip = opLog == null ? 0L : opLog.lastSeq(domainType, shard);
@@ -264,9 +324,13 @@ public final class SealedGridMapService {
 					return lifecycleGate.callExclusive(domainType, shard, () -> {
 						try {
 							releaseReadersBeforeOverwriteUnlocked(domainType, shard);
-							deleteOrphanNodes(domainType, shard, List.of());
-							dumpIndexes(domainType, shard, shardCount, processor, 0, merged);
+							// Tombstone-empty: drop ALL sealed artifacts (.gmap/.sbpt/.sbm).
+							// Empty .sbpt shells left debris that tripped LAZY bind-fail
+							// (openShard=null while listShardFiles non-empty) and killed TPS.
+							SealedShardPack.purgeOrphansNotIn(
+									sealedRoot, domainType, shard, Set.of());
 							swapReader(domainType, shard, processor, null);
+							invalidateSealedIdentityCache();
 							final long through = Math.max(watermark, tip);
 							if (truncateOpLog && opLog != null && through > 0L) {
 								OpLogArchiveUtil.archiveBeforeTruncate(
@@ -367,12 +431,8 @@ public final class SealedGridMapService {
 		if (byShard == null) {
 			return watermarks;
 		}
-		try {
-			for (Integer shard : listShards(domainType)) {
-				loadOneShardIntoMap(domainType, shard, byShard, watermarks);
-			}
-		} catch (IOException e) {
-			throw new IllegalStateException("sealed load failed for " + domainType, e);
+		for (Integer shard : listShards(domainType)) {
+			loadOneShardIntoMap(domainType, shard, byShard, watermarks);
 		}
 		return watermarks;
 	}
@@ -541,23 +601,31 @@ public final class SealedGridMapService {
 	 * missing from OpLog stream keys / partial registration).
 	 */
 	public void forEachRegisteredShard(BiConsumer<String, Integer> consumer) {
-		if (consumer == null) {
+		forEachDomainShards(registeredShards.keySet(), consumer);
+	}
+
+	/**
+	 * Invoke {@code consumer} for registered shards of each known domain plus on-disk
+	 * {@code .gmap} hole shards under that domain hex (HELLO inventory / heal fan-out).
+	 */
+	public void forEachDomainShards(Iterable<String> domains, BiConsumer<String, Integer> consumer) {
+		if (consumer == null || domains == null) {
 			return;
 		}
 		final Set<String> emitted = new HashSet<>();
-		for (Map.Entry<String, Set<Integer>> entry : registeredShards.entrySet()) {
-			final String domain = entry.getKey();
-			final Set<Integer> shards = entry.getValue();
-			if (domain == null || shards == null) {
+		for (String domain : domains) {
+			if (domain == null || domain.isEmpty()) {
 				continue;
 			}
-			for (Integer shard : shards) {
-				if (shard == null) {
-					continue;
-				}
-				final String key = domain + '#' + shard;
-				if (emitted.add(key)) {
-					consumer.accept(domain, shard);
+			final Set<Integer> shards = registeredShards.get(domain);
+			if (shards != null) {
+				for (Integer shard : shards) {
+					if (shard == null) {
+						continue;
+					}
+					if (emitted.add(OpLogStreamKeyUtil.format(domain, shard))) {
+						consumer.accept(domain, shard);
+					}
 				}
 			}
 			emitOnDiskShards(domain, emitted, consumer);
@@ -577,34 +645,16 @@ public final class SealedGridMapService {
 		final String prefix = hex + "_";
 		try (DirectoryStream<Path> stream = GridFs.newDirectoryStream(sealedRoot, prefix + "*_n*.gmap")) {
 			for (Path file : stream) {
-				final String name = file.getFileName().toString();
-				final int shard = parseShardFromGmapName(name, hex);
-				if (shard < 0) {
+				final Integer shard = SealedIndexPurgeUtil.parseShard(file.getFileName().toString(), hex);
+				if (shard == null || shard < 0) {
 					continue;
 				}
-				final String key = domain + '#' + shard;
-				if (emitted.add(key)) {
+				if (emitted.add(OpLogStreamKeyUtil.format(domain, shard))) {
 					consumer.accept(domain, shard);
 				}
 			}
 		} catch (IOException ignored) {
 			// best-effort heal enumeration
-		}
-	}
-
-	private static int parseShardFromGmapName(String name, String hex) {
-		if (name == null || hex == null || !name.startsWith(hex + "_") || !name.endsWith(".gmap")) {
-			return -1;
-		}
-		final String mid = name.substring(hex.length() + 1, name.length() - ".gmap".length());
-		final int nodeSep = mid.lastIndexOf("_n");
-		if (nodeSep <= 0) {
-			return -1;
-		}
-		try {
-			return Integer.parseInt(mid.substring(0, nodeSep));
-		} catch (NumberFormatException ignored) {
-			return -1;
 		}
 	}
 
@@ -624,7 +674,8 @@ public final class SealedGridMapService {
 			throw new IllegalStateException("sealed root not configured");
 		}
 		if (!SealedShardPack.isCompleteShardArtifacts(packed)) {
-			throw new IOException("incomplete sealed shard pack for " + domainType + "#" + shard);
+			throw new IOException("incomplete sealed shard pack for "
+					+ OpLogStreamKeyUtil.format(domainType, shard));
 		}
 		try {
 			return lifecycleGate.callExclusive(domainType, shard, () -> {
@@ -708,10 +759,9 @@ public final class SealedGridMapService {
 		if (sealedRoot == null || domainType == null || domainType.isEmpty()) {
 			return;
 		}
-		final String keyPrefix = domainType + "#";
 		final List<String> readerKeys = new ArrayList<>();
 		for (String key : readers.keySet()) {
-			if (key.startsWith(keyPrefix)) {
+			if (OpLogStreamKeyUtil.startsWithDomain(key, domainType)) {
 				readerKeys.add(key);
 			}
 		}
@@ -907,6 +957,10 @@ public final class SealedGridMapService {
 		if (processor != null) {
 			processor.setSealedReader(null);
 		}
+		final BiConsumer<String, Integer> released = onSealedReaderReleased;
+		if (released != null && domainType != null) {
+			released.accept(domainType, shard);
+		}
 		if (previous != null) {
 			previous.closeForOverwrite();
 		}
@@ -948,29 +1002,8 @@ public final class SealedGridMapService {
 		}
 	}
 
-	private Set<Integer> listShards(String domainType) throws IOException {
-		final Set<Integer> shards = new LinkedHashSet<>();
-		final String prefix = SealedShardPack.domainHex(domainType) + "_";
-		try (DirectoryStream<Path> files = Files.newDirectoryStream(sealedRoot, prefix + "*_n*.gmap")) {
-			for (Path file : files) {
-				final String name = file.getFileName().toString();
-				final int suffix = name.indexOf("_n", prefix.length());
-				if (suffix < 0) {
-					continue;
-				}
-
-                if (suffix <= prefix.length()) {
-					continue;
-				}
-
-				try {
-					shards.add(Integer.parseInt(name.substring(prefix.length(), suffix)));
-				} catch (NumberFormatException ignored) {
-					// Ignore unrelated files sharing the hash prefix.
-				}
-			}
-		}
-		return shards;
+	private Set<Integer> listShards(String domainType) {
+		return SealedIndexPurgeUtil.discoverShards(sealedRoot, domainType);
 	}
 
 	/**

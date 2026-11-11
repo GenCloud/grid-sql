@@ -56,6 +56,9 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 	public static final String DETAIL_ORCHID_R = "orchidR";
 	public static final String DETAIL_REPAIR_ISSUED = "repairIssued";
 	public static final String DETAIL_REPAIR_APPLIED = "repairApplied";
+	/** OpLog ops applied from REPAIR_REPLY (not locus {@link #DETAIL_REPAIR_APPLIED}). */
+	public static final String DETAIL_REPAIR_REPLY_OPS_APPLIED = "repairReplyOpsApplied";
+	public static final String DETAIL_REPAIR_REPLY_OPS_SKIPPED_OPEN_TX = "repairReplyOpsSkippedOpenTx";
 	public static final String DETAIL_RPO_ESTIMATE_MS = "rpoEstimateMs";
 	public static final String DETAIL_SWARM_HINT = "swarmHint";
 	public static final String DETAIL_HYDRATE_MODE = "hydrateMode";
@@ -78,6 +81,8 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 	public static final String DETAIL_CATALOG_LAG_STUCK = "catalogLagStuck";
 	public static final String DETAIL_CATALOG_INCOMPLETE = "catalogIncomplete";
 	public static final String DETAIL_CATALOG_FINGERPRINT = "catalogFingerprint";
+	public static final String DETAIL_PRIVILEGE_FINGERPRINT = "privilegeFingerprint";
+	public static final String DETAIL_PRIVILEGE_INCOMPLETE = "privilegeIncomplete";
 
 	private static final String REASON_SQL_TCP_DOWN = "sql_tcp_down";
 	private static final String REASON_ORCHID_NOT_SYNCED = "orchid_not_synced";
@@ -152,6 +157,8 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 					.withDetail(DETAIL_CATALOG_LAG_STUCK, Boolean.TRUE)
 					.withDetail(DETAIL_CATALOG_INCOMPLETE, coordinator.isCatalogFingerprintStale())
 					.withDetail(DETAIL_CATALOG_FINGERPRINT, coordinator.catalogFingerprint())
+					.withDetail(DETAIL_PRIVILEGE_INCOMPLETE, coordinator.isPrivilegeFingerprintStale())
+					.withDetail(DETAIL_PRIVILEGE_FINGERPRINT, coordinator.privilegeFingerprint())
 					.withDetail(DETAIL_REASON, REASON_CATALOG_LAG_STUCK))
 					.build();
 		}
@@ -164,7 +171,9 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 				.withDetail(DETAIL_WRITER_ELIGIBLE, coordinator.isWriterEligible())
 				.withDetail(DETAIL_CATALOG_LAG_STUCK, Boolean.FALSE)
 				.withDetail(DETAIL_CATALOG_INCOMPLETE, coordinator.isCatalogFingerprintStale())
-				.withDetail(DETAIL_CATALOG_FINGERPRINT, coordinator.catalogFingerprint()))
+				.withDetail(DETAIL_CATALOG_FINGERPRINT, coordinator.catalogFingerprint())
+				.withDetail(DETAIL_PRIVILEGE_INCOMPLETE, coordinator.isPrivilegeFingerprintStale())
+				.withDetail(DETAIL_PRIVILEGE_FINGERPRINT, coordinator.privilegeFingerprint()))
 				.build();
 	}
 
@@ -231,6 +240,10 @@ public final class GridReadinessHealthIndicator implements HealthIndicator {
 		final HomologousRepair repair = coordinator.getHomologousRepair();
 		builder.withDetail(DETAIL_REPAIR_ISSUED, repair == null ? 0L : repair.repairIssued());
 		builder.withDetail(DETAIL_REPAIR_APPLIED, repair == null ? 0L : repair.repairApplied());
+		builder.withDetail(DETAIL_REPAIR_REPLY_OPS_APPLIED,
+				repair == null ? 0L : repair.repairReplyOpsApplied());
+		builder.withDetail(DETAIL_REPAIR_REPLY_OPS_SKIPPED_OPEN_TX,
+				repair == null ? 0L : repair.repairReplyOpsSkippedOpenTx());
 		final CrossDcPublisher publisher = coordinator.getCrossDcPublisher();
 		final long rpo = publisher == null || publisher.getMetrics() == null
 				? 0L

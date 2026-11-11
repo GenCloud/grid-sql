@@ -34,8 +34,6 @@ import org.genfork.grid.mem.index.btree.comparator.ArraysComparator;
  */
 public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 		extends AbstractSealedFallbackIndex<K, T> {
-	private static final String CLOSED_TOKEN = "closed";
-
 	private final CopyOnWriteArrayList<SealedBPTreeReader> readers = new CopyOnWriteArrayList<>();
 
 	protected AbstractSealedBpTreeFallback(AbstractIndexOperation<K, T> delegate) {
@@ -108,28 +106,13 @@ public abstract class AbstractSealedBpTreeFallback<K, T extends TreeKey<K>>
 					sealed.addAll(part);
 				}
 			} catch (IllegalStateException closedRace) {
-				if (!isClosedReaderFailure(closedRace)) {
+				if (!SealedClosedRaceUtil.isClosedReaderFailure(closedRace)) {
 					throw closedRace;
 				}
 				readers.remove(reader);
 			}
 		}
 		return sealed;
-	}
-
-	private static boolean isClosedReaderFailure(Throwable error) {
-		Throwable cursor = error;
-		while (cursor != null) {
-			final String message = cursor.getMessage();
-			if (message != null && message.startsWith(SealedBPTreeReader.CLOSED_READER_MESSAGE_PREFIX)) {
-				return true;
-			}
-			if (message != null && message.toLowerCase().contains(CLOSED_TOKEN)) {
-				return true;
-			}
-			cursor = cursor.getCause();
-		}
-		return false;
 	}
 
 	/** Open-bound compare modes shared by single-column and composite sealed leaf walks. */

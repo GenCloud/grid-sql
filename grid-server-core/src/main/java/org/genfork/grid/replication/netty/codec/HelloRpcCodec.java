@@ -29,6 +29,7 @@ import java.util.List;
  * HELLO handshake encode/decode (identity + duplex schema + Multi-DC region + catalog applied).
  * <p>
  * Optional trailing sealed shard inventory after aggregate sealed fingerprint (legacy peers omit).
+ * Optional privilege fingerprint after inventory (legacy peers omit → {@code 0}).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -46,12 +47,15 @@ public final class HelloRpcCodec {
 	private static final int HELLO_SEALED_ARTIFACTS_FINGERPRINT_BYTES = Long.BYTES;
 	/** Inventory entry count after sealed aggregate fingerprint (optional). */
 	private static final int HELLO_SEALED_INVENTORY_COUNT_BYTES = Integer.BYTES;
+	/** Trailing privilege fingerprint after sealed inventory (optional). */
+	private static final int HELLO_PRIVILEGE_FINGERPRINT_BYTES = Long.BYTES;
 	/** Legacy HELLO without region fields reports epoch {@code 0} / role {@code 0}. */
 	private static final long HELLO_LEGACY_REGION_EPOCH = 0L;
 	private static final byte HELLO_LEGACY_REGION_ROLE = 0;
 	private static final long HELLO_LEGACY_CATALOG_APPLIED = 0L;
 	private static final long HELLO_LEGACY_CATALOG_FINGERPRINT = 0L;
 	private static final long HELLO_LEGACY_SEALED_ARTIFACTS_FINGERPRINT = 0L;
+	private static final long HELLO_LEGACY_PRIVILEGE_FINGERPRINT = 0L;
 	/** Soft cap on HELLO sealed inventory entries (advertising only). */
 	private static final int HELLO_SEALED_INVENTORY_MAX_ENTRIES = 16_384;
 
@@ -83,7 +87,8 @@ public final class HelloRpcCodec {
 						+ HELLO_CATALOG_APPLIED_BYTES
 						+ HELLO_CATALOG_FINGERPRINT_BYTES
 						+ HELLO_SEALED_ARTIFACTS_FINGERPRINT_BYTES
-						+ inventoryBytes);
+						+ inventoryBytes
+						+ HELLO_PRIVILEGE_FINGERPRINT_BYTES);
 		EncodeBuffers.putLengthPrefixed(buf, nodeId);
 		EncodeBuffers.putLengthPrefixed(buf, clusterId);
 		EncodeBuffers.putLengthPrefixed(buf, localDc);
@@ -109,6 +114,7 @@ public final class HelloRpcCodec {
 			written++;
 		}
 		buf.putInt(countPos, written);
+		buf.putLong(hello.privilegeFingerprint());
 		return EncodeBuffers.toByteArray(buf);
 	}
 
@@ -123,6 +129,7 @@ public final class HelloRpcCodec {
 		long catalogAppliedEpoch = HELLO_LEGACY_CATALOG_APPLIED;
 		long catalogFingerprint = HELLO_LEGACY_CATALOG_FINGERPRINT;
 		long sealedArtifactsFingerprint = HELLO_LEGACY_SEALED_ARTIFACTS_FINGERPRINT;
+		long privilegeFingerprint = HELLO_LEGACY_PRIVILEGE_FINGERPRINT;
 		List<SealedShardInventoryEntry> inventory = List.of();
 		if (buf.remaining() >= HELLO_REGION_EPOCH_BYTES) {
 			regionEpoch = buf.getLong();
@@ -158,8 +165,12 @@ public final class HelloRpcCodec {
 				inventory = Collections.unmodifiableList(entries);
 			}
 		}
+		if (buf.remaining() >= HELLO_PRIVILEGE_FINGERPRINT_BYTES) {
+			privilegeFingerprint = buf.getLong();
+		}
 		return new Hello(
 				nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole,
-				catalogAppliedEpoch, catalogFingerprint, sealedArtifactsFingerprint, inventory);
+				catalogAppliedEpoch, catalogFingerprint, sealedArtifactsFingerprint, inventory,
+				privilegeFingerprint);
 	}
 }

@@ -27,6 +27,8 @@ import java.util.List;
  * {@code catalogFingerprint} is the peer live object-set hash (replica-read / reconcile fence).
  * {@code sealedArtifactsFingerprint} is the peer sealed aggregate name+size identity (metrics).
  * {@code sealedShardInventory} is optional per-shard identity for differential heal / fence.
+ * {@code privilegeFingerprint} is the peer privileges.meta identity (AUTH reconcile; orthogonal
+ * to schema {@code catalogFingerprint}; legacy / pre-bind = {@code 0}).
  *
  * @author: GenCloud
  * @date: 2026/03
@@ -42,6 +44,27 @@ public record DiscoveredPeer(
 		long catalogAppliedEpoch,
 		long catalogFingerprint,
 		long sealedArtifactsFingerprint,
-		List<SealedShardInventoryEntry> sealedShardInventory
+		List<SealedShardInventoryEntry> sealedShardInventory,
+		long privilegeFingerprint
 ) {
+	/**
+	 * Legacy ctor without privilege fingerprint (defaults to {@code 0}).
+	 */
+	public DiscoveredPeer(
+			String id,
+			String host,
+			int port,
+			String dc,
+			long regionEpoch,
+			byte regionRole,
+			long catalogAppliedEpoch,
+			long catalogFingerprint,
+			long sealedArtifactsFingerprint,
+			List<SealedShardInventoryEntry> sealedShardInventory
+	) {
+		this(
+				id, host, port, dc, regionEpoch, regionRole,
+				catalogAppliedEpoch, catalogFingerprint, sealedArtifactsFingerprint,
+				sealedShardInventory, 0L);
+	}
 }

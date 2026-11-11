@@ -72,6 +72,9 @@ import org.genfork.grid.replication.util.MissingStreamAdmitState;
 import org.genfork.grid.replication.util.OpLogArchiveUtil;
 import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
 import org.genfork.grid.replication.util.ProposerMissingStreamUtil;
+import org.genfork.grid.replication.snapshot.sealed.SealedShardListingIndexUtil;
+import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
+import org.genfork.grid.replication.util.SealedIntegrityProbeCacheUtil;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil.PackDebounce;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil.Probe;
@@ -86,7 +89,10 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -195,6 +201,8 @@ public class ReplicationCoordinator {
 	private final ConcurrentHashMap<String, Long> peerCatalogApplied = new ConcurrentHashMap<>();
 	/** Peer HELLO {@code catalogFingerprint} by node id. */
 	private final ConcurrentHashMap<String, Long> peerCatalogFingerprint = new ConcurrentHashMap<>();
+	/** Peer HELLO {@code privilegeFingerprint} by node id. */
+	private final ConcurrentHashMap<String, Long> peerPrivilegeFingerprint = new ConcurrentHashMap<>();
 	/** Peer HELLO per-shard sealed identity: peerId → (domain#shard → fp). */
 	private final ConcurrentHashMap<String, ConcurrentHashMap<String, Long>> peerSealedShardFpByNode =
 			new ConcurrentHashMap<>();
@@ -212,18 +220,28 @@ public class ReplicationCoordinator {
 	/** Coalesce eager inventory rebuild on helloCatchUp mailbox. */
 	private final AtomicBoolean sealedInventoryRebuildQueued = new AtomicBoolean(false);
 	/**
-	 * Writer fingerprint last shipped as journal snapshot per peer.
-	 * Prevents HELLO↔apply storms when peer object-set cannot converge from CREATE* diff alone.
+	 * Writer schema+privilege fingerprint pair last shipped as journal snapshot per peer.
+	 * Prevents HELLO↔apply storms when peer object-set cannot converge from CREATE* diff alone;
+	 * privilege-only drift must re-ship after schema already matched.
 	 */
-	private final ConcurrentHashMap<String, Long> catalogSnapshotShippedLocalFp = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, CatalogSnapshotShipKey> catalogSnapshotShipped =
+			new ConcurrentHashMap<>();
 	/** Local catalog object-set fingerprint (SqlEngine bind). */
 	private volatile Supplier<Long> catalogFingerprintSupplier = () -> 0L;
+	/** Local privilege catalog fingerprint (SqlEngine bind). */
+	private volatile Supplier<Long> privilegeFingerprintSupplier = () -> 0L;
 	/** Writer compact ddl lines for journal reconcile ship. */
 	private volatile Supplier<List<String>> catalogCompactLinesSupplier = List::of;
+	/** Writer privileges.meta snapshot bytes for journal reconcile ship. */
+	private volatile Supplier<byte[]> privilegeSnapshotSupplier = () -> EMPTY_PRIVILEGE_SNAPSHOT;
 	/** Local maxApplied DDL epoch for reconcile base. */
 	private volatile Supplier<Long> catalogMaxAppliedSupplier = () -> 0L;
 	/** Peer catalog journal snapshot apply (SqlEngine). */
 	private volatile Consumer<CatalogDdlSnapshot> catalogSnapshotApplyHandler;
+	private static final byte[] EMPTY_PRIVILEGE_SNAPSHOT = new byte[0];
+
+	private record CatalogSnapshotShipKey(long schemaFp, long privilegeFp) {
+	}
 	/** APPLY_NACK heal coalesce (cluster-wide; fan-out safe). */
 	private final CoalesceState applyNackHealState = new CoalesceState();
 	/** Sealed header sensor pack-request debounce. */
@@ -326,6 +344,28 @@ public class ReplicationCoordinator {
 			Supplier<Long> maxAppliedSupplier,
 			Consumer<CatalogDdlSnapshot> snapshotApplyHandler
 	) {
+		bindSqlCatalog(
+				handler,
+				fingerprintSupplier,
+				compactLinesSupplier,
+				maxAppliedSupplier,
+				snapshotApplyHandler,
+				() -> 0L,
+				() -> EMPTY_PRIVILEGE_SNAPSHOT);
+	}
+
+	/**
+	 * Full catalog bind including privilege fingerprint / {@code privileges.meta} snapshot ship.
+	 */
+	public void bindSqlCatalog(
+			ReplicaApplier.CatalogDdlHandler handler,
+			Supplier<Long> fingerprintSupplier,
+			Supplier<List<String>> compactLinesSupplier,
+			Supplier<Long> maxAppliedSupplier,
+			Consumer<CatalogDdlSnapshot> snapshotApplyHandler,
+			Supplier<Long> privilegeFpSupplier,
+			Supplier<byte[]> privilegeMetaSupplier
+	) {
 		if (!enabled || handler == null) {
 			return;
 		}
@@ -334,6 +374,10 @@ public class ReplicationCoordinator {
 		this.catalogCompactLinesSupplier = compactLinesSupplier == null ? List::of : compactLinesSupplier;
 		this.catalogMaxAppliedSupplier = maxAppliedSupplier == null ? () -> 0L : maxAppliedSupplier;
 		this.catalogSnapshotApplyHandler = snapshotApplyHandler;
+		this.privilegeFingerprintSupplier = privilegeFpSupplier == null ? () -> 0L : privilegeFpSupplier;
+		this.privilegeSnapshotSupplier = privilegeMetaSupplier == null
+				? () -> EMPTY_PRIVILEGE_SNAPSHOT
+				: privilegeMetaSupplier;
 		if (sealedHydrateService != null) {
 			sealedHydrateService.beginCatalogBootstrap();
 		}
@@ -358,6 +402,8 @@ public class ReplicationCoordinator {
 		if (sealedHydrateService != null) {
 			sealedHydrateService.markCatalogBootstrapComplete();
 		}
+		// Catalog domains now registered — rebuild HELLO inventory before advertise (P1b).
+		invalidateSealedStructuralHoleCache();
 		if (nettyTransport != null && peerTransportEnabled) {
 			nettyTransport.broadcastHello();
 		}
@@ -499,6 +545,8 @@ public class ReplicationCoordinator {
 				sealedGridMapService,
 				homologousRepair,
 				appliers);
+		sealedGridMapService.setOnSealedReaderReleased(sealedHydrateService::clearShardHydrateMemo);
+		sealedHydrateService.setAfterSealedDiskChange(this::invalidateSealedStructuralHoleCache);
 		// AUTH applyLagStale: serving/hydrated streams only — untouched LAZY tip debt is not stale.
 		regionClaimService.setServingStreamKeyPredicate(streamKey -> {
 			if (!sealedHydrateService.isLazyHydrate()) {
@@ -531,7 +579,8 @@ public class ReplicationCoordinator {
 				regionClaimService::regionRoleWire,
 				this::catalogAppliedEpoch,
 				this::catalogFingerprint,
-				this::sealedArtifactsFingerprint);
+				this::sealedArtifactsFingerprint,
+				this::privilegeFingerprint);
 		nettyTransport.setSealedShardInventorySupplier(this::sealedShardInventory);
 		nettyTransport.setSealedGridMapService(sealedGridMapService);
 		nettyTransport.setApplyNackHealHandler(this::onApplyNackHeal);
@@ -539,6 +588,8 @@ public class ReplicationCoordinator {
 			sealedHydrateService.onSealedShardPack(msg);
 			invalidateSealedStructuralHoleCache();
 		});
+		sealedHydrateService.setSealedBaselineAckHandler((donorNodeId, domainType, shard, watermark) ->
+				nettyTransport.sendApplyAck(donorNodeId, domainType, shard, watermark));
 		nettyTransport.setCatalogDdlSnapshotHandler(this::onCatalogDdlSnapshotBody);
 		nettyTransport.setRegionClaimHandlers(regionClaimService::onRegionClaimReqBuildAck, regionClaimService::onRegionClaimAck);
 		regionClaimService.seedObservedState();
@@ -825,6 +876,11 @@ public class ReplicationCoordinator {
 			}
 		}
 		pipelineSchemaBarrier(domainType);
+		// Post-bootstrap domain bind: refresh HELLO sealedShards (P1b). Mid-recover skips —
+		// markCatalogBootstrapComplete rebuilds once with the full set.
+		if (sealedHydrateService != null && sealedHydrateService.isCatalogBootstrapComplete()) {
+			invalidateSealedStructuralHoleCache();
+		}
 	}
 
 	/** FULL hydrate + finishDomainRegistration for domains bound during nested {@code _catalog} DDL. */
@@ -1352,6 +1408,7 @@ public class ReplicationCoordinator {
 		sealedInventoryCachedEpoch.set(-1L);
 		sealedInventoryCache.set(List.of());
 		peerSealedInventoryIdentityByNode.clear();
+		SealedShardListingIndexUtil.invalidate();
 		if (sealedGridMapService != null) {
 			sealedGridMapService.invalidateSealedIdentityCache();
 		}
@@ -1385,9 +1442,28 @@ public class ReplicationCoordinator {
 	private void rebuildSealedInventoryAdmitState() {
 		final long startedNs = System.nanoTime();
 		sealedInventoryCachedEpoch.set(-1L);
+		rebuildSealedListingIndexQuiet();
 		sealedShardInventory();
+		// Warm structural-hole admit cache off the sensor path so matched-FP ticks can
+		// skip DirectoryStream (peekCachedStructuralHoleOrNull → false). Sensor never
+		// rebuilds this synchronously — see sealedIntegritySensorTick fast-path.
+		hasLocalSealedStructuralHole();
 		ReplicationMetrics.recordSealedInventoryRebuild(
 				Math.max(0L, System.nanoTime() - startedNs));
+	}
+
+	/**
+	 * One full sealed-root DirectoryStream → prefix index for {@link SealedShardPack#listShardFiles}.
+	 */
+	private void rebuildSealedListingIndexQuiet() {
+		if (durableDataDir == null) {
+			return;
+		}
+		try {
+			SealedShardListingIndexUtil.rebuildAndInstall(durableDataDir.resolve("sealed"));
+		} catch (Exception ignored) {
+			SealedShardListingIndexUtil.invalidate();
+		}
 	}
 
 	private void publishMissingStreamAdmitFromInventory(List<SealedShardInventoryEntry> inventory) {
@@ -1495,7 +1571,7 @@ public class ReplicationCoordinator {
 	}
 
 	/**
-	 * Local catalog object-set fingerprint (HELLO / ServerMeta).
+	 * Local catalog object-set fingerprint (HELLO / ServerMeta). Schema only — not privileges.
 	 */
 	public long catalogFingerprint() {
 		final Long value = catalogFingerprintSupplier.get();
@@ -1503,8 +1579,17 @@ public class ReplicationCoordinator {
 	}
 
 	/**
+	 * Local privilege catalog fingerprint (HELLO trailing). {@code 0} when open/unbound.
+	 */
+	public long privilegeFingerprint() {
+		final Long value = privilegeFingerprintSupplier.get();
+		return value == null ? 0L : value;
+	}
+
+	/**
 	 * {@code true} when any observed peer HELLO fingerprint differs from local (VIEW/TABLE hole).
 	 * Peer fingerprint {@code 0} is legacy / pre-bind unknown — not a mismatch.
+	 * Privilege drift is orthogonal — see {@link #isPrivilegeFingerprintStale()}.
 	 */
 	public boolean isCatalogFingerprintStale() {
 		final long local = catalogFingerprint();
@@ -1512,6 +1597,24 @@ public class ReplicationCoordinator {
 			return false;
 		}
 		for (Long peerFp : peerCatalogFingerprint.values()) {
+			if (peerFp != null && peerFp != 0L && peerFp != local) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * {@code true} when any observed peer privilege fingerprint differs from local (AUTH hole).
+	 * Peer fingerprint {@code 0} is legacy / pre-bind unknown — not a mismatch.
+	 * Does <strong>not</strong> feed {@link #isApplyLagStale()} / replica-read schema fence.
+	 */
+	public boolean isPrivilegeFingerprintStale() {
+		final long local = privilegeFingerprint();
+		if (local == 0L || peerPrivilegeFingerprint.isEmpty()) {
+			return false;
+		}
+		for (Long peerFp : peerPrivilegeFingerprint.values()) {
 			if (peerFp != null && peerFp != 0L && peerFp != local) {
 				return true;
 			}
@@ -1598,10 +1701,11 @@ public class ReplicationCoordinator {
 			observePeerCatalogFence(
 					discovered.id(),
 					discovered.catalogAppliedEpoch(),
-					discovered.catalogFingerprint());
+					discovered.catalogFingerprint(),
+					discovered.privilegeFingerprint());
 			observePeerSealedFence(
 					discovered.id(),
-                    discovered.sealedShardInventory());
+					discovered.sealedShardInventory());
 		}
 		if (peerMembershipService != null) {
 			peerMembershipService.onPeerDiscovered(discovered);
@@ -1703,55 +1807,102 @@ public class ReplicationCoordinator {
 	}
 
 	/**
-	 * Union of OpLog stream keys and sealed registered shards for sealed heal fan-out.
+	 * Union of OpLog stream keys, sealed registered shards, and sealed-root disk identities
+	 * (unique {@code domain#shard}) for HELLO inventory / sealed heal fan-out.
 	 */
 	private void forEachSealedHealStream(BiConsumer<String, Integer> consumer) {
 		if (consumer == null) {
 			return;
 		}
+		final Set<String> emitted = new HashSet<>();
+		final BiConsumer<String, Integer> once = (domain, shard) -> {
+			if (domain == null || shard == null || shard < 0) {
+				return;
+			}
+			if (emitted.add(OpLogStreamKeyUtil.format(domain, shard))) {
+				consumer.accept(domain, shard);
+			}
+		};
 		if (opLog != null) {
 			for (String streamKey : opLog.streamKeys()) {
 				final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
 				if (parsed != null) {
-					consumer.accept(parsed.domain(), parsed.shard());
+					once.accept(parsed.domain(), parsed.shard());
 				}
 			}
 		}
-		if (sealedGridMapService != null) {
-			sealedGridMapService.forEachRegisteredShard(consumer);
+		if (sealedGridMapService == null) {
+			return;
 		}
+		final Set<String> knownDomains = new HashSet<>(sealedGridMapService.registeredDomainNames());
+		if (appliers != null) {
+			knownDomains.addAll(appliers.keySet());
+		}
+		if (opLog != null) {
+			for (String streamKey : opLog.streamKeys()) {
+				final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+				if (parsed != null && parsed.domain() != null) {
+					knownDomains.add(parsed.domain());
+				}
+			}
+		}
+		sealedGridMapService.forEachDomainShards(knownDomains, once);
 	}
 
 	/**
 	 * HELLO / catch-up catalog fence: remember peer applied watermark + object-set fingerprint,
-	 * pull {@code _catalog} when behind, ship compacted journal when writer sees a hole.
+	 * pull {@code _catalog} when behind, ship compacted journal when writer sees a schema or
+	 * privilege hole.
 	 */
 	public void observePeerCatalogFence(String peerId, long peerCatalogAppliedEpoch, long peerCatalogFingerprint) {
+		observePeerCatalogFence(peerId, peerCatalogAppliedEpoch, peerCatalogFingerprint, 0L);
+	}
+
+	/**
+	 * HELLO / catch-up catalog fence including privilege fingerprint.
+	 */
+	public void observePeerCatalogFence(
+			String peerId,
+			long peerCatalogAppliedEpoch,
+			long peerCatalogFingerprint,
+			long peerPrivilegeFingerprint
+	) {
 		if (peerId == null) {
 			return;
 		}
 		peerCatalogApplied.put(peerId, Math.max(0L, peerCatalogAppliedEpoch));
 		final Long previousPeerFp = this.peerCatalogFingerprint.put(peerId, peerCatalogFingerprint);
+		final Long previousPrivFp = this.peerPrivilegeFingerprint.put(peerId, peerPrivilegeFingerprint);
 		final long localApplied = catalogAppliedEpoch();
 		if (peerCatalogAppliedEpoch > localApplied && nettyTransport != null) {
 			final long fromSeq = Math.max(1L, localApplied + 1L);
 			nettyTransport.sendOplogPull(peerId, CATALOG_DOMAIN, CATALOG_SHARD, fromSeq);
 		}
-		final long localFp = catalogFingerprint();
-		if (peerCatalogFingerprint != 0L && peerCatalogFingerprint == localFp) {
-			catalogSnapshotShippedLocalFp.remove(peerId);
+		final long localSchemaFp = catalogFingerprint();
+		final long localPrivFp = privilegeFingerprint();
+		final boolean schemaMatched = peerCatalogFingerprint != 0L && peerCatalogFingerprint == localSchemaFp;
+		final boolean privilegeMatched = peerPrivilegeFingerprint != 0L && peerPrivilegeFingerprint == localPrivFp;
+		final boolean privilegeUnknown = peerPrivilegeFingerprint == 0L || localPrivFp == 0L;
+		if (schemaMatched && (privilegeMatched || privilegeUnknown)) {
+			catalogSnapshotShipped.remove(peerId);
 			return;
 		}
-		if (previousPeerFp != null
+		if ((previousPeerFp != null
 				&& previousPeerFp != 0L
-				&& previousPeerFp != peerCatalogFingerprint) {
-			// Peer object-set moved but still mismatches — allow one more reconcile ship.
-			catalogSnapshotShippedLocalFp.remove(peerId);
+				&& previousPeerFp != peerCatalogFingerprint)
+				|| (previousPrivFp != null
+				&& previousPrivFp != 0L
+				&& previousPrivFp != peerPrivilegeFingerprint)) {
+			// Peer object-set / privileges moved but still mismatch — allow one more reconcile ship.
+			catalogSnapshotShipped.remove(peerId);
 		}
-		if (localFp != 0L
+		final boolean schemaHole = localSchemaFp != 0L
 				&& peerCatalogFingerprint != 0L
-				&& localFp != peerCatalogFingerprint
-				&& isWriterEligible()) {
+				&& localSchemaFp != peerCatalogFingerprint;
+		final boolean privilegeHole = localPrivFp != 0L
+				&& peerPrivilegeFingerprint != 0L
+				&& localPrivFp != peerPrivilegeFingerprint;
+		if ((schemaHole || privilegeHole) && isWriterEligible()) {
 			shipCatalogDdlSnapshotToPeer(peerId, peerCatalogAppliedEpoch);
 		}
 	}
@@ -1760,17 +1911,30 @@ public class ReplicationCoordinator {
 		if (!isWriterEligible() || nettyTransport == null) {
 			return;
 		}
-		final long localFp = catalogFingerprint();
-		if (localFp == 0L) {
+		final long localSchemaFp = catalogFingerprint();
+		final long localPrivFp = privilegeFingerprint();
+		if (localSchemaFp == 0L && localPrivFp == 0L) {
 			return;
 		}
-		for (Map.Entry<String, Long> e : peerCatalogFingerprint.entrySet()) {
-			final Long peerFp = e.getValue();
-			if (peerFp == null || peerFp == 0L || peerFp == localFp) {
+		final Set<String> peers = new HashSet<>();
+		peers.addAll(peerCatalogFingerprint.keySet());
+		peers.addAll(peerPrivilegeFingerprint.keySet());
+		for (String peerId : peers) {
+			final Long peerSchemaFp = peerCatalogFingerprint.get(peerId);
+			final Long peerPrivFp = peerPrivilegeFingerprint.get(peerId);
+			final boolean schemaHole = localSchemaFp != 0L
+					&& peerSchemaFp != null
+					&& peerSchemaFp != 0L
+					&& peerSchemaFp != localSchemaFp;
+			final boolean privilegeHole = localPrivFp != 0L
+					&& peerPrivFp != null
+					&& peerPrivFp != 0L
+					&& peerPrivFp != localPrivFp;
+			if (!schemaHole && !privilegeHole) {
 				continue;
 			}
-			final long peerApplied = peerCatalogApplied.getOrDefault(e.getKey(), 0L);
-			shipCatalogDdlSnapshotToPeer(e.getKey(), peerApplied);
+			final long peerApplied = peerCatalogApplied.getOrDefault(peerId, 0L);
+			shipCatalogDdlSnapshotToPeer(peerId, peerApplied);
 		}
 	}
 
@@ -1778,13 +1942,20 @@ public class ReplicationCoordinator {
 		if (nettyTransport == null || peerId == null) {
 			return;
 		}
-		final List<String> lines = catalogCompactLinesSupplier.get();
-		if (lines == null || lines.isEmpty()) {
+		final List<String> linesRaw = catalogCompactLinesSupplier.get();
+		final List<String> lines = linesRaw == null ? List.of() : linesRaw;
+		final byte[] privilegesRaw = privilegeSnapshotSupplier.get();
+		final byte[] privileges = privilegesRaw == null || privilegesRaw.length == 0
+				? EMPTY_PRIVILEGE_SNAPSHOT
+				: privilegesRaw;
+		if (lines.isEmpty() && privileges.length == 0) {
 			return;
 		}
-		final long localFp = catalogFingerprint();
-		final Long shipped = catalogSnapshotShippedLocalFp.get(peerId);
-		if (shipped != null && shipped == localFp) {
+		final long localSchemaFp = catalogFingerprint();
+		final long localPrivFp = privilegeFingerprint();
+		final CatalogSnapshotShipKey key = new CatalogSnapshotShipKey(localSchemaFp, localPrivFp);
+		final CatalogSnapshotShipKey shipped = catalogSnapshotShipped.get(peerId);
+		if (shipped != null && shipped.equals(key)) {
 			return;
 		}
 		final Long maxApplied = catalogMaxAppliedSupplier.get();
@@ -1793,16 +1964,19 @@ public class ReplicationCoordinator {
 				Math.max(0L, peerCatalogAppliedEpoch));
 		final CatalogDdlSnapshot snapshot = new CatalogDdlSnapshot(
 				nodeState == null ? "" : nodeState.getNodeId(),
-				localFp,
+				localSchemaFp,
 				base,
-				lines);
+				lines,
+				privileges);
 		log.info(
-				"Shipping catalog DDL snapshot to peer={} lines={} localFp={} baseEpoch={}",
+				"Shipping catalog DDL snapshot to peer={} lines={} privilegeBytes={} localSchemaFp={} localPrivFp={} baseEpoch={}",
 				peerId,
 				lines.size(),
-				localFp,
+				privileges.length,
+				localSchemaFp,
+				localPrivFp,
 				base);
-		catalogSnapshotShippedLocalFp.put(peerId, localFp);
+		catalogSnapshotShipped.put(peerId, key);
 		nettyTransport.sendCatalogDdlSnapshot(peerId, CatalogDdlSnapshotRpcCodec.encode(snapshot));
 	}
 
@@ -1812,17 +1986,28 @@ public class ReplicationCoordinator {
 		}
 		final CatalogDdlSnapshot snapshot = CatalogDdlSnapshotRpcCodec.decode(body);
 		final long beforeFp = catalogFingerprint();
+		final long beforePriv = privilegeFingerprint();
 		catalogSnapshotApplyHandler.accept(snapshot);
 		final long afterFp = catalogFingerprint();
+		final long afterPriv = privilegeFingerprint();
+		final int privilegeBytes = snapshot.privilegesMetaBytes() == null
+				? 0
+				: snapshot.privilegesMetaBytes().length;
+		if (privilegeBytes > 0) {
+			ReplicationMetrics.recordCatalogPrivilegeHealApplied();
+		}
 		log.info(
-				"Catalog DDL snapshot applied from={} lines={} writerFp={} baseEpoch={} fp {} -> {}",
+				"Catalog DDL snapshot applied from={} lines={} privilegeBytes={} writerFp={} baseEpoch={} schemaFp {} -> {} privilegeFp {} -> {}",
 				snapshot.fromNodeId(),
 				snapshot.compactLines() == null ? 0 : snapshot.compactLines().size(),
+				privilegeBytes,
 				snapshot.catalogFingerprint(),
 				snapshot.baseEpochExclusive(),
 				beforeFp,
-				afterFp);
-		// Re-advertise live fingerprint so writer/peers clear object-set fence after heal.
+				afterFp,
+				beforePriv,
+				afterPriv);
+		// Re-advertise live fingerprint so writer/peers clear object-set / privilege fence after heal.
 		if (nettyTransport != null && peerTransportEnabled) {
 			nettyTransport.broadcastHello();
 		}
@@ -2138,9 +2323,17 @@ public class ReplicationCoordinator {
 					continue;
 				}
 
+				final long peerAck = nodeState.peerAck(peer.id(), domain, shard);
+				// Sealed truncate catch-up owns the stream until peer ACK ≥ trunc — no locus REPAIR spam.
+				if (HelloSealedCatchUpUtil.needsSealedBaseline(opLog, domain, shard, peerAck)) {
+					if (!HelloSealedCatchUpUtil.isPeerShipGateActive(peer.id(), domain, shard)) {
+						HelloSealedCatchUpUtil.shipSealedBaseline(
+								sealedGridMapService, nettyTransport, peer.id(), domain, shard);
+					}
+					continue;
+				}
 				if (!fullReconcile) {
 					final long lastSeq = opLog.lastSeq(domain, shard);
-					final long peerAck = nodeState.peerAck(peer.id(), domain, shard);
 					// Caught up or soft in-flight lag: skip O(keys) locus encode/ship.
 					// Checksum heal remains on full cadence; OpLog publisher streams catch-up.
 					if (lastSeq > 0L) {
@@ -2158,6 +2351,10 @@ public class ReplicationCoordinator {
 	/**
 	 * Per-shard structural + peer inventory sensor → ≤1 OPLOG_PULL per mismatched shard/window.
 	 * No aggregate root-FP fan-out (that caused HELLO sealed ship storms).
+	 * <p>
+	 * Local DirectoryStream probe is memoized once per {@code domain#shard} per tick (not × peers).
+	 * Matched HELLO inventory FP + warm structural-hole cache skips FS except slow cadence
+	 * ({@link #REPAIR_FULL_RECONCILE_EVERY}).
 	 */
 	private void sealedIntegritySensorTick() {
 		if (sealedGridMapService == null || durableDataDir == null || peers.isEmpty() || nettyTransport == null) {
@@ -2165,6 +2362,14 @@ public class ReplicationCoordinator {
 		}
 		final Path sealedRoot = durableDataDir.resolve("sealed");
 		final long now = System.currentTimeMillis();
+		final long tick = repairTickCount.get();
+		final boolean slowStructural = (tick % REPAIR_FULL_RECONCILE_EVERY) == 0L;
+		final Boolean cachedHole = peekCachedStructuralHoleOrNull();
+		final HashMap<String, Probe> headerMemo = new HashMap<>();
+		final HashMap<String, List<Path>> listedMemo = new HashMap<>();
+		final HashSet<String> healKeys = new HashSet<>();
+		forEachSealedHealStream((domain, shard) ->
+				healKeys.add(OpLogStreamKeyUtil.format(domain, shard)));
 		for (ReplicationPeer peer : peers) {
 			if (peer == null || peer.id() == null) {
 				continue;
@@ -2173,14 +2378,32 @@ public class ReplicationCoordinator {
 			if (peerShardMap == null || peerShardMap.isEmpty()) {
 				continue;
 			}
-			forEachSealedHealStream((domain, shard) ->
-					sealedIntegritySensorPullIfNeeded(peer.id(), peerShardMap, sealedRoot, domain, shard, now));
+			for (String streamKey : healKeys) {
+				final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(streamKey);
+				if (parsed == null || parsed.domain() == null) {
+					continue;
+				}
+				sealedIntegritySensorPullIfNeeded(
+						peer.id(),
+						peerShardMap,
+						sealedRoot,
+						parsed.domain(),
+						parsed.shard(),
+						now,
+						slowStructural,
+						cachedHole,
+						headerMemo,
+						listedMemo);
+			}
 			// Remote-only streams advertised by peer but absent from local heal set.
 			for (Map.Entry<String, Long> advertised : peerShardMap.entrySet()) {
 				if (advertised == null || advertised.getKey() == null || advertised.getValue() == null) {
 					continue;
 				}
 				if (advertised.getValue() == 0L) {
+					continue;
+				}
+				if (healKeys.contains(advertised.getKey())) {
 					continue;
 				}
 				final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(advertised.getKey());
@@ -2191,9 +2414,31 @@ public class ReplicationCoordinator {
 					continue;
 				}
 				sealedIntegritySensorPullIfNeeded(
-						peer.id(), peerShardMap, sealedRoot, parsed.domain(), parsed.shard(), now);
+						peer.id(),
+						peerShardMap,
+						sealedRoot,
+						parsed.domain(),
+						parsed.shard(),
+						now,
+						slowStructural,
+						cachedHole,
+						headerMemo,
+						listedMemo);
 			}
 		}
+	}
+
+	/**
+	 * Warm structural-hole admit cache only — never triggers all-shard DirectoryStream rebuild.
+	 *
+	 * @return cached hole bit, or {@code null} when epoch cold / unknown
+	 */
+	private Boolean peekCachedStructuralHoleOrNull() {
+		final long epoch = sealedStructuralHoleEpoch.get();
+		if (sealedStructuralHoleCachedEpoch.get() == epoch) {
+			return sealedStructuralHoleCached.get();
+		}
+		return null;
 	}
 
 	private void sealedIntegritySensorPullIfNeeded(
@@ -2202,28 +2447,46 @@ public class ReplicationCoordinator {
 			Path sealedRoot,
 			String domain,
 			int shard,
-			long now
+			long now,
+			boolean slowStructural,
+			Boolean cachedStructuralHoleOrNull,
+			Map<String, Probe> headerMemo,
+			Map<String, List<Path>> listedMemo
 	) {
 		final String streamKey = OpLogStreamKeyUtil.format(domain, shard);
-		final Probe headerProbe = SealedIntegritySensorUtil.probeAllGmapHeaders(sealedRoot, domain, shard);
+		final Long peerFpBoxed = peerShardMap.get(streamKey);
+		final long peerFp = peerFpBoxed == null ? 0L : peerFpBoxed;
+		final long localFpMem = missingStreamAdmitState.index().fingerprint(domain, shard);
+		if (SealedIntegrityProbeCacheUtil.canSkipStructuralDiskProbe(
+				slowStructural, cachedStructuralHoleOrNull, localFpMem, peerFp)) {
+			return;
+		}
+		final Probe headerProbe = resolveHeaderProbeMemo(
+				sealedRoot, domain, shard, streamKey, headerMemo, listedMemo);
 		Probe probe = headerProbe;
-		final Long peerFp = peerShardMap.get(streamKey);
-		if (peerFp != null && peerFp != 0L) {
-			long localFp = missingStreamAdmitState.index().fingerprint(domain, shard);
+		if (peerFp != 0L) {
+			long localFp = localFpMem;
 			if (localFp == 0L || localFp != peerFp) {
 				try {
 					ReplicationMetrics.recordSealedInventoryDiskProbe();
-					localFp = SealedPackFingerprint.ofShardIdentity(sealedRoot, domain, shard);
+					final List<Path> listed = resolveListedMemo(
+							sealedRoot, domain, shard, streamKey, listedMemo);
+					localFp = SealedPackFingerprint.ofFilesIdentity(listed);
+					if (!headerMemo.containsKey(streamKey)) {
+						final Probe fromListed = SealedIntegritySensorUtil.probeAllGmapHeadersListed(listed);
+						headerMemo.put(streamKey, fromListed);
+						probe = fromListed;
+					}
 				} catch (Exception ignored) {
 					localFp = 0L;
 				}
 			}
 			probe = SealedIntegritySensorUtil.combine(
-					headerProbe,
+					headerMemo.getOrDefault(streamKey, headerProbe),
 					SealedIntegritySensorUtil.probeFingerprintMismatch(localFp, peerFp));
 		}
 		if (probe == Probe.MISSING) {
-			if (peerFp == null || peerFp == 0L) {
+			if (peerFp == 0L) {
 				return;
 			}
 		} else if (!SealedIntegritySensorUtil.needsPeerPack(probe)) {
@@ -2236,6 +2499,45 @@ public class ReplicationCoordinator {
 		nettyTransport.sendOplogPull(
 				peerId, domain, shard, SealedIntegritySensorUtil.SEALED_INTEGRITY_PULL_FROM_SEQ);
 		ReplicationMetrics.recordSealedIntegrityPackRequested();
+	}
+
+	private static Probe resolveHeaderProbeMemo(
+			Path sealedRoot,
+			String domain,
+			int shard,
+			String streamKey,
+			Map<String, Probe> headerMemo,
+			Map<String, List<Path>> listedMemo
+	) {
+		final Probe cached = headerMemo.get(streamKey);
+		if (cached != null) {
+			return cached;
+		}
+		try {
+			final List<Path> listed = resolveListedMemo(sealedRoot, domain, shard, streamKey, listedMemo);
+			final Probe probe = SealedIntegritySensorUtil.probeAllGmapHeadersListed(listed);
+			headerMemo.put(streamKey, probe);
+			return probe;
+		} catch (IOException ignored) {
+			headerMemo.put(streamKey, Probe.IO_ERROR);
+			return Probe.IO_ERROR;
+		}
+	}
+
+	private static List<Path> resolveListedMemo(
+			Path sealedRoot,
+			String domain,
+			int shard,
+			String streamKey,
+			Map<String, List<Path>> listedMemo
+	) throws IOException {
+		final List<Path> cached = listedMemo.get(streamKey);
+		if (cached != null) {
+			return cached;
+		}
+		final List<Path> listed = SealedShardPack.listShardFiles(sealedRoot, domain, shard);
+		listedMemo.put(streamKey, listed);
+		return listed;
 	}
 
 	/**

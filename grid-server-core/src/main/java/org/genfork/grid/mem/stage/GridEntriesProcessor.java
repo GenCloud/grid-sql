@@ -18,6 +18,7 @@ package org.genfork.grid.mem.stage;
 import org.genfork.grid.mem.GridScalableMap;
 import org.genfork.grid.mem.index.GridCompositeIndex;
 import org.genfork.grid.replication.metrics.ReplicationMetrics;
+import org.genfork.grid.replication.snapshot.sealed.SealedClosedRaceUtil;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapReader;
 import org.genfork.grid.utils.ArrayUtil;
 import org.springframework.util.CollectionUtils;
@@ -374,11 +375,33 @@ public class GridEntriesProcessor {
 	}
 
 	private byte[] sealedGet(byte[] key) {
-		final SealedGridMapReader reader = sealedReader;
-		if (reader == null) {
+		final SealedGridMapReader first = sealedReader;
+		if (first == null) {
 			return null;
 		}
-		return reader.get(key);
+		final byte[] hit = probeSealed(first, key);
+		if (hit != null) {
+			return hit;
+		}
+		if (!first.isClosed()) {
+			return null;
+		}
+		final SealedGridMapReader again = sealedReader;
+		if (again == null || again == first) {
+			return null;
+		}
+		return probeSealed(again, key);
+	}
+
+	private static byte[] probeSealed(SealedGridMapReader reader, byte[] key) {
+		try {
+			return reader.get(key);
+		} catch (IllegalStateException closedRace) {
+			if (SealedClosedRaceUtil.isClosedReaderFailure(closedRace)) {
+				return null;
+			}
+			throw closedRace;
+		}
 	}
 
 	private void loadIntoWorkingSet(byte[] key, byte[] value) {

@@ -71,10 +71,11 @@ public final class ReplicationRpcCodec {
 			long catalogAppliedEpoch,
 			long catalogFingerprint,
 			long sealedArtifactsFingerprint,
-			List<SealedShardInventoryEntry> sealedShardInventory
+			List<SealedShardInventoryEntry> sealedShardInventory,
+			long privilegeFingerprint
 	) {
 		/**
-		 * Compact ctor with empty sealed shard inventory.
+		 * Compact ctor with empty sealed shard inventory and privilege fingerprint {@code 0}.
 		 */
 		public Hello(
 				String nodeId,
@@ -89,7 +90,28 @@ public final class ReplicationRpcCodec {
 		) {
 			this(
 					nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole,
-					catalogAppliedEpoch, catalogFingerprint, sealedArtifactsFingerprint, List.of());
+					catalogAppliedEpoch, catalogFingerprint, sealedArtifactsFingerprint, List.of(), 0L);
+		}
+
+		/**
+		 * Compact ctor with inventory and privilege fingerprint.
+		 */
+		public Hello(
+				String nodeId,
+				String clusterId,
+				String localDc,
+				long schemaEpoch,
+				long regionEpoch,
+				byte regionRole,
+				long catalogAppliedEpoch,
+				long catalogFingerprint,
+				long sealedArtifactsFingerprint,
+				List<SealedShardInventoryEntry> sealedShardInventory
+		) {
+			this(
+					nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole,
+					catalogAppliedEpoch, catalogFingerprint, sealedArtifactsFingerprint,
+					sealedShardInventory, 0L);
 		}
 
 		/**
@@ -107,7 +129,7 @@ public final class ReplicationRpcCodec {
 		) {
 			this(
 					nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole,
-					catalogAppliedEpoch, catalogFingerprint, 0L, List.of());
+					catalogAppliedEpoch, catalogFingerprint, 0L, List.of(), 0L);
 		}
 
 		/**
@@ -121,7 +143,7 @@ public final class ReplicationRpcCodec {
 				long regionEpoch,
 				byte regionRole
 		) {
-			this(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole, 0L, 0L, 0L, List.of());
+			this(nodeId, clusterId, localDc, schemaEpoch, regionEpoch, regionRole, 0L, 0L, 0L, List.of(), 0L);
 		}
 	}
 

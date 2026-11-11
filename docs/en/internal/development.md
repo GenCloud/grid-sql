@@ -29,6 +29,20 @@ mvn -pl grid-server-core -Dtest="index.unit.replication.chaos.**" test
 
 Safety chaos tests use `ReplTestSupport.safetyProps` with a real `order-threshold`, not `0.0`.
 
+## Coverage (JaCoCo)
+
+`verify` runs the JaCoCo agent and per-module reports. Aggregated **instruction** and **branch** coverage for product modules (`grid-coverage` is a pom-only aggregator for `report-aggregate` — no product code):
+
+```bash
+mvn -pl grid-coverage -am verify
+# HTML: grid-coverage/target/site/jacoco-aggregate/index.html
+./scripts/jacoco-summary.sh
+# Windows:
+powershell -File .\scripts\jacoco-summary.ps1
+```
+
+Summary scripts refresh `docs/assets/badges/jacoco-shields.json` (README shields.io endpoint badge). On every green CI `verify` for `master`/`main`, job **Update coverage badge** regenerates that JSON from the aggregate CSV and commits it when the % changed (`[skip ci]`). Generated ANTLR `SimplifiedSql*` classes are excluded. No coverage gate threshold is enforced yet — the summary prints percentages only.
+
 ## TLC (ORCHID)
 
 ```bash

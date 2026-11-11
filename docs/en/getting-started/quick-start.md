@@ -8,6 +8,7 @@ Build the fat jar, start one durable node, connect with starter credentials (`gr
 - Maven **3.9+**
 - A local clone of this repository
 - Free port **15432** for SQL; for HA also **15433**, **5615**, and **5616**
+- Host RAM / CPU / disk by topology and low/mid/high tier: [system requirements](../configure-and-operate/operations/system-requirements.md) (solo mid ≈ ≥4 GiB RAM / 4 vCPU as a planning floor)
 
 On a clean machine: install JDK 25 and Maven, clone the repo, then build online (do not rely on `mvn -o` until the local repo is warm).
 
