@@ -64,7 +64,7 @@ volumes:
 
 Закрепление клиента и узел-свидетель (Witness — участвует в кворуме смены роли, сам не пишет и не читает приложение): [повышение роли узла](ha-promote.md).
 
-Уровни нагрузки `low` / `mid` / `high` меняют только heap JVM через `env/*.env`.
+Уровни нагрузки `low` / `mid` / `high` меняют heap JVM через `env/*.env`. Бюджеты host RAM / CPU / диск по топологиям: [системные требования](system-requirements.md).
 
 ```powershell
 cd examples\compose\1dc-n2

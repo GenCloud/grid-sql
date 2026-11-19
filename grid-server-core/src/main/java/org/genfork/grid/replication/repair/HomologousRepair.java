@@ -63,7 +63,14 @@ public class HomologousRepair {
 
 	private final VersionLocusMap locusMap = new VersionLocusMap();
 	private final LongAdder repairIssued = new LongAdder();
+	/**
+	 * Locus checksum heal via {@link #applyHealedLocus} only — not OpLog {@code REPAIR_REPLY} apply.
+	 */
 	private final LongAdder repairApplied = new LongAdder();
+	/** Ops installed from {@code REPAIR_REPLY} (observe + applier) — honest catch-up gauge. */
+	private final LongAdder repairReplyOpsApplied = new LongAdder();
+	/** {@code REPAIR_REPLY} ops skipped because stream still has open TX. */
+	private final LongAdder repairReplyOpsSkippedOpenTx = new LongAdder();
 	private final FileDurableLocusStore durableStore;
 	/** Optional last-known good row bytes by domain#shard#keyHash for FETCH_ROW heal. */
 	private final Map<String, byte[]> rowBytesByLocus = new ConcurrentHashMap<>();
@@ -295,6 +302,19 @@ public class HomologousRepair {
 	}
 
 	public List<RepairCommand> reconcile(String domainType, int shard, Map<Long, VersionLocus> remoteView) {
+		return reconcile(domainType, shard, remoteView, 0L);
+	}
+
+	/**
+	 * Locus reconcile. When {@code truncatedThrough > 0}, seqs at or below the watermark are
+	 * owned by sealed baseline — OpLog cannot fill them; skip those commands to avoid issued spam.
+	 */
+	public List<RepairCommand> reconcile(
+			String domainType,
+			int shard,
+			Map<Long, VersionLocus> remoteView,
+			long truncatedThrough
+	) {
 		// Fail-closed: do not emit repair while local stream still has an open TX unit.
 		if (hasOpenTx(domainType, shard)) {
 			return List.of();
@@ -308,6 +328,9 @@ public class HomologousRepair {
 			final VersionLocus remote = e.getValue();
 			final VersionLocus ours = local.get(e.getKey());
 			if (ours == null) {
+				if (truncatedThrough > 0L && remote.opSeq() <= truncatedThrough) {
+					continue;
+				}
 				commands.add(new RepairCommand(RepairCommandType.FETCH_OP, domainType, shard,
 						remote.keyHash(), 0L, remote.opSeq(), remote.contentChecksum()));
 				repairIssued.increment();
@@ -315,12 +338,15 @@ public class HomologousRepair {
 				minFetchFrom = Math.min(minFetchFrom, Math.max(1L, remote.opSeq()));
 				maxFetchTo = Math.max(maxFetchTo, remote.opSeq());
 			} else if (ours.opSeq() == remote.opSeq() && ours.contentChecksum() != remote.contentChecksum()) {
-				// Same seq, corrupted/mismatched value → full-row fetch.
+				// Same seq, corrupted/mismatched value → full-row fetch (even in sealed era).
 				commands.add(new RepairCommand(RepairCommandType.FETCH_ROW, domainType, shard,
 						remote.keyHash(), ours.opSeq(), remote.opSeq(), remote.contentChecksum()));
 				repairIssued.increment();
 			} else if (ours.opSeq() < remote.opSeq()
 					|| (ours.opSeq() == remote.opSeq() && ours.contentChecksum() != remote.contentChecksum())) {
+				if (truncatedThrough > 0L && remote.opSeq() <= truncatedThrough) {
+					continue;
+				}
 				commands.add(new RepairCommand(RepairCommandType.RESHIP_SEGMENT, domainType, shard,
 						remote.keyHash(), ours.opSeq() + 1, remote.opSeq(), remote.contentChecksum()));
 				repairIssued.increment();
@@ -331,6 +357,9 @@ public class HomologousRepair {
 		}
 		for (Map.Entry<Long, VersionLocus> e : local.entrySet()) {
 			if (!remoteView.containsKey(e.getKey())) {
+				if (truncatedThrough > 0L && e.getValue().opSeq() <= truncatedThrough) {
+					continue;
+				}
 				commands.add(new RepairCommand(RepairCommandType.RESHIP_SEGMENT, domainType, shard,
 						e.getKey(), e.getValue().opSeq(), e.getValue().opSeq(), e.getValue().contentChecksum()));
 				repairIssued.increment();
@@ -359,7 +388,7 @@ public class HomologousRepair {
 		final DuplexVerifier verifier = DuplexCodecSupport.getCodec().getVerifier();
 		try {
 			final DuplexBlob repaired = verifier.verifyOrRepair(DuplexBlob.fromWireBytes(value));
-			repairApplied.increment();
+			// Duplex ECC is not homologous locus heal — keep repair_applied honest.
 			ReplicationMetrics.recordDuplexRepair();
 			return repaired.toWireBytes();
 		} catch (RuntimeException ex) {
@@ -406,6 +435,27 @@ public class HomologousRepair {
 
 	public long repairApplied() {
 		return repairApplied.sum();
+	}
+
+	/**
+	 * Count of OpLog ops applied from {@code REPAIR_REPLY} (distinct from {@link #repairApplied()}).
+	 */
+	public long repairReplyOpsApplied() {
+		return repairReplyOpsApplied.sum();
+	}
+
+	public long repairReplyOpsSkippedOpenTx() {
+		return repairReplyOpsSkippedOpenTx.sum();
+	}
+
+	/** Product path: one OpLog op from {@code REPAIR_REPLY} installed. */
+	public void recordRepairReplyOpApplied() {
+		repairReplyOpsApplied.increment();
+	}
+
+	/** Product path: {@code REPAIR_REPLY} op skipped for open TX fail-closed. */
+	public void recordRepairReplyOpSkippedOpenTx() {
+		repairReplyOpsSkippedOpenTx.increment();
 	}
 
 	/**

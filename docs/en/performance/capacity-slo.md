@@ -50,6 +50,8 @@ powershell -File .\scripts\run-jmeter-load-slo.ps1 -Stamp <run-id> -Clients 64 -
 
 The numbers are bound to this hardware. Cloud, WAN and multi-site deployments need their own run.
 
+Host RAM / CPU / disk **planning floors** by topology and low/mid/high heap tier: [system requirements](../configure-and-operate/operations/system-requirements.md). Those budgets do not replace this page’s TPS thresholds.
+
 ## Planning numbers
 
 HA (`primary` + `replica`, `fsync: true`): write **4676**/s, read **52261…59430**/s, QG **8772…11519**/s, HA mix **9896**/s. Thresholds: ≈**4442** / ≈**52261** / ≈**8333**.

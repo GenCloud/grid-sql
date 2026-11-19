@@ -22,7 +22,10 @@ import org.genfork.grid.replication.ReplicationCoordinator;
 import org.genfork.grid.replication.snapshot.sealed.SealedGridMapWriter;
 import org.genfork.grid.replication.snapshot.sealed.SealedPackFingerprint;
 import org.genfork.grid.replication.snapshot.sealed.SealedShardPack;
+import org.genfork.grid.replication.log.OpLog;
+import org.genfork.grid.replication.util.HelloSealedCatchUpUtil;
 import org.genfork.grid.replication.util.SealedIntegritySensorUtil;
+import org.genfork.grid.replication.util.SealedPeerShipGate;
 import org.genfork.grid.replication.util.SealedShardInventoryEntry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -127,6 +130,32 @@ class SealedHealStormGuardIT {
 		} finally {
 			coord.stop();
 		}
+	}
+
+	@Test
+	void truncateBehindPeerNeedsBaselineUntilAck() throws Exception {
+		try (OpLog opLog = new OpLog(tmp.resolve("storm-oplog"), true)) {
+			opLog.truncateTo(DOMAIN_A, SHARD, 40L);
+			assertTrue(HelloSealedCatchUpUtil.needsSealedBaseline(opLog, DOMAIN_A, SHARD, 0L));
+			assertTrue(HelloSealedCatchUpUtil.needsSealedBaseline(opLog, DOMAIN_A, SHARD, 39L));
+			assertFalse(HelloSealedCatchUpUtil.needsSealedBaseline(opLog, DOMAIN_A, SHARD, 40L));
+		}
+	}
+
+	@Test
+	void inFlightDebounceCapsRepeatedShipIntent() {
+		final SealedPeerShipGate gate = new SealedPeerShipGate();
+		final long fp = 77L;
+		final long t0 = 5_000L;
+		assertTrue(gate.shouldShip("n2", DOMAIN_A, SHARD, fp, t0));
+		gate.notePushInFlight("n2", DOMAIN_A, SHARD, fp, t0, SealedPeerShipGate.IN_FLIGHT_TTL_MS);
+		int wouldShip = 0;
+		for (long t = t0; t < t0 + SealedPeerShipGate.IN_FLIGHT_TTL_MS; t += 1_000L) {
+			if (gate.shouldShip("n2", DOMAIN_A, SHARD, fp, t)) {
+				wouldShip++;
+			}
+		}
+		assertEquals(0, wouldShip, "in-flight TTL must suppress HELLO/repair reship storm");
 	}
 
 	@Test

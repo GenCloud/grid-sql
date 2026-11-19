@@ -182,6 +182,7 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		cancelledBeforePortal.clear();
 		inFlightExec.clear();
 		interruptRegistry.clear();
+		scheduleAbandonOpenSessions();
 		super.channelInactive(ctx);
 	}
 
@@ -202,7 +203,27 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		if (channelRegistry != null) {
 			channelRegistry.unregister(this);
 		}
+		// Idempotent if channelInactive already drained; covers missed inactive ordering.
+		scheduleAbandonOpenSessions();
 		super.handlerRemoved(ctx);
+	}
+
+	/**
+	 * Drain session maps on the calling thread; abandon (rollback/unlock) on logic VT —
+	 * never peer-RPC / unlock work on Netty EL.
+	 */
+	private void scheduleAbandonOpenSessions() {
+		if (sessions.isEmpty() && sessionQueues.isEmpty()) {
+			return;
+		}
+		final Map<Integer, SqlSession> drainedSessions = new ConcurrentHashMap<>();
+		drainedSessions.putAll(sessions);
+		sessions.clear();
+		final Map<Integer, SerialTaskQueue> drainedQueues = new ConcurrentHashMap<>();
+		drainedQueues.putAll(sessionQueues);
+		sessionQueues.clear();
+		ThreadService.getLogicExecutor().execute(() ->
+				SqlChannelSessionTeardownUtil.abandonAll(engine, drainedSessions, drainedQueues));
 	}
 
 	private void handleAuth(ChannelHandlerContext ctx, SqlFrame frame) {
@@ -262,8 +283,9 @@ public final class SqlExecHandler extends SimpleChannelInboundHandler<SqlFrame> 
 		final int id = SqlWire.readSessionId(frame.payload());
 		final SqlSession removed = sessions.remove(id);
 		sessionQueues.remove(id);
-		if (removed != null && removed.inTransaction()) {
-			removed.endTx();
+		if (removed != null) {
+			// Same abandon path as channel death (Dist FOR UPDATE prepare finish false).
+			SqlChannelSessionTeardownUtil.abandonSession(engine, removed);
 		}
 		ctx.writeAndFlush(new SqlFrame(SqlOpcode.SESSION_CLOSE_OK, frame.requestId(), new byte[0]));
 	}

@@ -52,4 +52,14 @@ public class HelloSealedCatchUpUtilTest {
 			assertFalse(HelloSealedCatchUpUtil.needsSealedBaseline(null, DOMAIN, 0, 0L));
 		}
 	}
+
+	@Test
+	void markAndClearPeerShipGateRoundTrip() {
+		HelloSealedCatchUpUtil.clearPeerShipGate("p1", DOMAIN, 0);
+		assertFalse(HelloSealedCatchUpUtil.isPeerShipGateActive("p1", DOMAIN, 0));
+		HelloSealedCatchUpUtil.markPeerInventoryMatched("p1", DOMAIN, 0, 42L);
+		assertTrue(HelloSealedCatchUpUtil.isPeerShipGateActive("p1", DOMAIN, 0));
+		HelloSealedCatchUpUtil.clearPeerShipGate("p1", DOMAIN, 0);
+		assertFalse(HelloSealedCatchUpUtil.isPeerShipGateActive("p1", DOMAIN, 0));
+	}
 }

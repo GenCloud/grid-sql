@@ -156,7 +156,11 @@ public final class DmlAst {
 	                        String whereSql, String pkColumnOrNull, Object pkValueOrNull,
 	                        String sourceTableOrNull, String targetJoinColumnOrNull,
 	                        String sourceJoinColumnOrNull,
-	                        List<String> returning) implements Stmt {
+	                        List<String> returning,
+	                        Map<String, Object> whereEqLiterals) implements Stmt {
+		public UpdateSql {
+			whereEqLiterals = whereEqLiterals == null ? Map.of() : whereEqLiterals;
+		}
 	}
 
 	/**

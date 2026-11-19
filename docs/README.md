@@ -39,6 +39,7 @@ Russian mirror: [`docs/ru/`](ru/README-ru.md). Same page layout in both language
 - [Multi-site](en/configure-and-operate/operations/multi-dc.md)
 - [HA under load](en/configure-and-operate/operations/cluster-ha-highload.md)
 - [Multi-site under load](en/configure-and-operate/operations/cluster-multidc-highload.md)
+- [System requirements (low/mid/high)](en/configure-and-operate/operations/system-requirements.md)
 - [Overlay PIN](en/configure-and-operate/configuration/overlay-pin.md)
 - [Point-in-time recovery (PITR)](en/configure-and-operate/operations/pitr.md)
 
@@ -112,6 +113,7 @@ Russian mirror: [`docs/ru/`](ru/README-ru.md). Same page layout in both language
 | [PITR](en/configure-and-operate/operations/pitr.md) | |
 | [HA under load](en/configure-and-operate/operations/cluster-ha-highload.md) | |
 | [Multi-site under load](en/configure-and-operate/operations/cluster-multidc-highload.md) | |
+| [System requirements (low/mid/high)](en/configure-and-operate/operations/system-requirements.md) | |
 | [Compose deploy](en/configure-and-operate/operations/deploy-compose.md) | |
 
 ### Understand

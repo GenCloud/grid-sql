@@ -586,9 +586,12 @@ public final class SqlDmlExecutor {
 		return result;
 	}
 
-	public SqlResult update(SqlSession session, UpdateSql s) {
-		final String table = tables.resolveTable(session, s.table());
+	public SqlResult update(SqlSession session, UpdateSql raw) {
+		final String table = tables.resolveTable(session, raw.table());
 		final TableStore store = tables.requireStore(table);
+		final UpdateSql s = raw.rmw() != null
+				? SqlRmwWhereUtil.resolveRmw(raw, store.schema())
+				: raw;
 		SqlTriggerFireOps.fireBeforeStatement(session, engine, table, TriggerEvent.UPDATE);
 		if (s.sourceTableOrNull() != null) {
 			final SqlResult result = updateFrom(session, table, store, s);
@@ -604,13 +607,14 @@ public final class SqlDmlExecutor {
 				session.lockManager().lock(table, key);
 				try {
 					final byte[] base = store.getCommittedBytes(key);
-					if (base == null) {
+					if (base == null || !SqlRmwWhereUtil.residualMatches(store.schema(), base, s)) {
 						if (VisibilityDiag.enabled()) {
 							VisibilityDiag.debugf(VisibilityDiag.WHERE_UPDATE_AFFECTED_ZERO,
-									"table=%s path=rmw %s base=null => affected=0 (caller may INSERT)",
-									table, VisibilityDiag.keyTag(key));
+									"table=%s path=rmw %s base=%s residualMiss => affected=0",
+									table, VisibilityDiag.keyTag(key),
+									base == null ? "null" : "hit");
 						}
-						// SQL UPDATE: missing PK must not invent an empty seed row (G-single-item wipe).
+						// SQL UPDATE: missing PK / residual miss must not invent a seed row.
 						final SqlResult result =
 								SqlDmlReturningOps.updateResult(session, table, store, s, returningKeys, 0L);
 						SqlTriggerFireOps.fireAfterStatement(session, engine, table, TriggerEvent.UPDATE);
@@ -667,7 +671,7 @@ public final class SqlDmlExecutor {
 			final byte[] key = store.keyBytesForPk(s.rmw().pkValue());
 			SqlDmlLockOps.ensureRowLocked(session, table, key);
 			final byte[] base = SqlDmlLockOps.baseBytes(session, table, store, key);
-			if (base != null) {
+			if (base != null && SqlRmwWhereUtil.residualMatches(store.schema(), base, s)) {
 				final Map<String, Object> resolvedLits =
 						SqlDmlSetResolveUtil.resolveSets(session, store, base, s.setLiterals());
 				final TableStore.EncodedRow encoded =

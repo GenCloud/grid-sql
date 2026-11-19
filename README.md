@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/ci.yml)
 [![Jepsen QG](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml/badge.svg)](https://github.com/GenCloud/grid-sql/actions/workflows/jepsen-qg.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/GenCloud/grid-sql/master/docs/assets/badges/jacoco-shields.json)](docs/en/internal/development.md#coverage-jacoco)
 
 **Need SQL speed in Java without a separate cache layer that drifts from the journal?** Grid is a SQL-first in-memory DBMS with durable OpLog + sealed GridMap storage and ORCHID replication — one protocol for apps: `grid://` (reactive) or `jdbc:grid://` (JDBC).
 

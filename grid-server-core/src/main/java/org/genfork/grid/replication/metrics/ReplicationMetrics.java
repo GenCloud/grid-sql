@@ -81,6 +81,8 @@ public final class ReplicationMetrics {
 	private static final LongAdder ENVELOPE_DEFER = new LongAdder();
 	/** Fully-committed apply envelope still in {@code applyOpen} cleared before seal dump. */
 	private static final LongAdder STICKY_APPLY_ENVELOPE_CLEAR = new LongAdder();
+	/** Peer applied privileges.meta from catalog DDL snapshot heal. */
+	private static final LongAdder CATALOG_PRIVILEGE_HEAL_APPLIED = new LongAdder();
 
 	private static final long[] ORCHID_WAIT_NS = new long[LATENCY_SAMPLES];
 	private static final AtomicInteger ORCHID_WAIT_IDX = new AtomicInteger();
@@ -319,6 +321,14 @@ public final class ReplicationMetrics {
 
 	public static long stickyApplyEnvelopeClear() {
 		return STICKY_APPLY_ENVELOPE_CLEAR.sum();
+	}
+
+	public static void recordCatalogPrivilegeHealApplied() {
+		CATALOG_PRIVILEGE_HEAL_APPLIED.increment();
+	}
+
+	public static long catalogPrivilegeHealApplied() {
+		return CATALOG_PRIVILEGE_HEAL_APPLIED.sum();
 	}
 
 	public static long oplogPushSent() {

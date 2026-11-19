@@ -152,6 +152,8 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	private Supplier<Long> catalogFingerprintSupplier = () -> 0L;
 	/** Local sealed artifacts name+size identity for HELLO trailing field. */
 	private Supplier<Long> sealedArtifactsFingerprintSupplier = () -> 0L;
+	/** Local privilege catalog fingerprint for HELLO trailing field. */
+	private Supplier<Long> privilegeFingerprintSupplier = () -> 0L;
 	/** Local per-shard sealed identity inventory for HELLO trailer. */
 	private Supplier<List<SealedShardInventoryEntry>> sealedShardInventorySupplier = List::of;
 	/** Peer compacted ddl.sql snapshot apply (logic VT). */
@@ -314,6 +316,12 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	}
 
 	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier, Supplier<Long> catalogAppliedEpochSupplier, Supplier<Long> catalogFingerprintSupplier, Supplier<Long> sealedArtifactsFingerprintSupplier) {
+		bindHandlers(orchidNode, applierByDomain, crossDcPublisher, nodeState, homologousRepair, opLog, sparseCatchUp,
+				onPeerHello, onApplyAckPeer, regionEpochSupplier, regionRoleSupplier,
+				catalogAppliedEpochSupplier, catalogFingerprintSupplier, sealedArtifactsFingerprintSupplier, () -> 0L);
+	}
+
+	public void bindHandlers(Supplier<OrchidNode> orchidNode, Function<String, ReplicaApplier> applierByDomain, CrossDcPublisher crossDcPublisher, ReplicationNodeState nodeState, HomologousRepair homologousRepair, OpLog opLog, SparseCatchUp sparseCatchUp, Consumer<DiscoveredPeer> onPeerHello, Consumer<String> onApplyAckPeer, Supplier<Long> regionEpochSupplier, Supplier<Byte> regionRoleSupplier, Supplier<Long> catalogAppliedEpochSupplier, Supplier<Long> catalogFingerprintSupplier, Supplier<Long> sealedArtifactsFingerprintSupplier, Supplier<Long> privilegeFingerprintSupplier) {
 		this.orchidNode = orchidNode;
 		this.applierByDomain = applierByDomain;
 		this.crossDcPublisher = crossDcPublisher;
@@ -332,6 +340,9 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 		this.sealedArtifactsFingerprintSupplier = sealedArtifactsFingerprintSupplier == null
 				? () -> 0L
 				: sealedArtifactsFingerprintSupplier;
+		this.privilegeFingerprintSupplier = privilegeFingerprintSupplier == null
+				? () -> 0L
+				: privilegeFingerprintSupplier;
 	}
 
 	/**
@@ -420,6 +431,14 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	}
 
 	/**
+	 * Local privilege catalog fingerprint advertised on HELLO (0 when unbound / open).
+	 */
+	public long currentPrivilegeFingerprint() {
+		final Long value = privilegeFingerprintSupplier.get();
+		return value == null ? 0L : value;
+	}
+
+	/**
 	 * Request OpLog (and sealed baseline on pull handler) from {@code peerId} starting at {@code fromSeqInclusive}.
 	 */
 	public void sendOplogPull(String peerId, String domainType, int shard, long fromSeqInclusive) {
@@ -451,7 +470,8 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 				currentRegionEpoch(), currentRegionRoleWire(),
 				currentCatalogAppliedEpoch(), currentCatalogFingerprint(),
 				currentSealedArtifactsFingerprint(),
-				inventory);
+				inventory,
+				currentPrivilegeFingerprint());
 		broadcastEncoded(new WireMessage(ReplicationMessageType.HELLO.opcode(), ReplicationRpcCodec.encodeHello(hello)));
 	}
 
@@ -574,6 +594,18 @@ public class NettyReplicationTransport implements OrchidTransport, AutoCloseable
 	public void sendApplyNack(String peerId, ReplicationOp op, String reason) {
 		final ApplyNack nack = new ApplyNack(localNodeId, op.domainType(), op.shard(), op.opSeq(), reason);
 		write(peerId, new WireMessage(ReplicationMessageType.APPLY_NACK.opcode(), ReplicationRpcCodec.encodeApplyNack(nack)));
+	}
+
+	/**
+	 * Unicast APPLY_ACK to one peer (sealed baseline wm / targeted heal) — not a cluster broadcast.
+	 */
+	public void sendApplyAck(String peerId, String domainType, int shard, long opSeq) {
+		if (peerId == null || domainType == null || opSeq <= 0L) {
+			return;
+		}
+		final ApplyAck ack = new ApplyAck(localNodeId, domainType, shard, opSeq);
+		write(peerId, new WireMessage(ReplicationMessageType.APPLY_ACK.opcode(), ReplicationRpcCodec.encodeApplyAck(ack)));
+		ReplicationMetrics.recordApplyAckSent();
 	}
 
 	public void broadcastApplyAck(ReplicationOp op) {

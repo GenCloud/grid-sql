@@ -15,6 +15,8 @@
  */
 package org.genfork.grid.replication.tx;
 
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -43,15 +45,15 @@ public final class TxEnvelopeCodec {
 		}
 
 		public String streamKey() {
-			return domain + "#" + shard;
+			return OpLogStreamKeyUtil.format(domain, shard);
 		}
 
 		public static StreamRef parse(String token) {
-			final int hash = token.lastIndexOf('#');
-			if (hash <= 0 || hash >= token.length() - 1) {
+			final OpLogStreamKeyUtil.StreamKey parsed = OpLogStreamKeyUtil.parse(token);
+			if (parsed == null) {
 				throw new IllegalArgumentException("bad stream token: " + token);
 			}
-			return new StreamRef(token.substring(0, hash), Integer.parseInt(token.substring(hash + 1)));
+			return new StreamRef(parsed.domain(), parsed.shard());
 		}
 	}
 

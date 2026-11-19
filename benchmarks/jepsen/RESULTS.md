@@ -6,16 +6,15 @@ Stamp template - filled by `scripts/run-jepsen-smoke.*` or a full Jepsen run.
 
 | Field | Value |
 |-------|--------|
-| stamp | 2026-11-02-jepsen-full |
-| date | 2026-11-02T18:52:35+03:00 |
-| git | 2295d47 |
-| host | DESKTOP-4IC511D |
-| mode | `full-jepsen` |
+| stamp | 2026-11-07-jepsen-edge-matrix-1dc-nochao |
+| date | 2026-11-07T16:01:55.7889306+03:00 |
+| git | a8ba310 |
+| host | local |
+| mode | `nochao` |
 | outcome | `PASS` |
-| notes | register=PASS; append=PASS |
+| notes | register=PASS; append=PASS; no-nemesis |
 
 ## History
-
 ### Full Multi-DC 3+2 (stamp 2026-09-18-aqe-residuals)
 | Mode | register | append | outcome |
 |------|----------|--------|---------|
@@ -1337,3 +1336,23 @@ Details + p50/p95/p99: [multidc/RESULTS.md](multidc/RESULTS.md).
 - full-jepsen: PASS
 - command: run-jepsen.sh register+append (time-limit=60)
 - notes: register=PASS; append=PASS
+
+### 2026-11-07-jepsen-edge-matrix-1dc-chaos
+- mode: full-jepsen
+- outcome: PASS
+- git: a8ba310
+- compose: up
+- chaos-it: partition+kill
+- full-jepsen: PASS
+- command: run-jepsen.ps1 register+append (time-limit=45)
+- notes: register=PASS; append=PASS
+
+### 2026-11-07-jepsen-edge-matrix-1dc-nochao
+- mode: nochao
+- outcome: PASS
+- git: a8ba310
+- compose: up
+- chaos-it: no-nemesis
+- full-jepsen: PASS
+- command: run-jepsen-nochao.ps1 register+append (time-limit=45)
+- notes: register=PASS; append=PASS; no-nemesis

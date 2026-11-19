@@ -134,7 +134,9 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 				transport.currentRegionRoleWire(),
 				transport.currentCatalogAppliedEpoch(),
 				transport.currentCatalogFingerprint(),
-				transport.currentSealedArtifactsFingerprint());
+				transport.currentSealedArtifactsFingerprint(),
+				List.of(),
+				transport.currentPrivilegeFingerprint());
 		ctx.writeAndFlush(new WireMessage(ReplicationMessageType.HELLO.opcode(), ReplicationRpcCodec.encodeHello(hello)));
 	}
 
@@ -289,12 +291,12 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		final DiscoveredPeer discovered = new DiscoveredPeer(
 				hello.nodeId(), host, port, hello.localDc(), hello.regionEpoch(), hello.regionRole(),
 				hello.catalogAppliedEpoch(), hello.catalogFingerprint(), hello.sealedArtifactsFingerprint(),
-				hello.sealedShardInventory());
+				hello.sealedShardInventory(), hello.privilegeFingerprint());
 		final int sealedShards = hello.sealedShardInventory() == null ? 0 : hello.sealedShardInventory().size();
-		log.info("Replication HELLO from node={} dc={} regionEpoch={} regionRole={} catalogApplied={} catalogFp={} sealedFp={} sealedShards={}",
+		log.info("Replication HELLO from node={} dc={} regionEpoch={} regionRole={} catalogApplied={} catalogFp={} sealedFp={} sealedShards={} privilegeFp={}",
 				hello.nodeId(), hello.localDc(), hello.regionEpoch(), hello.regionRole(),
 				hello.catalogAppliedEpoch(), hello.catalogFingerprint(), hello.sealedArtifactsFingerprint(),
-				sealedShards);
+				sealedShards, hello.privilegeFingerprint());
 		transport.submitHelloCatchUp(() -> onPeerHello.accept(discovered));
 	}
 
@@ -403,7 +405,30 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 		}
 		ThreadService.getLogicExecutor().execute(() -> {
 			final RepairRequest req = ReplicationRpcCodec.decodeRepairRequest(body);
-			final List<RepairCommand> commands = homologousRepair.reconcile(req.domainType(), req.shard(), req.view());
+			// Truncate gap before reconcile: avoid O(keys) issued++ when OpLog cannot fill.
+			if (opLog != null) {
+				final long peerAck = nodeState.peerAck(req.fromNodeId(), req.domainType(), req.shard());
+				if (HelloSealedCatchUpUtil.needsSealedBaseline(
+						opLog, req.domainType(), req.shard(), peerAck)) {
+					HelloSealedCatchUpUtil.shipSealedBaseline(
+							transport.sealedGridMapServiceOrNull(),
+							transport,
+							req.fromNodeId(),
+							req.domainType(),
+							req.shard());
+					final byte[] sealedReply = ReplicationRpcCodec.encodeRepairReply(
+							localNodeId, List.of(), List.of());
+					ctx.executor().execute(() ->
+							ctx.writeAndFlush(new WireMessage(
+									ReplicationMessageType.REPAIR_REPLY.opcode(), sealedReply)));
+					return;
+				}
+			}
+			final long truncatedThrough = opLog == null
+					? 0L
+					: opLog.truncatedThrough(req.domainType(), req.shard());
+			final List<RepairCommand> commands = homologousRepair.reconcile(
+					req.domainType(), req.shard(), req.view(), truncatedThrough);
 			final List<ReplicationOp> ops = new ArrayList<>();
 			if (opLog != null && !commands.isEmpty()) {
 				for (RepairCommand cmd : commands) {
@@ -437,18 +462,6 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 					}
 				}
 			}
-			// After seal+truncate OpLog cannot fill the gap — ship sealed baseline instead of empty REPLY.
-			if (ops.isEmpty() && opLog != null
-					&& (HelloSealedCatchUpUtil.needsSealedBaseline(
-					opLog, req.domainType(), req.shard(), 0L)
-					|| opLog.truncatedThrough(req.domainType(), req.shard()) > 0L)) {
-				HelloSealedCatchUpUtil.shipSealedBaseline(
-						transport.sealedGridMapServiceOrNull(),
-						transport,
-						req.fromNodeId(),
-						req.domainType(),
-						req.shard());
-			}
 			final byte[] reply = ReplicationRpcCodec.encodeRepairReply(localNodeId, commands, ops);
 			ctx.executor().execute(() ->
 					ctx.writeAndFlush(new WireMessage(ReplicationMessageType.REPAIR_REPLY.opcode(), reply)));
@@ -474,10 +487,14 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 				// mid BEGIN→COMMIT (ASYNC learner REPAIR_REPLY → Elle G-single / HAS≈0).
 				if (applier != null && applier.hasOpenTx(op.domainType(), op.shard())) {
 					skippedOpenTx++;
+					if (homologousRepair != null) {
+						homologousRepair.recordRepairReplyOpSkippedOpenTx();
+					}
 					continue;
 				}
 				if (homologousRepair != null && homologousRepair.hasOpenTx(op.domainType(), op.shard())) {
 					skippedOpenTx++;
+					homologousRepair.recordRepairReplyOpSkippedOpenTx();
 					continue;
 				}
 				if (homologousRepair != null) {
@@ -486,6 +503,9 @@ public class ReplicationInboundHandler extends SimpleChannelInboundHandler<WireM
 				if (applier != null) {
 					applier.apply(op, false, true);
 					applied++;
+					if (homologousRepair != null) {
+						homologousRepair.recordRepairReplyOpApplied();
+					}
 				}
 			}
 			log.debug("REPAIR_REPLY from={} commands={} ops={} applied={} skippedOpenTx={}",

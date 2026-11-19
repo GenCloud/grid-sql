@@ -26,6 +26,7 @@ import java.util.function.Function;
 import org.genfork.grid.catalog.CatalogDdlCompactor;
 import org.genfork.grid.catalog.CatalogDdlJournalUtil;
 import org.genfork.grid.catalog.CatalogFingerprintUtil;
+import org.genfork.grid.catalog.PrivilegeCatalogFingerprintUtil;
 import org.genfork.grid.catalog.CatalogQualifiedName;
 import org.genfork.grid.catalog.FunctionKind;
 import org.genfork.grid.catalog.PrivilegeCatalog;
@@ -177,8 +178,22 @@ public final class SqlEngine {
 					() -> CatalogFingerprintUtil.fingerprint(catalog),
 					() -> CatalogDdlCompactor.compactLines(catalog),
 					catalog::maxAppliedDdlEpoch,
-					this::applyCatalogJournalSnapshot);
+					this::applyCatalogJournalSnapshot,
+					() -> PrivilegeCatalogFingerprintUtil.fingerprint(privileges),
+					this::privilegeSnapshotBytesForShip);
 		}
+	}
+
+	/**
+	 * Wire bytes for privilege-meta reconcile ship ({@code privileges.meta} snapshot).
+	 */
+	private static final byte[] EMPTY_PRIVILEGE_SHIP = new byte[0];
+
+	private byte[] privilegeSnapshotBytesForShip() {
+		if (privileges == null || privileges.isOpen()) {
+			return EMPTY_PRIVILEGE_SHIP;
+		}
+		return privileges.toSnapshotBytes();
 	}
 
 	/**
@@ -198,6 +213,10 @@ public final class SqlEngine {
 				snapshot.baseEpochExclusive(),
 				apply -> applyReplicatedDdlOnLane(apply.ddlSql(), apply.schemaEpoch()));
 		catalog.rewriteCompactedDdl();
+		final byte[] privilegeMeta = snapshot.privilegesMetaBytes();
+		if (privilegeMeta != null && privilegeMeta.length > 0 && privileges != null) {
+			privileges.loadSnapshotBytes(privilegeMeta);
+		}
 	}
 
 	/**
@@ -297,6 +316,20 @@ public final class SqlEngine {
 
 	public ReplicationCoordinator replication() {
 		return replication;
+	}
+
+	/**
+	 * Channel / session lifecycle abandon: rollback open TX (local unlock + Dist FOR UPDATE
+	 * prepare finish false). No-op when no transaction is open.
+	 * <p>
+	 * Used by SQL Netty teardown on {@code SESSION_CLOSE} and abrupt channel death so
+	 * record locks cannot leak across sleep/wake or client TCP kill.
+	 */
+	public void abandonSession(SqlSession session) {
+		if (session == null || !session.inTransaction()) {
+			return;
+		}
+		txCommitter.rollback(session);
 	}
 
 	public SqlSession newSession() {

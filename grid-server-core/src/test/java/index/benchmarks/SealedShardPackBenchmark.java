@@ -163,6 +163,14 @@ public class SealedShardPackBenchmark extends AbstractLatencyBenchmark {
 	}
 
 	@Benchmark
+	public void peerShipGateNoteInFlightAndActive(Blackhole bh) {
+		final long now = System.currentTimeMillis();
+		peerShipGate.notePushInFlight("peer-inflight", DOMAIN, SHARD, fingerprint, now);
+		bh.consume(peerShipGate.isActive("peer-inflight", DOMAIN, SHARD, now));
+		bh.consume(peerShipGate.shouldShip("peer-inflight", DOMAIN, SHARD, fingerprint, now));
+	}
+
+	@Benchmark
 	public void unpackPacked(Blackhole bh) throws Exception {
 		final Path target = sealedRoot.resolve("unpack-tgt");
 		Files.createDirectories(target);

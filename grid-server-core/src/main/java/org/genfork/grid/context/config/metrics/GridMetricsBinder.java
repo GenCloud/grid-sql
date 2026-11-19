@@ -88,6 +88,10 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_ORCHID_R = "grid.replication.orchid_r";
 	public static final String METRIC_REPAIR_ISSUED = "grid.replication.repair_issued";
 	public static final String METRIC_REPAIR_APPLIED = "grid.replication.repair_applied";
+	/** OpLog ops applied from REPAIR_REPLY (not locus {@link #METRIC_REPAIR_APPLIED}). */
+	public static final String METRIC_REPAIR_REPLY_OPS_APPLIED = "grid.replication.repair_reply_ops_applied";
+	public static final String METRIC_REPAIR_REPLY_OPS_SKIPPED_OPEN_TX =
+			"grid.replication.repair_reply_ops_skipped_open_tx";
 	public static final String METRIC_RPO_ESTIMATE_MS = "grid.replication.rpo_estimate_ms";
 	public static final String METRIC_SWARM_HINT = "grid.replication.swarm_hint";
 	public static final String METRIC_MIGRATE_IO_ALLOWED = "grid.replication.migrate_io_allowed";
@@ -119,6 +123,10 @@ public final class GridMetricsBinder implements MeterBinder {
 	public static final String METRIC_SQL_PRIVILEGE_USERS = "grid.sql.privilege_users";
 	public static final String METRIC_SQL_AUTH_OPEN = "grid.sql.auth_open";
 	public static final String METRIC_CATALOG_APPLY_LAG = "grid.replication.catalog_apply_lag";
+	public static final String METRIC_CATALOG_PRIVILEGE_HEAL_APPLIED =
+			"grid.replication.catalog_privilege_heal_applied";
+	public static final String METRIC_PRIVILEGE_FINGERPRINT = "grid.replication.privilege_fingerprint";
+	public static final String METRIC_PRIVILEGE_INCOMPLETE = "grid.replication.privilege_incomplete";
 	public static final String METRIC_SQL_FAN_IN_CALLS = "grid.sql.distributed.fan_in_calls";
 	public static final String METRIC_SQL_FAN_IN_SOURCES = "grid.sql.distributed.fan_in_sources";
 	public static final String METRIC_SQL_FAN_IN_ROWS = "grid.sql.distributed.fan_in_rows";
@@ -237,6 +245,10 @@ public final class GridMetricsBinder implements MeterBinder {
 						m -> ReplicationMetrics.stickyApplyEnvelopeClear())
 				.description("Sticky committed apply envelopes cleared before seal")
 				.register(registry);
+		FunctionCounter.builder(METRIC_CATALOG_PRIVILEGE_HEAL_APPLIED, ReplicationMetrics.class,
+						m -> ReplicationMetrics.catalogPrivilegeHealApplied())
+				.description("Privileges.meta applied from catalog DDL snapshot heal")
+				.register(registry);
 		FunctionCounter.builder(METRIC_DUPLEX_MISMATCH, ReplicationMetrics.class, m -> ReplicationMetrics.duplexMismatch())
 				.description("Duplex blob mismatches detected")
 				.register(registry);
@@ -285,7 +297,14 @@ public final class GridMetricsBinder implements MeterBinder {
 				.description("HomologousRepair issued count")
 				.register(registry);
 		Gauge.builder(METRIC_REPAIR_APPLIED, this, GridMetricsBinder::sampleRepairApplied)
-				.description("HomologousRepair applied count")
+				.description("HomologousRepair locus heal applied count (not REPAIR_REPLY OpLog ops)")
+				.register(registry);
+		Gauge.builder(METRIC_REPAIR_REPLY_OPS_APPLIED, this, GridMetricsBinder::sampleRepairReplyOpsApplied)
+				.description("OpLog ops applied from REPAIR_REPLY (observe + applier)")
+				.register(registry);
+		Gauge.builder(METRIC_REPAIR_REPLY_OPS_SKIPPED_OPEN_TX, this,
+						GridMetricsBinder::sampleRepairReplyOpsSkippedOpenTx)
+				.description("REPAIR_REPLY ops skipped because stream has open TX")
 				.register(registry);
 		Gauge.builder(METRIC_RPO_ESTIMATE_MS, this, GridMetricsBinder::sampleRpoEstimateMs)
 				.description("Cross-DC RPO estimate (lag ms)")
@@ -368,6 +387,12 @@ public final class GridMetricsBinder implements MeterBinder {
 				.register(registry);
 		Gauge.builder(METRIC_CATALOG_APPLY_LAG, this, GridMetricsBinder::sampleCatalogApplyLag)
 				.description("_catalog OpLog tip minus applied watermark")
+				.register(registry);
+		Gauge.builder(METRIC_PRIVILEGE_FINGERPRINT, this, GridMetricsBinder::samplePrivilegeFingerprint)
+				.description("Local privilege catalog fingerprint (HELLO)")
+				.register(registry);
+		Gauge.builder(METRIC_PRIVILEGE_INCOMPLETE, this, GridMetricsBinder::samplePrivilegeIncomplete)
+				.description("1 when peer privilege fingerprint differs from local")
 				.register(registry);
 		FunctionCounter.builder(METRIC_SQL_FAN_IN_CALLS, DistributedQueryMetrics.class,
 						m -> DistributedQueryMetrics.fanInCalls())
@@ -459,6 +484,16 @@ public final class GridMetricsBinder implements MeterBinder {
 	private double sampleRepairApplied() {
 		final HomologousRepair repair = homologousRepairOrNull();
 		return repair == null ? ZERO : (double) repair.repairApplied();
+	}
+
+	private double sampleRepairReplyOpsApplied() {
+		final HomologousRepair repair = homologousRepairOrNull();
+		return repair == null ? ZERO : (double) repair.repairReplyOpsApplied();
+	}
+
+	private double sampleRepairReplyOpsSkippedOpenTx() {
+		final HomologousRepair repair = homologousRepairOrNull();
+		return repair == null ? ZERO : (double) repair.repairReplyOpsSkippedOpenTx();
 	}
 
 	private double sampleRpoEstimateMs() {
@@ -589,6 +624,22 @@ public final class GridMetricsBinder implements MeterBinder {
 			return ZERO;
 		}
 		return (double) coordinator.catalogApplyLag();
+	}
+
+	private double samplePrivilegeFingerprint() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return (double) coordinator.privilegeFingerprint();
+	}
+
+	private double samplePrivilegeIncomplete() {
+		final ReplicationCoordinator coordinator = coordinatorOrNull();
+		if (coordinator == null || !coordinator.isEnabled()) {
+			return ZERO;
+		}
+		return coordinator.isPrivilegeFingerprintStale() ? ONE : ZERO;
 	}
 
 	private double sampleMissingStreamIncomplete() {

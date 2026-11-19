@@ -15,6 +15,8 @@
  */
 package org.genfork.grid.replication.swarm;
 
+import org.genfork.grid.replication.util.OpLogStreamKeyUtil;
+
 import java.util.List;
 
 /**
@@ -50,7 +52,7 @@ public record PlacementTopology(
 			double applyLag
 	) {
 		public String streamKey() {
-			return domainType + "#" + shard;
+			return OpLogStreamKeyUtil.format(domainType, shard);
 		}
 	}
 }

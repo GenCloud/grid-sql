@@ -100,4 +100,4 @@ java -jar … --spring.profiles.active=capacity
 
 Для двух площадок включите `grid.replication.cross-dc` в режиме `ASYNC_SHIP` или `SYNC_VOTERS_ACROSS_DC`: [несколько ЦОД](../configure-and-operate/operations/multi-dc.md).
 
-Дальше: [быстрый старт](quick-start.md), [подключение клиентов](connect-clients.md), [чек-лист](production-checklist.md), [повышение роли узла](../configure-and-operate/operations/ha-promote.md), [PITR](../configure-and-operate/operations/pitr.md).
+Дальше: [системные требования](../configure-and-operate/operations/system-requirements.md), [быстрый старт](quick-start.md), [подключение клиентов](connect-clients.md), [чек-лист](production-checklist.md), [повышение роли узла](../configure-and-operate/operations/ha-promote.md), [PITR](../configure-and-operate/operations/pitr.md).

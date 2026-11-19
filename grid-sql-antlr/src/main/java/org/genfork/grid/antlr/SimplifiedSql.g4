@@ -657,7 +657,7 @@ alterTableStmt
     | ALTER TABLE tableName ADD (CONSTRAINT constraintName)? FOREIGN KEY '(' columnName (',' columnName)* ')'
       REFERENCES tableName '(' columnName (',' columnName)* ')'
       (ON DELETE referentialAction)? (ON UPDATE referentialAction)?
-    | ALTER TABLE tableName DROP COLUMN columnName
+    | ALTER TABLE tableName DROP COLUMN (IF EXISTS)? columnName
     | ALTER TABLE tableName DROP CONSTRAINT constraintName
     ;
 

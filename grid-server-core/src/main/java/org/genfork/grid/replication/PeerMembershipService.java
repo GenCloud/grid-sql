@@ -248,6 +248,10 @@ public final class PeerMembershipService {
 				if (lastSeq > 0L && peerAck >= lastSeq) {
 					continue;
 				}
+				// Truncate gap: sealed ship already ran in shipCatchUpToPeer — skip locus REPAIR.
+				if (HelloSealedCatchUpUtil.needsSealedBaseline(opLog, domain, shard, peerAck)) {
+					continue;
+				}
 				nettyTransport.sendRepairRequest(peerId, domain, shard,
 						homologousRepair.getLocusMap().snapshot(domain, shard));
 			}

@@ -166,6 +166,31 @@ jobs:
           & $bash benchmarks/jepsen/scripts/validate-jepsen-gha-matrix.sh
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: JaCoCo summary (Linux)
+        if: runner.os == 'Linux' && success()
+        run: |
+          chmod +x scripts/jacoco-summary.sh
+          ./scripts/jacoco-summary.sh
+
+      - name: JaCoCo summary (Windows)
+        if: runner.os == 'Windows' && success()
+        shell: powershell
+        run: |
+          powershell -NoProfile -File .\scripts\jacoco-summary.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload JaCoCo reports
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports-${{ runner.os }}
+          path: |
+            grid-coverage/target/site/jacoco-aggregate/**
+            **/target/site/jacoco/**
+            docs/assets/badges/jacoco-shields.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload Surefire reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -176,6 +201,60 @@ jobs:
             **/target/failsafe-reports/**
           if-no-files-found: ignore
           retention-days: 14
+
+  update-coverage-badge:
+    name: Update coverage badge
+    needs: [build-test]
+    if: >
+      needs.build-test.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Download JaCoCo reports (Linux)
+        id: dl_linux
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: jacoco-reports-Linux
+          path: .ci-jacoco
+
+      - name: Download JaCoCo reports (Windows)
+        id: dl_win
+        if: steps.dl_linux.outcome != 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: jacoco-reports-Windows
+          path: .ci-jacoco
+
+      - name: Refresh shields JSON from aggregate CSV
+        run: |
+          set -euo pipefail
+          csv="$(find .ci-jacoco -type f -name jacoco.csv | head -n 1 || true)"
+          if [[ -z "${csv}" ]]; then
+            echo "No jacoco.csv in CI artifact" >&2
+            exit 1
+          fi
+          echo "Using ${csv}"
+          chmod +x scripts/jacoco-summary.sh
+          ./scripts/jacoco-summary.sh "${csv}"
+
+      - name: Commit badge if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "ci: refresh JaCoCo coverage badge [skip ci]"
+          file_pattern: docs/assets/badges/jacoco-shields.json
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
 
   package-starters:
     name: Package product starters

@@ -15,12 +15,16 @@
  */
 package index.unit.replication;
 
+import org.genfork.grid.nio.EncodeBuffers;
 import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec;
 import org.genfork.grid.replication.netty.codec.CatalogDdlSnapshotRpcCodec.CatalogDdlSnapshot;
 import org.junit.jupiter.api.Test;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
@@ -31,6 +35,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * @since: 1.3
  */
 class CatalogDdlSnapshotRpcCodecTest {
+	private static final byte[] PRIVILEGE_META = new byte[] {0x50, 0x52, 0x49, 0x56, 0x01};
+
 	@Test
 	void roundTrip() {
 		final CatalogDdlSnapshot snap = new CatalogDdlSnapshot(
@@ -42,5 +48,36 @@ class CatalogDdlSnapshotRpcCodecTest {
 		assertEquals(7L, decoded.baseEpochExclusive());
 		assertEquals(2, decoded.compactLines().size());
 		assertEquals(snap.compactLines().get(0), decoded.compactLines().get(0));
+		assertEquals(0, decoded.privilegesMetaBytes().length);
+	}
+
+	@Test
+	void roundTripWithPrivilegeMeta() {
+		final CatalogDdlSnapshot snap = new CatalogDdlSnapshot(
+				"n1", 123L, 7L, List.of("CREATE TABLE t (id INT PRIMARY KEY)"), PRIVILEGE_META);
+		final CatalogDdlSnapshot decoded = CatalogDdlSnapshotRpcCodec.decode(
+				CatalogDdlSnapshotRpcCodec.encode(snap));
+		assertArrayEquals(PRIVILEGE_META, decoded.privilegesMetaBytes());
+	}
+
+	@Test
+	void legacyBodyWithoutPrivilegeTail() {
+		final byte[] from = "n1".getBytes(StandardCharsets.UTF_8);
+		final byte[] line = "CREATE TABLE t (id INT PRIMARY KEY)".getBytes(StandardCharsets.UTF_8);
+		final ByteBuffer buf = EncodeBuffers.allocateWireLe(
+				Integer.BYTES + from.length
+						+ Long.BYTES
+						+ Long.BYTES
+						+ Integer.BYTES
+						+ Integer.BYTES + line.length);
+		EncodeBuffers.putLengthPrefixed(buf, from);
+		buf.putLong(55L);
+		buf.putLong(3L);
+		buf.putInt(1);
+		EncodeBuffers.putLengthPrefixed(buf, line);
+		final CatalogDdlSnapshot decoded = CatalogDdlSnapshotRpcCodec.decode(EncodeBuffers.toByteArray(buf));
+		assertEquals(55L, decoded.catalogFingerprint());
+		assertEquals(1, decoded.compactLines().size());
+		assertEquals(0, decoded.privilegesMetaBytes().length);
 	}
 }

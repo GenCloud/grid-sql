@@ -213,6 +213,7 @@ public final class SqlTriggerBindUtil {
 		if (containsRefText(where)) {
 			where = rewriteWhereText(where, schema, oldBlob, newBlob);
 		}
+		final Map<String, Object> whereEqs = bindMap(s.whereEqLiterals(), schema, oldBlob, newBlob);
 		return new UpdateSql(
 				s.table(),
 				s.rmw(),
@@ -223,7 +224,8 @@ public final class SqlTriggerBindUtil {
 				s.sourceTableOrNull(),
 				s.targetJoinColumnOrNull(),
 				s.sourceJoinColumnOrNull(),
-				s.returning());
+				s.returning(),
+				whereEqs);
 	}
 
 	private static MergeSql bindMerge(

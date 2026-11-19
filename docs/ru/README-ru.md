@@ -39,6 +39,7 @@ Grid — распределённая SQL-база данных: скорост�
 - [Несколько ЦОД](configure-and-operate/operations/multi-dc.md)
 - [HA под нагрузкой](configure-and-operate/operations/cluster-ha-highload.md)
 - [Несколько ЦОД под нагрузкой](configure-and-operate/operations/cluster-multidc-highload.md)
+- [Системные требования (low/mid/high)](configure-and-operate/operations/system-requirements.md)
 - [Overlay PIN](configure-and-operate/configuration/overlay-pin.md)
 - [Восстановление на момент времени (PITR)](configure-and-operate/operations/pitr.md)
 
@@ -112,6 +113,7 @@ Grid — распределённая SQL-база данных: скорост�
 | [PITR](configure-and-operate/operations/pitr.md) | |
 | [HA под нагрузкой](configure-and-operate/operations/cluster-ha-highload.md) | |
 | [Несколько ЦОД под нагрузкой](configure-and-operate/operations/cluster-multidc-highload.md) | |
+| [Системные требования (low/mid/high)](configure-and-operate/operations/system-requirements.md) | |
 | [Compose-развёртывание](configure-and-operate/operations/deploy-compose.md) | |
 
 ### Как устроено

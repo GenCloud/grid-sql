@@ -25,7 +25,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -50,6 +49,9 @@ public final class SealedShardPack {
 	public static final int HEADER_BYTES = Integer.BYTES * 3;
 	/** Fixed GMAP header size (must match {@code SealedIntegritySensorUtil.GMAP_FIXED_HEADER_BYTES}). */
 	private static final int GMAP_FIXED_HEADER_BYTES = 32;
+	/** Node file glob suffix under {@code {hex}_{shard}}. */
+	private static final String NODE_GMAP_GLOB_SUFFIX = "_n*.gmap";
+	private static final char NAME_SEP = '_';
 
 	private SealedShardPack() {
 	}
@@ -163,43 +165,58 @@ public final class SealedShardPack {
 	}
 
 	/**
+	 * {@code true} when at least one non-orphan node {@code .gmap} exists for {@code domain#shard}.
+	 * <p>
+	 * LAZY bind / proven-empty contract uses map nodes only — orphan {@code .sbpt}/{@code .sbm}
+	 * debris after empty-clear must not count as a sealed map.
+	 */
+	public static boolean hasMapNodes(Path sealedRoot, String domain, int shard) {
+		Objects.requireNonNull(domain, "domain");
+		if (sealedRoot == null || !GridFs.isDirectory(sealedRoot)) {
+			return false;
+		}
+		try {
+			final List<Path> indexed = SealedShardListingIndexUtil.lookupShardFiles(sealedRoot, domain, shard);
+			if (indexed != null) {
+				for (Path file : indexed) {
+					final String name = file.getFileName() == null ? "" : file.getFileName().toString();
+					if (name.endsWith(GMAP_SUFFIX) && !GridFs.isOrphanStagingName(file)) {
+						return true;
+					}
+				}
+				return false;
+			}
+		} catch (RuntimeException ignored) {
+			// fall through to DirectoryStream
+		}
+		final String pattern = domainHex(domain) + NAME_SEP + shard + NODE_GMAP_GLOB_SUFFIX;
+		try (DirectoryStream<Path> stream = GridFs.newDirectoryStream(sealedRoot, pattern)) {
+			for (Path file : stream) {
+				if (GridFs.isRegularFile(file) && !GridFs.isOrphanStagingName(file)) {
+					return true;
+				}
+			}
+			return false;
+		} catch (IOException ignored) {
+			return false;
+		}
+	}
+
+	private static final String GMAP_SUFFIX = ".gmap";
+
+	/**
 	 * List on-disk sealed artifacts for {@code domain#shard}:
 	 * {@code *.gmap}, then {@code *.sbpt}, then {@code *.sbm}.
+	 * <p>
+	 * Prefers {@link SealedShardListingIndexUtil} (one full-dir scan per epoch). Cold index
+	 * falls back to a single {@link DirectoryStream} over {@code prefix_*}.
 	 */
 	public static List<Path> listShardFiles(Path sealedRoot, String domain, int shard) throws IOException {
-		Objects.requireNonNull(sealedRoot, "sealedRoot");
-		Objects.requireNonNull(domain, "domain");
-		if (!GridFs.isDirectory(sealedRoot)) {
-			return List.of();
+		final List<Path> indexed = SealedShardListingIndexUtil.lookupShardFiles(sealedRoot, domain, shard);
+		if (indexed != null) {
+			return indexed;
 		}
-		final String hex = domainHex(domain);
-		final String prefix = hex + "_" + shard;
-		final Set<Path> ordered = new LinkedHashSet<>();
-		try (DirectoryStream<Path> nodes = GridFs.newDirectoryStream(sealedRoot, prefix + "_n*.gmap")) {
-			final List<Path> nodeFiles = new ArrayList<>();
-			for (Path file : nodes) {
-				nodeFiles.add(file);
-			}
-			nodeFiles.sort(Comparator.comparing(p -> p.getFileName().toString()));
-			ordered.addAll(nodeFiles);
-		}
-		try (DirectoryStream<Path> indexes = GridFs.newDirectoryStream(sealedRoot, prefix + "_idx_*.sbpt")) {
-			final List<Path> indexFiles = new ArrayList<>();
-			for (Path file : indexes) {
-				indexFiles.add(file);
-			}
-			indexFiles.sort(Comparator.comparing(p -> p.getFileName().toString()));
-			ordered.addAll(indexFiles);
-		}
-		try (DirectoryStream<Path> bitmaps = GridFs.newDirectoryStream(sealedRoot, prefix + "_idx_*.sbm")) {
-			final List<Path> bitmapFiles = new ArrayList<>();
-			for (Path file : bitmaps) {
-				bitmapFiles.add(file);
-			}
-			bitmapFiles.sort(Comparator.comparing(p -> p.getFileName().toString()));
-			ordered.addAll(bitmapFiles);
-		}
-		return List.copyOf(ordered);
+		return SealedShardListingIndexUtil.listShardFilesUnindexed(sealedRoot, domain, shard);
 	}
 
 	/**
